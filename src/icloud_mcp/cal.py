@@ -1616,8 +1616,15 @@ class CalendarService:
                 _apply_structured_location(ev, location, location_geo)
             _apply_travel(ev, travel_minutes, travel_routing, travel_origin, travel_origin_geo)
 
-            seq = int(ev.get("sequence", 0) or 0) + 1
-            _replace(ev, "sequence", seq)
+            # RFC 5546: SEQUENCE marks a significant revision by the organizer (time, recurrence, place, guests). Bumping it
+            # on a private edit (alarm, notes, title, travel) resets every guest's RSVP and re-sends the invitation, and an
+            # attendee must never bump the organizer's sequence at all.
+            organizer = ev.get("organizer")
+            org_email = _attendee_email(organizer) if organizer is not None else None
+            is_organizer = organizer is None or (org_email is not None and org_email in self.s.own_addresses)
+            significant = any(v is not None for v in (start, end, rrule, location, attendees))
+            if significant and is_organizer:
+                _replace(ev, "sequence", int(ev.get("sequence", 0) or 0) + 1)
             _replace(ev, "dtstamp", datetime.now(timezone.utc))
             _replace(ev, "last-modified", datetime.now(timezone.utc))
             if new_override:
