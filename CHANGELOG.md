@@ -18,6 +18,12 @@ Update the Mac helper before the server whenever its version changes.
   server does (areas, mail, invitations, contacts, the Mac helper, read-only, the dashboard). Values go to
   `DATA_DIR/settings.json`, are checked before saving and apply after a restart; weakening protection asks for the owner again.
   Addresses, ports, OAuth redirect hosts, tokens and connections stay in the environment. `DASHBOARD_SETTINGS=view|off`.
+- **Optional owner sign-in through Cloudflare Access on `/outbox`.** Behind an Access application that already signs the
+  owner in (for example a passkey through an OIDC provider), the outbox no longer asks for the owner password a second
+  time. Set `OWNER_ACCESS_TEAM_DOMAIN`, `OWNER_ACCESS_AUD` and `OWNER_ACCESS_EMAILS`; the page then verifies the signed
+  `Cf-Access-Jwt-Assertion` token (RS256 against the team keys, audience, issuer, expiry, email) and shows the queue.
+  Without a valid token the password form appears as before. Off unless all three are set; `pyjwt[crypto]` is now a
+  direct dependency (it was already installed through `mcp`).
 
 ## 0.12.1
 
