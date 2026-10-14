@@ -11,13 +11,22 @@ from urllib.parse import urlparse
 # and local clients such as Codex CLI (127.0.0.1, localhost). Every sign-in still needs the owner password.
 DEFAULT_REDIRECT_HOSTS = "claude.ai,claude.com,chatgpt.com,chat.openai.com,localhost,127.0.0.1"
 
+# Settings written by the /setup page (DATA_DIR/accounts.json, see accounts.py), as environment names. While from_env runs
+# they take the place of the environment, so a person's own accounts win over whatever the deployment set.
+_OVERLAY: dict[str, str] = {}
+
+
+def _get(name: str) -> str | None:
+    return _OVERLAY[name] if name in _OVERLAY else os.environ.get(name)
+
+
 def _str(name: str, default: str = "") -> str:
-    v = os.environ.get(name)
+    v = _get(name)
     return default if v is None or v.strip() == "" else v.strip()
 
 
 def _bool(name: str, default: bool) -> bool:
-    v = os.environ.get(name)
+    v = _get(name)
     if v is None or v.strip() == "":
         return default
     return v.strip().lower() in ("1", "true", "yes", "on")
@@ -64,7 +73,7 @@ def _norm_handle(value: str) -> str:
 
 
 def _int(name: str, default: int) -> int:
-    v = os.environ.get(name)
+    v = _get(name)
     return default if v is None or v.strip() == "" else int(v)
 
 
@@ -181,10 +190,29 @@ class Settings:
     owner_access_emails: tuple[str, ...] = ()  # OWNER_ACCESS_EMAILS: Access identities that count as the owner (all three set = on)
     owner_access_certs_file: str = ""  # OWNER_ACCESS_CERTS_FILE: read the team keys from this JSON file instead of fetching them (egress-locked hosts)
     overrides_active: tuple[str, ...] = ()  # which OVERRIDABLE settings come from DATA_DIR/overrides.json (names only)
+    mail_password: str = ""       # MAIL_PASSWORD: IMAP and SMTP password when mail is another account than the Apple ID ('' = app_password)
+    caldav_password: str = ""     # CALDAV_PASSWORD: the same for the calendar account
+    carddav_password: str = ""    # CARDDAV_PASSWORD: the same for the contacts account
+    read_only_areas: tuple[str, ...] = ()     # READ_ONLY_AREAS: mail, calendar, contacts that are read-only on their own
+    calendars_visible: tuple[str, ...] = ()   # CALENDARS_VISIBLE: calendar URLs the assistant may see (empty = all)
+    accounts_file: bool = False   # the accounts come from DATA_DIR/accounts.json (the /setup page), not the environment
 
     @classmethod
     def from_env(cls) -> "Settings":
+        from .accounts import env_overlay
+        global _OVERLAY
+        overlay = env_overlay(_str("DATA_DIR", "./data"))
+        _OVERLAY = overlay
+        try:
+            return cls._from_env(bool(overlay))
+        finally:
+            _OVERLAY = {}
+
+    @classmethod
+    def _from_env(cls, accounts_file: bool) -> "Settings":
         overrides = read_overrides(_str("DATA_DIR", "./data"))
+        if accounts_file:          # the account settings of the /setup page replace older single-account overrides
+            overrides = {k: v for k, v in overrides.items() if k == "owner_password"}
         username = overrides.get("icloud_username") or _str("ICLOUD_USERNAME")
         read_only = _bool("READ_ONLY", False)
         return cls(
@@ -276,6 +304,12 @@ class Settings:
             shortcuts_allow=tuple(n.strip() for n in _str("SHORTCUTS_ALLOW").split(";" if ";" in _str("SHORTCUTS_ALLOW") else ",") if n.strip()),
             admin_port=max(0, _int("ADMIN_PORT", 0)),
             overrides_active=tuple(OVERRIDABLE[k] for k in sorted(overrides)),
+            mail_password=_str("MAIL_PASSWORD"),
+            caldav_password=_str("CALDAV_PASSWORD"),
+            carddav_password=_str("CARDDAV_PASSWORD"),
+            read_only_areas=tuple(a for a in _list("READ_ONLY_AREAS") if a in ("mail", "calendar", "contacts")),
+            calendars_visible=tuple(u.rstrip("/") for u in _list("CALENDARS_VISIBLE")),
+            accounts_file=accounts_file,
         )
 
     # ------------------------------------------------------------------
@@ -284,6 +318,22 @@ class Settings:
         """Every address that is the owner: the account address, the Apple ID, the mail logins and OWNER_ADDRESSES."""
         return {a.strip().lower() for a in (self.email_address, self.username, self.imap_username, self.smtp_username,
                                             *self.owner_addresses) if a and "@" in a}
+
+    @property
+    def mail_secret(self) -> str:
+        return self.mail_password or self.app_password
+
+    @property
+    def caldav_secret(self) -> str:
+        return self.caldav_password or self.app_password
+
+    @property
+    def carddav_secret(self) -> str:
+        return self.carddav_password or self.app_password
+
+    def writable(self, area: str) -> bool:
+        """Whether tools that change things are offered for mail, calendar or contacts."""
+        return not self.read_only and area not in self.read_only_areas
 
     @property
     def bridge_enabled(self) -> bool:

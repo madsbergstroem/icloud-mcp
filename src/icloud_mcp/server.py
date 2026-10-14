@@ -316,7 +316,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
     _pause_file = None if s.local_mode else os.path.join(s.data_dir, "paused")
     if _executor is None or _executor._max_workers != s.tool_workers:
         _executor = ThreadPoolExecutor(max_workers=s.tool_workers, thread_name_prefix="icloud-tool")
-    _error_secrets = (s.app_password, s.owner_password, s.bridge_token)
+    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token)
     _error_ids = (s.username, s.email_address, s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
     if s.local_mode:
         mcp = MCPServer("iCloud", instructions=build_instructions(s))
@@ -340,7 +340,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
     mcp = MCPServer("iCloud", instructions=build_instructions(s), auth_server_provider=provider, auth=auth,
                     website_url=s.public_url, icons=icons or None)
     register_routes(mcp, provider, s)
-    register_setup_routes(mcp, s)
+    register_setup_routes(mcp, s, provider=provider)
 
     def _icon_route(path: str, filename: str, ctype: str) -> None:
         @mcp.custom_route(path, methods=["GET"])
@@ -523,7 +523,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         warm["mail"] = lambda: mail.list_folders() and None       # one pooled login plus the folder list
         pools["mail"] = lambda: {"warm": bool(mail._pool), "imap_kept": len(mail._pool), "imap_pool_size": s.imap_pool_size,
                                  "smtp_connected": mail._smtp is not None}
-        if s.allow_send and writable and s.require_approval and provider is not None:
+        if s.allow_send and s.writable("mail") and s.require_approval and provider is not None:
             approval["mail"] = mail
 
         @mcp.tool(annotations=_READ)
@@ -659,7 +659,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             files as base64 (size-limited)."""
             return mail.get_attachment(folder, uid, index, uidvalidity=uidvalidity)
 
-        if s.allow_send and writable:       # READ_ONLY wins over ALLOW_SEND: no sending, no drafts
+        if s.allow_send and s.writable("mail"):       # READ_ONLY wins over ALLOW_SEND: no sending, no drafts
 
             @mcp.tool(annotations=_WRITE)
             @_guard
@@ -740,7 +740,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 draft goes to Trash. Use it when the owner approves a draft; change it first with mail_update_draft."""
                 return mail.send_draft(uid, folder=folder, uidvalidity=uidvalidity)
 
-        elif writable:
+        elif s.writable("mail"):
 
             @mcp.tool(annotations=_WRITE)
             @_guard
@@ -748,7 +748,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 """Save a new email as a draft (sending is disabled on this server)."""
                 return mail.send(to=to, subject=subject, body=body, body_html=body_html, cc=cc, draft=True)
 
-        if writable:
+        if s.writable("mail"):
 
             @mcp.tool(annotations=_IDEMPOTENT_WRITE)
             @_guard
@@ -906,7 +906,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             """Get one event by uid (the series definition for recurring events), including attendees, alarms and rrule."""
             return cal.get_event(uid, calendar)
 
-        if writable:
+        if s.writable("calendar"):
 
             @mcp.tool(annotations=_WRITE)
             @_guard
@@ -1088,7 +1088,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             """One contact group with its members (the same fields as contacts_search_contacts). Use it to invite or mail a group."""
             return contacts.get_group(uid)
 
-        if writable:
+        if s.writable("contacts"):
 
             @mcp.tool(annotations=_WRITE)
             @_guard
@@ -1712,7 +1712,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 "timezone": str(n.tzinfo)}
 
     def health_report() -> dict[str, Any]:
-        secrets = (s.app_password, s.owner_password, s.bridge_token, s.username, s.email_address,
+        secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.username, s.email_address,
                    s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
         before = {area: view() for area, view in pools.items()}          # read first: the checks below warm things up
         results = {area: _timed(check, secrets) for area, check in health.items()}

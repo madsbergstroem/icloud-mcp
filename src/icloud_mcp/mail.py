@@ -651,7 +651,7 @@ class MailService:
             c = IMAPClient(s.imap_host, port=s.imap_port, ssl=use_ssl, **({"ssl_context": ctx} if use_ssl else {}), timeout=30)
             if s.imap_security == "starttls":
                 c.starttls(ctx)
-            c.login(s.imap_username, s.app_password)
+            c.login(s.imap_username, s.mail_secret)
         except Exception as e:  # noqa: BLE001
             raise MailError(f"IMAP connection/login failed: {e}. Run icloud_check_health to see which service is failing.") from e
         return c
@@ -1432,7 +1432,7 @@ class MailService:
             if s.smtp_security == "starttls":
                 server.starttls(context=ctx)
                 server.ehlo()
-            server.login(s.smtp_username, s.app_password)
+            server.login(s.smtp_username, s.mail_secret)
         except BaseException:
             with contextlib.suppress(Exception):
                 server.close()
