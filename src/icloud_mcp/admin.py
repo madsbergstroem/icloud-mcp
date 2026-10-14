@@ -79,24 +79,35 @@ def save_override(data_dir: str, key: str, value: str) -> None:
     _write_private(path, json.dumps(data, indent=2) + "\n")
 
 
-async def check_and_store_app_password(s: Settings, raw: str, via: str) -> str | None:
+async def check_and_store_app_password(s: Settings, raw: str, via: str, *, account: dict[str, str] | None = None) -> str | None:
     """Normalise an app-specific password, prove it against iCloud Mail and store it as an override.
 
-    Returns an error text for the person, or None when it was saved (it applies after a restart). Shared by the admin
-    API and the /setup page; the password is never logged."""
+    With `account` (keys username, email_address, display_name; from the /setup page) the Apple Account itself is proven
+    and stored too, so a person can connect their own account. Returns an error text for the person, or None when it was
+    saved (it applies after a restart). Shared by the admin API and the /setup page; the password is never logged."""
     value = raw.replace(" ", "").replace("-", "")
     value = "-".join(value[i:i + 4] for i in range(0, len(value), 4)) if len(value) == 16 else value
     if len(value.replace("-", "")) != 16:
         return "An app-specific password has 16 letters, like abcd-efgh-ijkl-mnop."
+    username = (account or {}).get("username", "").strip() or s.username
+    if account is not None and ("@" not in username or len(username) > 254):
+        return "Enter the email address you use to sign in to your Apple Account."
     from .mail import MailService
+    trial = dataclasses.replace(s, app_password=value, username=username, imap_username=username) if account else \
+        dataclasses.replace(s, app_password=value)
     try:                                             # prove it works before anything is saved
-        c = await asyncio.to_thread(MailService(dataclasses.replace(s, app_password=value))._login)
+        c = await asyncio.to_thread(MailService(trial)._login)
         await asyncio.to_thread(c.logout)
     except Exception:  # noqa: BLE001 - the reason can quote the account; say only that it failed
         log.warning("A new app-specific password from %s was refused by iCloud; nothing saved", via)
-        return "iCloud did not accept this password. Nothing was changed."
+        return "iCloud did not accept this Apple Account and password. Nothing was changed."
+    if account is not None:
+        save_override(s.data_dir, "icloud_username", username)
+        for key, field in (("icloud_email_address", "email_address"), ("icloud_display_name", "display_name")):
+            if v := account.get(field, "").strip():
+                save_override(s.data_dir, key, v[:200])
     save_override(s.data_dir, "icloud_app_password", value)
-    log.warning("iCloud app-specific password changed through %s; it applies after a restart", via)
+    log.warning("iCloud %s changed through %s; it applies after a restart", "account" if account else "app-specific password", via)
     return None
 
 
