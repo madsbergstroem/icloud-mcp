@@ -99,8 +99,8 @@ async def test_setup_refuses_without_access_identity(sso_app):
 
 async def test_setup_saves_and_restarts(sso_app, monkeypatch):
     seen, timers = [], []
-    async def fake_store(_s, raw, via):
-        seen.append((raw, via))
+    async def fake_store(_s, raw, via, account=None):
+        seen.append((raw, via, account))
         return None
     monkeypatch.setattr(setup_page, "check_and_store_app_password", fake_store)
     monkeypatch.setattr(setup_page.threading, "Timer", lambda delay, fn: type("T", (), {"start": lambda self: timers.append(delay)})())
@@ -110,9 +110,11 @@ async def test_setup_saves_and_restarts(sso_app, monkeypatch):
         assert page.status_code == 200 and "me@icloud.com" in page.text
         exp = page.text.split('name="exp" value="', 1)[1].split('"', 1)[0]
         tok = page.text.split('name="tok" value="', 1)[1].split('"', 1)[0]
-        r = await c.post("/setup", data={"password": "abcd-efgh-ijkl-mnop", "exp": exp, "tok": tok}, headers=hdr)
+        r = await c.post("/setup", data={"password": "abcd-efgh-ijkl-mnop", "exp": exp, "tok": tok, "username": "her@icloud.com",
+                                         "email_address": "", "display_name": "Her Name"}, headers=hdr)
     assert r.status_code == 200 and "Saved" in r.text and "abcd" not in r.text
-    assert seen == [("abcd-efgh-ijkl-mnop", "the /setup page")] and timers == [1.0]
+    assert seen == [("abcd-efgh-ijkl-mnop", "the /setup page",
+                     {"username": "her@icloud.com", "email_address": "", "display_name": "Her Name"})] and timers == [1.0]
 
 
 async def test_setup_rejects_a_forged_form(sso_app, monkeypatch):
@@ -124,3 +126,36 @@ async def test_setup_rejects_a_forged_form(sso_app, monkeypatch):
         r = await c.post("/setup", data={"password": "abcd-efgh-ijkl-mnop", "exp": "9999999999", "tok": "0" * 64},
                          headers={"Cf-Access-Jwt-Assertion": token()})
     assert r.status_code == 403 and called == []
+
+
+async def test_account_overrides_win_over_the_environment(tmp_path, monkeypatch):
+    from icloud_mcp.admin import save_override
+    for k, v in dict(ICLOUD_USERNAME="pending@setup.invalid", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL=BASE,
+                     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=str(tmp_path)).items():
+        monkeypatch.setenv(k, v)
+    save_override(str(tmp_path), "icloud_username", "her@icloud.com")
+    save_override(str(tmp_path), "icloud_display_name", "Her Name")
+    s = Settings.from_env()
+    assert s.username == "her@icloud.com" and s.imap_username == "her@icloud.com" and s.caldav_username == "her@icloud.com"
+    assert s.email_address == "her@icloud.com" and s.display_name == "Her Name"
+
+
+async def test_store_account_proves_the_new_account(tmp_path, monkeypatch):
+    import dataclasses as dc
+    from icloud_mcp import admin, mail
+    from icloud_mcp.config import read_overrides
+    for k, v in dict(ICLOUD_USERNAME="pending@setup.invalid", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL=BASE,
+                     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=str(tmp_path)).items():
+        monkeypatch.setenv(k, v)
+    tried = []
+    class Conn:
+        def logout(self): pass
+    monkeypatch.setattr(mail.MailService, "_login", lambda self: (tried.append((self.s.imap_username if hasattr(self, "s") else None)), Conn())[1])
+    s = Settings.from_env()
+    assert await admin.check_and_store_app_password(s, "abcdefghijklmnop", "test", account={"username": "not-an-address"}) is not None
+    err = await admin.check_and_store_app_password(s, "abcd efgh ijkl mnop", "test",
+                                                   account={"username": "her@icloud.com", "email_address": "", "display_name": "Her"})
+    assert err is None
+    o = read_overrides(str(tmp_path))
+    assert o["icloud_username"] == "her@icloud.com" and o["icloud_app_password"] == "abcd-efgh-ijkl-mnop"
+    assert o["icloud_display_name"] == "Her" and "icloud_email_address" not in o
