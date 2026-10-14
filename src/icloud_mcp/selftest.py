@@ -57,7 +57,7 @@ def main() -> None:
             if s.smtp_security == "starttls":
                 server.starttls(context=ctx)
                 server.ehlo()
-            server.login(s.smtp_username, s.app_password)
+            server.login(s.smtp_username, s.mail_secret)
         return f"logged in to {s.smtp_host}:{s.smtp_port} as {s.smtp_username} (nothing sent)"
 
     def cal_check() -> str:

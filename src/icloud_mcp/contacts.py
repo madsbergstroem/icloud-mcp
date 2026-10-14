@@ -493,7 +493,7 @@ class ContactsService:
         next call builds a new one."""
         with self._http_lock:
             if self._http is None:
-                self._http = httpx.Client(auth=(self.s.carddav_username, self.s.app_password), timeout=30, transport=self._transport,
+                self._http = httpx.Client(auth=(self.s.carddav_username, self.s.carddav_secret), timeout=30, transport=self._transport,
                                           headers={"User-Agent": "icloud-mcp"})
             client = self._http
         try:

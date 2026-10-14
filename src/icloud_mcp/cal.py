@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email.utils import getaddresses
 from typing import Any, Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import caldav
@@ -59,6 +59,11 @@ _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @functools.lru_cache(maxsize=64)
+def calendar_path(url: str) -> str:
+    """A calendar's URL path without the host or a trailing slash: iCloud may answer from another partition host."""
+    return urlsplit(url).path.rstrip("/") or url
+
+
 def get_tz(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -818,7 +823,7 @@ class CalendarService:
     def _open(self) -> _Conn:
         s = self.s
         callctx.stage("CalDAV sign-in")
-        client = caldav.DAVClient(url=s.caldav_url, username=s.caldav_username, password=s.app_password, require_tls=s.caldav_require_tls)
+        client = caldav.DAVClient(url=s.caldav_url, username=s.caldav_username, password=s.caldav_secret, require_tls=s.caldav_require_tls)
         _no_http3(client)
         try:
             return _Conn(client, client.principal(), time.monotonic())
@@ -970,7 +975,10 @@ class CalendarService:
     def _event_calendars(self, principal: Any) -> list[Any]:
         # Which calendars hold events does not change between calls, so ask iCloud once per calendar, not on every tool call.
         out = []
+        visible = {calendar_path(u) for u in self.s.calendars_visible}   # chosen on the /setup page; the rest stays out of sight
         for cal in self._calendars(principal):
+            if visible and calendar_path(str(cal.url)) not in visible:
+                continue
             key, now = str(cal.url), time.monotonic()
             hit = self._vevent_cache.get(key)
             if hit is None or now - hit[1] > _CACHE_SECONDS:
