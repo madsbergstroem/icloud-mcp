@@ -54,8 +54,16 @@ def read_dashboard_settings(data_dir: str) -> dict[str, str]:
     return {k: v for k, v in data.items() if k in DASHBOARD_EDITABLE and isinstance(v, str)} if isinstance(data, dict) else {}
 
 
+# Settings written by the /setup page (DATA_DIR/accounts.json, see accounts.py), as environment names. While from_env runs
+# they take the place of the environment, so a person's own accounts win over whatever the deployment set.
+_OVERLAY: dict[str, str] = {}
+
+
 def _env(name: str) -> str | None:
-    return _dashboard_values[name] if name in _dashboard_values else os.environ.get(name)
+    """The dashboard's settings first, then the accounts from /setup, then the environment."""
+    if name in _dashboard_values:
+        return _dashboard_values[name]
+    return _OVERLAY[name] if name in _OVERLAY else os.environ.get(name)
 
 
 def _str(name: str, default: str = "") -> str:
@@ -240,23 +248,35 @@ class Settings:
     invites_require_approval: bool = False  # ALLOW_CALENDAR_INVITES=approve: such writes wait for the owner on the dashboard
     dashboard_settings: str = "edit"        # DASHBOARD_SETTINGS: edit | view (shown, not changeable) | off (settings.json ignored)
     settings_active: tuple[str, ...] = ()   # which settings come from DATA_DIR/settings.json (names only)
+    mail_password: str = ""       # MAIL_PASSWORD: IMAP and SMTP password when mail is another account than the Apple ID ('' = app_password)
+    caldav_password: str = ""     # CALDAV_PASSWORD: the same for the calendar account
+    carddav_password: str = ""    # CARDDAV_PASSWORD: the same for the contacts account
+    read_only_areas: tuple[str, ...] = ()     # READ_ONLY_AREAS: mail, calendar, contacts that are read-only on their own
+    calendars_visible: tuple[str, ...] = ()   # CALENDARS_VISIBLE: calendar URLs the assistant may see (empty = all)
+    accounts_file: bool = False   # the accounts come from DATA_DIR/accounts.json (the /setup page), not the environment
 
     @classmethod
     def from_env(cls, dashboard_values: dict[str, str] | None = None) -> "Settings":
-        """The environment, with the owner's dashboard settings on top (or `dashboard_values` instead, to test a change)."""
-        global _dashboard_values
-        values = read_dashboard_settings(os.environ.get("DATA_DIR", "").strip() or "./data") if dashboard_values is None else \
+        """The environment, with the accounts from /setup and the owner's dashboard settings on top (or `dashboard_values`
+        instead of the stored ones, to test a change)."""
+        from .accounts import env_overlay
+        global _dashboard_values, _OVERLAY
+        data_dir = os.environ.get("DATA_DIR", "").strip() or "./data"
+        values = read_dashboard_settings(data_dir) if dashboard_values is None else \
             {k: v for k, v in dashboard_values.items() if k in DASHBOARD_EDITABLE}
-        _dashboard_values = values
+        overlay = env_overlay(data_dir)
+        _dashboard_values, _OVERLAY = values, overlay
         try:
-            return dataclasses.replace(cls._from_env(), settings_active=tuple(sorted(values)),
+            return dataclasses.replace(cls._from_env(bool(overlay)), settings_active=tuple(sorted(values)),
                                        dashboard_settings=(os.environ.get("DASHBOARD_SETTINGS", "edit").strip().lower() or "edit"))
         finally:
-            _dashboard_values = {}
+            _dashboard_values, _OVERLAY = {}, {}
 
     @classmethod
-    def _from_env(cls) -> "Settings":
+    def _from_env(cls, accounts_file: bool = False) -> "Settings":
         overrides = read_overrides(_str("DATA_DIR", "./data"))
+        if accounts_file:          # the account settings of the /setup page replace older single-account overrides
+            overrides = {k: v for k, v in overrides.items() if k == "owner_password"}
         username = overrides.get("icloud_username") or _str("ICLOUD_USERNAME")
         read_only = _bool("READ_ONLY", False)
         return cls(
@@ -357,6 +377,12 @@ class Settings:
             audit_log=_bool("AUDIT_LOG", True),
             audit_keep_days=max(1, min(_int("AUDIT_KEEP_DAYS", 90), 3650)),
             invites_require_approval=_str("ALLOW_CALENDAR_INVITES").lower() == "approve",
+            mail_password=_str("MAIL_PASSWORD"),
+            caldav_password=_str("CALDAV_PASSWORD"),
+            carddav_password=_str("CARDDAV_PASSWORD"),
+            read_only_areas=tuple(a for a in _list("READ_ONLY_AREAS") if a in ("mail", "calendar", "contacts")),
+            calendars_visible=tuple(u.rstrip("/") for u in _list("CALENDARS_VISIBLE")),
+            accounts_file=accounts_file,
         )
 
     # ------------------------------------------------------------------
@@ -371,6 +397,22 @@ class Settings:
         """TOOL_TIMEOUT_SECONDS, but at most 90 s over HTTP with JSON responses: then no byte goes out until the tool finishes,
         and Cloudflare gives up on an origin that has sent nothing for 100 s (524)."""
         return min(self.tool_timeout, 90) if self.json_response and not self.local_mode else self.tool_timeout
+
+    @property
+    def mail_secret(self) -> str:
+        return self.mail_password or self.app_password
+
+    @property
+    def caldav_secret(self) -> str:
+        return self.caldav_password or self.app_password
+
+    @property
+    def carddav_secret(self) -> str:
+        return self.carddav_password or self.app_password
+
+    def writable(self, area: str) -> bool:
+        """Whether tools that change things are offered for mail, calendar or contacts."""
+        return not self.read_only and area not in self.read_only_areas
 
     @property
     def bridge_enabled(self) -> bool:

@@ -509,7 +509,7 @@ class ContactsService:
             if self._http is None:
                 # The shared read (per chunk, so a large REPORT is fine) and connect timeouts keep a dead network under the tool
                 # timeout. Idle connections are kept 15 s (httpx default 5 s), below iCloud's observed 20-40 s idle close.
-                self._http = httpx.Client(auth=(self.s.carddav_username, self.s.app_password),
+                self._http = httpx.Client(auth=(self.s.carddav_username, self.s.carddav_secret),
                                           timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT),
                                           limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=15.0),
                                           transport=self._transport, headers={"User-Agent": "icloud-mcp"})
