@@ -304,6 +304,8 @@ def build_instructions(s: Settings, tools: set[str] | frozenset[str] | None = No
     gates = []
     if s.read_only:
         gates.append("- This server is read-only: nothing can be sent, changed or deleted.")
+    elif s.read_only_areas:
+        gates.append(f"- Read-only on this server: {', '.join(s.read_only_areas)}. Nothing there can be sent, changed or deleted.")
     if s.enable_calendar and not s.allow_calendar_invites:
         gates.append("- Calendar changes that would email other people (attendees) are blocked on this server.")
     out.append("\n" + SECURITY + "\n".join(gates))

@@ -61,6 +61,11 @@ _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @functools.lru_cache(maxsize=64)
+def calendar_path(url: str) -> str:
+    """A calendar's URL path without the host or a trailing slash: iCloud may answer from another partition host."""
+    return urlsplit(url).path.rstrip("/") or url
+
+
 def get_tz(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -927,7 +932,7 @@ class CalendarService:
         callctx.stage("CalDAV sign-in")
         # An explicit (connect, read) timeout: without one niquests waits 30 s per read, and 120 s on a PUT or DELETE, longer
         # than the tool timeout. Never rate_limit_handle: it sleeps and replays requests, PUTs included.
-        client = caldav.DAVClient(url=s.caldav_url, username=s.caldav_username, password=s.app_password, require_tls=s.caldav_require_tls,
+        client = caldav.DAVClient(url=s.caldav_url, username=s.caldav_username, password=s.caldav_secret, require_tls=s.caldav_require_tls,
                                   auth_type=_auth_type(s), timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), rate_limit_handle=False)
         _no_http3(client)
         try:
@@ -1122,7 +1127,9 @@ class CalendarService:
         return self._calendar_objects(principal)[0]
 
     def _event_calendars(self, principal: Any) -> list[Any]:
-        return self._calendar_objects(principal)[1]
+        cals = self._calendar_objects(principal)[1]
+        visible = {calendar_path(u) for u in self.s.calendars_visible}   # chosen on the /setup page; the rest stays out of sight
+        return [c for c in cals if not visible or calendar_path(str(c.url)) in visible]
 
     def _calendar_list(self, principal: Any) -> tuple[list[tuple[str, str, bool]], float, int]:
         """The service-wide calendar list, read again after _CALENDARS_SECONDS or after a calendar was created, renamed
