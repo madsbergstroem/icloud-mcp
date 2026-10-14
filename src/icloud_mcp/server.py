@@ -443,7 +443,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
         _executor = ThreadPoolExecutor(max_workers=s.tool_workers, thread_name_prefix="icloud-tool")
     if _mac_executor is None or _mac_executor._max_workers != min(s.tool_workers, 6):
         _mac_executor = ThreadPoolExecutor(max_workers=min(s.tool_workers, 6), thread_name_prefix="icloud-mac")
-    _error_secrets = (s.app_password, s.owner_password, s.bridge_token)
+    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token)
     _error_ids = (s.username, s.email_address, s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
     _audit, _audit_provider = None, None
     if s.local_mode:
@@ -471,7 +471,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
     mcp = MCPServer("iCloud", instructions=build_instructions(s), auth_server_provider=provider, auth=auth,
                     website_url=s.public_url, icons=icons or None)
     register_routes(mcp, provider, s)
-    register_setup_routes(mcp, s)
+    register_setup_routes(mcp, s, provider=provider)
 
     def _icon_route(path: str, filename: str, ctype: str) -> None:
         @mcp.custom_route(path, methods=["GET"])
@@ -661,7 +661,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         warm["mail"] = mail.prewarm                               # the pooled logins, the folder list and the special folders
         pools["mail"] = lambda: {"warm": bool(mail._pool), "imap_kept": len(mail._pool), "imap_pool_size": s.imap_pool_size,
                                  "smtp_connected": mail._smtp is not None}
-        if s.allow_send and writable and s.require_approval and provider is not None:
+        if s.allow_send and s.writable("mail") and s.require_approval and provider is not None:
             approval["mail"] = mail
 
         @tool(annotations=_READ)
@@ -889,7 +889,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             Returns: {filename, content_type, size} plus text or content_base64; an oversized file gives error instead of content. Errors: an index out of range (the error gives the attachment count); 'No message with uid' or 'uids are out of date' (search again)."""
             return mail.get_attachment(folder, uid, index, uidvalidity=uidvalidity)
 
-        if s.allow_send and writable:       # READ_ONLY wins over ALLOW_SEND: no sending, no drafts
+        if s.allow_send and s.writable("mail"):       # READ_ONLY wins over ALLOW_SEND: no sending, no drafts
 
             @tool(annotations=_WRITE)
             @_guard
@@ -1015,7 +1015,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 Returns: status sent (recipients, message_id, subject, to, cc, saved_to, draft_moved_to_trash, or draft_left_in_place if the Trash move failed), queued_for_owner_approval (sent=false, outbox_id, approve_at: tell the owner; already_queued=true on a repeat), or already_a_draft. Errors: 'is not a saved draft', 'No message with uid' or out-of-date uids (search Drafts again), and the recipient and SMTP errors of mail_send_message."""
                 return mail.send_draft(uid, folder=folder, uidvalidity=uidvalidity)
 
-        elif writable:
+        elif s.writable("mail"):
 
             @tool(annotations=_WRITE)
             @_guard
@@ -1035,7 +1035,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 Errors: a bad address names the entry and field; a line break in the subject is refused; a missing Drafts folder says to call mail_list_folders."""
                 return mail.send(to=to, subject=subject, body=body, body_html=body_html, cc=cc, draft=True)
 
-        if writable:
+        if s.writable("mail"):
 
             @tool(annotations=_IDEMPOTENT_WRITE)
             @_guard
@@ -1249,7 +1249,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     # -------------------------------------------------------------- calendar
     if s.enable_calendar:
         cal = CalendarService(s)
-        if s.invites_require_approval and writable and provider is not None and s.dashboard:
+        if s.invites_require_approval and s.writable("calendar") and provider is not None and s.dashboard:
             cal.outbox = Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="calendar-outbox.json")
             approval["calendar"] = cal
         health["calendar"] = lambda: {"calendars": len(cal.list_calendars())}
@@ -1358,7 +1358,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             Errors: "No event with uid ..." means it is on none of the searched calendars: list events again for a current uid."""
             return cal.get_event(uid, calendar)
 
-        if writable:
+        if s.writable("calendar"):
 
             @tool(annotations=_WRITE)
             @_guard
@@ -1677,7 +1677,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             Returns: {uid, name, members, notice}; members are rows shaped like contacts_search_contacts results (uid, name, has_email, emails, phones, organization...). unresolved lists member uids whose contact no longer exists; it is left out when there are none. An empty members list means the group has no one in it. Errors: "No group with uid ..." for an unknown, deleted or person uid; call contacts_list_groups to get the current uid."""
             return contacts.get_group(uid)
 
-        if writable:
+        if s.writable("contacts"):
 
             @tool(annotations=_WRITE)
             @_guard
@@ -2813,7 +2813,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 "timezone": str(n.tzinfo)}
 
     def health_report() -> dict[str, Any]:
-        secrets = (s.app_password, s.owner_password, s.bridge_token, s.username, s.email_address,
+        secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.username, s.email_address,
                    s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
         before = {area: view() for area, view in pools.items()}          # read first: the checks below warm things up
         holder = callctx.current()
