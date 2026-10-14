@@ -71,7 +71,10 @@ def _bool(name: str, default: bool) -> bool:
 
 
 OVERRIDES_FILE = "overrides.json"      # in DATA_DIR: credentials changed from the admin API (the menu bar app)
-OVERRIDABLE = {"icloud_app_password": "ICLOUD_APP_PASSWORD", "owner_password": "MCP_OWNER_PASSWORD"}
+OVERRIDABLE = {"icloud_app_password": "ICLOUD_APP_PASSWORD", "owner_password": "MCP_OWNER_PASSWORD",
+               # set together on the /setup page, so a person can connect their own Apple Account without handing it to anyone
+               "icloud_username": "ICLOUD_USERNAME", "icloud_email_address": "ICLOUD_EMAIL_ADDRESS",
+               "icloud_display_name": "ICLOUD_DISPLAY_NAME"}
 
 
 def read_overrides(data_dir: str) -> dict[str, str]:
@@ -253,15 +256,15 @@ class Settings:
 
     @classmethod
     def _from_env(cls) -> "Settings":
-        username = _str("ICLOUD_USERNAME")
-        read_only = _bool("READ_ONLY", False)
         overrides = read_overrides(_str("DATA_DIR", "./data"))
+        username = overrides.get("icloud_username") or _str("ICLOUD_USERNAME")
+        read_only = _bool("READ_ONLY", False)
         return cls(
             username=username,
             app_password=(overrides.get("icloud_app_password") or _str("ICLOUD_APP_PASSWORD")
                           or keychain_password(username, _str("ICLOUD_KEYCHAIN_SERVICE", "icloud-mcp"))).replace(" ", ""),
-            email_address=_str("ICLOUD_EMAIL_ADDRESS", username),
-            display_name=_str("ICLOUD_DISPLAY_NAME"),
+            email_address=overrides.get("icloud_email_address") or _str("ICLOUD_EMAIL_ADDRESS", username),
+            display_name=overrides.get("icloud_display_name") or _str("ICLOUD_DISPLAY_NAME"),
             signature=_str("EMAIL_SIGNATURE").replace("\\n", "\n"),
             imap_host=_str("IMAP_HOST", "imap.mail.me.com"),
             imap_port=_int("IMAP_PORT", 993),
