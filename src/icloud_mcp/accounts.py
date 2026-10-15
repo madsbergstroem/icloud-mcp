@@ -222,11 +222,14 @@ async def check(s: Any, acct: dict[str, Any], areas: list[str] | None = None) ->
     if "contacts" in areas:
         jobs["contacts"] = lambda: _check_contacts(t)
 
+    kinds: dict[str, str] = {}
+
     async def run(name: str, fn: Any) -> tuple[str, Any, bool]:
         try:
             return name, await asyncio.wait_for(asyncio.to_thread(fn), CHECK_TIMEOUT), True
         except Exception as e:  # noqa: BLE001 - a check reports failure, it does not raise
-            log.warning("Account check failed for %s (%s)", name, type(e).__name__)
+            kinds[name] = failure_kind(e)
+            log.warning("Account check failed for %s (%s, %s)", name, type(e).__name__, kinds[name])
             return name, None, False
 
     done = await asyncio.gather(*(run(n, f) for n, f in jobs.items()))
@@ -234,4 +237,26 @@ async def check(s: Any, acct: dict[str, Any], areas: list[str] | None = None) ->
     if "mail" in failed and "smtp" in failed:
         failed.remove("smtp")
     cals = next((r for n, r, ok in done if n == "calendar" and ok), None) or []
-    return {"failed": failed, "calendars": cals}
+    return {"failed": failed, "kinds": {n: kinds[n] for n in failed}, "calendars": cals}
+
+
+_REFUSED = ("authenticationfailed", "authentication failed", "authorizationerror", "loginerror", "invalid credentials",
+            "smtpauthenticationerror", "unauthorized", "http 401", " 535", "(535")
+_UNREACHABLE = ("timed out", "timeout", "connecterror", "connectionerror", "connection refused", "network is unreachable",
+                "no route to host", "name or service not known", "temporary failure in name resolution", "nodename nor servname")
+
+
+def failure_kind(e: BaseException) -> str:
+    """Why a sign-in check failed: 'refused' (the provider said no to address or password), 'unreachable' (no answer from
+    the provider: network, firewall, DNS) or 'other'. Judged from the exception chain; nothing of it is shown."""
+    chain: list[BaseException] = []
+    x: BaseException | None = e
+    while x is not None and len(chain) < 8:
+        chain.append(x)
+        x = x.__cause__ or x.__context__
+    text = " ".join(f"{type(c).__name__} {c}" for c in chain).lower()
+    if any(k in text for k in _REFUSED):
+        return "refused"
+    if any(isinstance(c, (TimeoutError, ConnectionError)) for c in chain) or any(k in text for k in _UNREACHABLE):
+        return "unreachable"
+    return "other"
