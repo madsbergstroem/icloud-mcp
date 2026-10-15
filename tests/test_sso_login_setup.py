@@ -114,8 +114,9 @@ def setup_env(pending_app, monkeypatch):
 
     async def fake_check(_s, acct, areas=None):
         checked.append(dict(acct))
-        bad = acct.get("password") in ("wrong", "wron-gwro-ngwr-ongg")
-        return {"failed": list(acct["areas"]) if bad else [],
+        bad = acct.get("password") in ("wrong", "wron-gwro-ngwr-ongg", "blocked")
+        kind = "unreachable" if acct.get("password") == "blocked" else "refused"
+        return {"failed": list(acct["areas"]) if bad else [], "kinds": {a: kind for a in acct["areas"]} if bad else {},
                 "calendars": [{"name": "Privat", "id": "https://caldav.example.com/1/home/"},
                               {"name": "Arbeit", "id": "https://caldav.example.com/1/work/"}]}
     monkeypatch.setattr(accounts, "check", fake_check)
@@ -273,3 +274,34 @@ async def test_store_account_proves_the_new_account(tmp_path, monkeypatch):
     o = read_overrides(str(tmp_path))
     assert o["icloud_username"] == "her@example.com" and o["icloud_app_password"] == "abcd-efgh-ijkl-mnop"
     assert o["icloud_display_name"] == "Her" and "icloud_email_address" not in o
+
+
+async def test_setup_says_whether_the_provider_refused_or_was_unreachable(setup_env):
+    app, _checked, _timers = setup_env
+    async with client_for(app) as c:
+        refused = await _connect(c, {"anbieter": "icloud", "konto": "", "username": "her@example.net", "password": "wron-gwro-ngwr-ongg",
+                                     "area": ["mail"]})
+        blocked = await _connect(c, {"anbieter": "webde", "konto": "", "username": "her@example.net", "password": "blocked", "area": ["mail"]},
+                                 "anbieter=webde&schritt=eintragen")
+    assert refused.status_code == 400 and "Adresse und Passwort passen nicht zusammen" in refused.text
+    assert "Eingetragen war: <b>her@example.net</b>" in refused.text and "Anmeldung und Sicherheit" in refused.text
+    assert blocked.status_code == 400 and "nicht erreichbar" in blocked.text and "An deiner Adresse und deinem Passwort liegt es nicht" in blocked.text
+
+
+def test_failure_kind_reads_the_exception_chain():
+    import socket
+    from icloud_mcp.accounts import failure_kind
+    from icloud_mcp.mail import MailError
+
+    def wrapped(inner):
+        try:
+            try:
+                raise inner
+            except Exception as e:
+                raise MailError("IMAP connection/login failed") from e
+        except MailError as outer:
+            return outer
+    assert failure_kind(wrapped(Exception("b'[AUTHENTICATIONFAILED] Authentication failed.'"))) == "refused"
+    assert failure_kind(wrapped(socket.timeout("timed out"))) == "unreachable"
+    assert failure_kind(TimeoutError()) == "unreachable"
+    assert failure_kind(wrapped(ValueError("odd"))) == "other"

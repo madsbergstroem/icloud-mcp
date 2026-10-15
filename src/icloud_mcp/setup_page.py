@@ -191,30 +191,46 @@ def _server_problem(ep: dict[str, str]) -> str | None:
 
 
 # ---------------------------------------------------------------- what went wrong, per provider
-def _failure(acct: dict[str, Any], failed: list[str]) -> str:
+def _failure(acct: dict[str, Any], failed: list[str], kinds: dict[str, str] | None = None) -> str:
+    """What went wrong, in words the person can act on: refused (address or password), unreachable (not their fault), other."""
     p = acct.get("provider")
     who = {"icloud": "Apple", "webde": "WEB.DE", "gmail": "Google"}.get(p, "Dein Anbieter")
-    if failed == ["smtp"]:
+    kinds = kinds or {}
+    found = set(kinds.get(a, "other") for a in failed)
+    areas = _areas_text([a if a != "smtp" else "mail" for a in failed])
+    if found == {"unreachable"}:
+        return (f'<div class="box errbox"><strong>{_e(who)} ist von diesem Server aus gerade nicht erreichbar'
+                f' ({_e(areas)}).</strong> An deiner Adresse und deinem Passwort liegt es nicht. Es wurde nichts gespeichert.</div>'
+                '<p>Versuch es in ein paar Minuten noch einmal. Klappt es dann immer noch nicht, sag der Person Bescheid, '
+                'die diesen Dienst betreibt: Der Server darf diesen Anbieter vermutlich nicht erreichen.</p>')
+    entered = f'<p>Eingetragen war: <b>{_e(acct.get("username", ""))}</b></p>'
+    if failed == ["smtp"] and found == {"refused"}:
         head = f"{who} lässt das Lesen zu, aber nicht das Senden."
-    elif "mail" not in failed and "smtp" not in failed:
-        head = f"Die Anmeldung für {_areas_text(failed)} hat nicht geklappt."
+        reasons = ["Dein Anbieter erlaubt Senden über Mail-Programme nur mit eigener Freigabe. Sieh in seinen Einstellungen nach.",
+                   "Oder setz bei „Was darf dein Assistent nutzen?“ den Haken bei „Nur lesen“."]
+        items = "".join(f"<li>{r}</li>" for r in reasons)
+        return f'<div class="box errbox"><strong>{_e(head)}</strong> Es wurde nichts gespeichert.</div><ol class="how">{items}</ol>'
+    if "refused" in found:
+        head = f"{who} hat die Anmeldung abgelehnt: Adresse und Passwort passen nicht zusammen."
     else:
-        head = f"{who} hat die Anmeldung abgelehnt."
+        head = f"Die Anmeldung bei {who} ist an einem technischen Fehler gescheitert ({areas})."
     reasons = {
-        "icloud": ["Die Adresse ist nicht die, mit der du dich bei Apple anmeldest.",
-                   "Das Passwort wurde nicht vollständig kopiert. Es hat 16 Buchstaben.",
-                   "Es wurde ein altes Passwort verwendet. Wenn du dein Apple-Passwort geändert hast, löscht Apple alle App-Passwörter."],
-        "webde": ["Der POP3- und IMAP-Zugriff ist bei WEB.DE noch nicht erlaubt oder wurde nach langer Pause wieder abgeschaltet.",
-                  "Das App-Passwort wurde nicht vollständig kopiert. WEB.DE zeigt es nur einmal, im Zweifel ein neues erstellen.",
-                  "Die Adresse ist nicht deine vollständige WEB.DE-Adresse."],
-        "gmail": ["Das App-Passwort wurde nicht vollständig kopiert. Es hat 16 Buchstaben.",
-                  "Die 2‑Faktor-Authentifizierung ist aus. Ohne sie gibt es keine App-Passwörter.",
-                  "Es ist ein Firmen- oder Schulkonto. Dort lässt Google keine App-Passwörter zu."],
-    }.get(p, ["Die Serveradressen stimmen nicht. Sie stehen in der Hilfe deines Anbieters.",
-              "Benutzername oder Passwort stimmen nicht.",
-              "Dein Anbieter verlangt ein eigenes App-Passwort für Mail-Programme."])
+        "icloud": ["Die Adresse muss die deines Apple-Accounts sein. Du findest sie auf dem iPhone unter Einstellungen → "
+                   "dein Name → Anmeldung und Sicherheit. "
+                   "Eine andere Mailadresse, etwa bei WEB.DE oder Gmail, funktioniert hier nur, wenn sie dort steht.",
+                   "Das Passwort muss ein App-Passwort sein (16 Buchstaben), nicht dein normales Apple-Passwort.",
+                   "Es wurde ein altes App-Passwort verwendet. Wenn du dein Apple-Passwort geändert hast, löscht Apple alle App-Passwörter."],
+        "webde": ["Die Adresse ist nicht deine vollständige WEB.DE-Adresse (name@web.de).",
+                  "Der POP3- und IMAP-Zugriff ist bei WEB.DE noch nicht erlaubt oder wurde nach langer Pause wieder abgeschaltet.",
+                  "Das App-Passwort wurde nicht vollständig kopiert. WEB.DE zeigt es nur einmal, im Zweifel ein neues erstellen."],
+        "gmail": ["Die Adresse ist nicht deine vollständige Gmail-Adresse.",
+                  "Das App-Passwort wurde nicht vollständig kopiert. Es hat 16 Buchstaben.",
+                  "Die 2‑Faktor-Authentifizierung ist aus, oder es ist ein Firmen- oder Schulkonto. Dann gibt es keine App-Passwörter."],
+    }.get(p, ["Benutzername oder Passwort stimmen nicht. Bei vielen Anbietern ist der Benutzername die volle Mailadresse.",
+              "Dein Anbieter verlangt ein eigenes App-Passwort für Mail-Programme.",
+              "Die Serveradressen stimmen nicht. Sie stehen in der Hilfe deines Anbieters."])
     items = "".join(f"<li>{_e(r)}</li>" for r in reasons)
-    return (f'<div class="box errbox"><strong>{_e(head)}</strong> Es wurde nichts gespeichert.</div>'
+    return (f'<div class="box errbox"><strong>{_e(head)}</strong> Es wurde nichts gespeichert.</div>{entered}'
             f'<p><b>Meistens liegt es an einem dieser Punkte:</b></p><ol class="how">{items}</ol>')
 
 
@@ -329,7 +345,7 @@ def register_setup_routes(mcp: Any, settings: Settings, *, provider: Any = None,
             pw_home = _PASSWORD_HOME.get(a["provider"])
             manage = _ext(pw_home[1], f"App-Passwörter {pw_home[0]} verwalten", "btn ghost") if pw_home else ""
             cal = calendars_block(who, data, a, chk) if "calendar" in a["areas"] else ""
-            sections += f"""<h2>{_e(_label(a))} · {_e(a["username"])}</h2>{"" if ok else _failure(a, chk["failed"])}
+            sections += f"""<h2>{_e(_label(a))} · {_e(a["username"])}</h2>{"" if ok else _failure(a, chk["failed"], chk.get("kinds"))}
 <dl class="facts">{facts}</dl>{cal}
 <div class="actions"><a class="btn ghost" href="{edit}">Passwort, Bereiche oder Absender ändern</a>{manage}
 <a class="btn ghost danger" href="/setup?{urlencode({"trennen": a["id"]})}">Dieses Konto trennen</a></div>"""
@@ -501,7 +517,7 @@ Adresse und Passwort werden von diesem Server gelöscht.{extra}</p>
                 return again(problem)
         result = await A.check(settings, acct)
         if result["failed"]:
-            return again(failure=_failure(acct, result["failed"]))
+            return again(failure=_failure(acct, result["failed"], result.get("kinds")))
         # Saved: this account takes over its areas from any other account; an account left with no area is dropped.
         # The same login at the same provider again replaces that account instead of adding a second copy.
         same = next((x for x in data["accounts"] if x.get("provider") == p and x["username"].lower() == acct["username"].lower()
