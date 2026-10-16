@@ -253,6 +253,17 @@ async def test_dashboard_can_be_turned_off(web):
         assert (await c.get("/outbox")).status_code == 200          # the password page stays
 
 
+def test_event_times_read_like_a_calendar():
+    from icloud_mcp.dashboard import event_when
+    assert event_when("2026-11-20T18:00:00+00:00", "2026-11-20T20:00:00+00:00", "Europe/Berlin") == "Fri 20 Nov 2026, 19:00–21:00"
+    assert event_when("2026-11-20T23:00:00+01:00", "2026-11-21T01:00:00+01:00", "Europe/Berlin") == \
+        "Fri 20 Nov 2026, 23:00 – Sat 21 Nov 2026, 01:00"
+    assert event_when("2026-11-20", "2026-11-21", "Europe/Berlin") == "Fri 20 Nov 2026"                 # one all-day day
+    assert event_when("2026-11-20", "2026-11-23", "Europe/Berlin") == "Fri 20 Nov 2026 – Sun 22 Nov 2026"
+    assert event_when("2026-11-20T18:00:00", None, "Europe/Berlin") == "Fri 20 Nov 2026, 18:00"          # floating time stays as is
+    assert event_when("soon", None, "Europe/Berlin") == "soon"
+
+
 async def test_held_calendar_changes_show_up_and_are_released(web, monkeypatch):
     from icloud_mcp.cal import CalendarService
     released = []
@@ -268,6 +279,7 @@ async def test_held_calendar_changes_show_up_and_are_released(web, monkeypatch):
         page = (await c.get("/dashboard/approvals")).text
         assert "Autumn fair" in page and "Invitation" in page and "jana@example.org, tom@example.net" in page
         assert "Add and invite" in page and "Nothing is in your calendar yet." in page
+        assert "Thu 22 Oct 2026, 18:00–19:30" in page and "T18:00" not in page          # the owner's clock, not ISO
         q = src.pending()[0]
         await c.post("/dashboard/approvals/act", headers=SAME,
                      data={"csrf": token, "kind": "calendar", "id": q.id, "sha": q.sha256, "action": "approve"})
