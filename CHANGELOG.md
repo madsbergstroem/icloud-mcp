@@ -14,6 +14,10 @@ Update the Mac helper before the server whenever its version changes.
 - **Calendar invitations can wait for approval.** `ALLOW_CALENDAR_INVITES=approve` holds every calendar change that would
   make iCloud email other people on the dashboard. Approving writes exactly the held object with `If-Match` (or
   `If-None-Match` for a new event), so an event changed in the meantime is never overwritten.
+- **Settings in the browser.** The dashboard lists every setting with where its value comes from and can change what the
+  server does (areas, mail, invitations, contacts, the Mac helper, read-only, the dashboard). Values go to
+  `DATA_DIR/settings.json`, are checked before saving and apply after a restart; weakening protection asks for the owner again.
+  Addresses, ports, OAuth redirect hosts, tokens and connections stay in the environment. `DASHBOARD_SETTINGS=view|off`.
 
 ## 0.12.1
 
