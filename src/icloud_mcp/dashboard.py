@@ -202,6 +202,33 @@ class MailApprovals(ApprovalSource):
         self.mail.outbox.claim(q.id)
 
 
+def event_when(start: str | None, end: str | None, tz_name: str) -> str:
+    """'Fri 20 Nov 2026, 19:00–21:00' in the server's time zone, from the ISO times stored with a held change. All-day events
+    show the date only; anything unparsable is shown as stored."""
+    def parse(v: str | None) -> datetime | None:
+        try:
+            return datetime.fromisoformat(v) if v else None
+        except ValueError:
+            return None
+    a, b = parse(start), parse(end)
+    if a is None:
+        return " – ".join(x for x in (start, end) if x)
+    if len(start or "") == 10:                                   # an all-day event: a date, no time
+        last = b - timedelta(days=1) if b and len(end or "") == 10 else None   # DTEND of an all-day event is exclusive
+        day = a.strftime("%a %d %b %Y")
+        return day if last is None or last <= a else f"{day} – {last.strftime('%a %d %b %Y')}"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz = None
+    if tz is not None and a.tzinfo is not None:
+        a, b = a.astimezone(tz), (b.astimezone(tz) if b and b.tzinfo else b)
+    out = a.strftime("%a %d %b %Y, %H:%M")
+    if b is None:
+        return out
+    return out + ("–" + b.strftime("%H:%M") if b.date() == a.date() else " – " + b.strftime("%a %d %b %Y, %H:%M"))
+
+
 class CalendarApprovals(ApprovalSource):
     """Calendar changes that make iCloud email other people (ALLOW_CALENDAR_INVITES=approve)."""
     kind, badge = "calendar", "Calendar"
@@ -218,9 +245,7 @@ class CalendarApprovals(ApprovalSource):
     def describe(self, q, context=None):
         m = q.followup or {}
         badge, _ = self._LABELS.get(m.get("op"), ("Calendar", "Approve"))
-        when = m.get("start") or ""
-        if m.get("end"):
-            when += f" – {m['end']}"
+        when = event_when(m.get("start"), m.get("end"), self.cal.s.default_timezone)
         rows = [("When", when), ("Calendar", m.get("calendar") or ""), ("Where", m.get("location") or "")]
         if m.get("op") == "reply":
             rows.append(("To", m.get("organizer") or ""))
