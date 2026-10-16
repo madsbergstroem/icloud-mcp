@@ -5,6 +5,7 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Mac helper 0.8.1: iMessage to a conversation Messages no longer shows.** Messages scripts only the conversations it currently shows, while chat.db keeps all of them, so a send to an older 1:1 conversation (and `--selftest-imessage-send` to your own address) failed with 'Messages does not know that conversation or handle'. For a 1:1 conversation the helper now falls back to its one participant over iMessage; a group never does.
 - **SMS-only conversations are refused before they are queued.** `imessage_send_message` used to queue a message to a conversation that exists only as SMS, and the Mac refused it only after the owner approved it. Now the tool refuses at once and names the same person's 1:1 iMessage conversation that the allowlist permits, so the agent can send there.
 - **The owner's dashboard.** `/dashboard` shows what is waiting for approval, what agents changed, the connected apps and
   whether each service answers, on a phone or a computer. It signs in with a passkey (WebAuthn, optional extra `[passkey]`,
