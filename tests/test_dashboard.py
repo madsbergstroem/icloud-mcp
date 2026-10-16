@@ -231,3 +231,24 @@ async def test_dashboard_can_be_turned_off(web):
     async with client(app) as c:
         assert (await c.get("/dashboard")).status_code == 404
         assert (await c.get("/outbox")).status_code == 200          # the password page stays
+
+
+async def test_held_calendar_changes_show_up_and_are_released(web, monkeypatch):
+    from icloud_mcp.cal import CalendarService
+    released = []
+    monkeypatch.setattr(CalendarService, "release", lambda self, q: released.append(q.followup["op"]) or "Added “Autumn fair”.")
+    app, mcp, _, _ = web(ALLOW_CALENDAR_INVITES="approve")
+    src = mcp._icloud_dashboard.sources["calendar"]
+    src.cal.outbox.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org", "tom@example.net"],
+                       {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1",
+                        "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": "2026-10-22T19:30:00+02:00",
+                        "location": "", "description": "Bring ideas", "organizer": None, "href": None, "etag": None})
+    async with client(app) as c:
+        token = await signed_in(c)
+        page = (await c.get("/dashboard/approvals")).text
+        assert "Autumn fair" in page and "Invitation" in page and "jana@example.org, tom@example.net" in page
+        assert "Add and invite" in page and "Nothing is in your calendar yet." in page
+        q = src.pending()[0]
+        r = await c.post("/dashboard/approvals/act", headers=SAME,
+                         data={"csrf": token, "kind": "calendar", "id": q.id, "sha": q.sha256, "action": "approve"})
+        assert "Added “Autumn fair”." in r.text and released == ["create"] and src.pending() == []

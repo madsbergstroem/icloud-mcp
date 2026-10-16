@@ -3,6 +3,18 @@
 What changed in each release, newest first. The GitHub release notes carry the full detail and the upgrade steps.
 Update the Mac helper before the server whenever its version changes.
 
+## Unreleased
+
+- **The owner's dashboard.** `/dashboard` shows what is waiting for approval, what agents changed, the connected apps and
+  whether each service answers, on a phone or a computer. It signs in with a passkey (WebAuthn, optional extra `[passkey]`,
+  in the Docker image) or the owner password, which `OWNER_PASSWORD_LOGIN=false` turns off once a passkey exists. Sessions
+  are stored as hashes; every form carries a CSRF token and must come from the server's own address. `/outbox` still works.
+- **Activity log.** Writes by agents, approvals, sign-ins, connected and signed-out apps are recorded in
+  `DATA_DIR/audit.jsonl` (names and addresses only, hash-chained, `AUDIT_KEEP_DAYS`, `AUDIT_LOG`).
+- **Calendar invitations can wait for approval.** `ALLOW_CALENDAR_INVITES=approve` holds every calendar change that would
+  make iCloud email other people on the dashboard. Approving writes exactly the held object with `If-Match` (or
+  `If-None-Match` for a new event), so an event changed in the meantime is never overwritten.
+
 ## 0.12.1
 
 - **Agents are told which tool is for which job.** The server's instructions now open with a short WHICH TOOL map: one line

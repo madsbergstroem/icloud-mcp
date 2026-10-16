@@ -202,6 +202,59 @@ class MailApprovals(ApprovalSource):
         self.mail.outbox.claim(q.id)
 
 
+class CalendarApprovals(ApprovalSource):
+    """Calendar changes that make iCloud email other people (ALLOW_CALENDAR_INVITES=approve)."""
+    kind, badge = "calendar", "Calendar"
+    _LABELS = {"create": ("Invitation", "Add and invite"), "update": ("Event update", "Save and notify"),
+               "delete": ("Cancellation", "Delete and notify"), "cancel": ("Cancellation", "Cancel and notify"),
+               "reply": ("Reply", "Send answer")}
+
+    def __init__(self, cal: Any):
+        self.cal = cal
+
+    def pending(self):
+        return self.cal.outbox.pending()
+
+    def describe(self, q, context=None):
+        m = q.followup or {}
+        badge, _ = self._LABELS.get(m.get("op"), ("Calendar", "Approve"))
+        when = m.get("start") or ""
+        if m.get("end"):
+            when += f" – {m['end']}"
+        rows = [("When", when), ("Calendar", m.get("calendar") or ""), ("Where", m.get("location") or "")]
+        if m.get("op") == "reply":
+            rows.append(("To", m.get("organizer") or ""))
+        else:
+            rows.append(("Guests", ", ".join(q.recipients)))
+        effect = {"create": "Approving adds the event to your calendar, and iCloud emails an invitation to",
+                  "update": "Approving saves the change, and iCloud emails an update to",
+                  "delete": "Approving deletes the event, and iCloud emails a cancellation to",
+                  "cancel": "Approving cancels this occurrence, and iCloud emails a cancellation to",
+                  "reply": "Approving sends your answer to"}.get(m.get("op"), "Approving emails")
+        who = m.get("organizer") if m.get("op") == "reply" else f"{len(q.recipients)} people"
+        notes = [f"{effect} {who}.",
+                 "Nothing is in your calendar yet." if m.get("op") == "create" else
+                 "If the event changes in your calendar before you approve, nothing is written."]
+        return {"title": m.get("summary") or "(no title)", "badge": badge, "rows": [(k, v) for k, v in rows if v],
+                "text": m.get("description") or "", "notes": notes, "warnings": [], "needs_override": False}
+
+    def approve_label_for(self, q) -> str:
+        return self._LABELS.get((q.followup or {}).get("op"), ("", "Approve"))[1]
+
+    def release(self, q):
+        claimed = self.cal.outbox.claim(q.id)
+        if claimed is None:
+            raise RuntimeError("It is no longer waiting.")
+        try:
+            return self.cal.release(claimed)
+        except Exception:
+            self.cal.outbox.restore(claimed)
+            raise
+
+    def discard(self, q):
+        self.cal.outbox.claim(q.id)
+
+
 class IMessageApprovals(ApprovalSource):
     kind, badge, approve_label = "imessage", "iMessage", "Send"
 
@@ -827,7 +880,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
                                 '<span>I read the warning and still want this sent</span></label>')
                 hidden = (d.csrf_input(rec) + f'<input type="hidden" name="kind" value="{_esc(src.kind)}">'
                           f'<input type="hidden" name="id" value="{_esc(q.id)}"><input type="hidden" name="sha" value="{_esc(q.sha256)}">')
-                foot = button("Discard", name="action", value="discard") + button(_esc(src.approve_label), "primary", name="action", value="approve")
+                label = src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
+                foot = button("Discard", name="action", value="discard") + button(_esc(label), "primary", name="action", value="approve")
                 cards.append(card(v["title"], "".join(body), foot, chip(v["badge"], "info"), form="/dashboard/approvals/act", hidden_html=hidden))
         if not total:
             cards.append(card("Nothing is waiting", hint("When an agent sends mail or invites someone, it waits here until you decide.")))

@@ -260,7 +260,16 @@ In a new chat, ask *"Check my iCloud connection."* Your AI runs `icloud_check_he
 
 ### Approving outgoing mail
 
-With the default `SEND_REQUIRES_APPROVAL=true`, `mail_send_message`, `mail_reply_to_message` and `mail_forward_message` return `queued_for_owner_approval` and nothing leaves. Open `https://<your-host>/outbox` (bookmark it, and only type the password there, never on a link an agent gives you), enter the owner password, review the exact recipients and text, then approve or discard. Queued messages expire after `OUTBOX_TTL_SECONDS` (24 hours by default) and are released at most once.
+With the default `SEND_REQUIRES_APPROVAL=true`, `mail_send_message`, `mail_reply_to_message` and `mail_forward_message` return `queued_for_owner_approval` and nothing leaves. Open `https://<your-host>/dashboard/approvals` (bookmark it, and only sign in there, never on a link an agent gives you), review the exact recipients and text, then approve or discard. Queued messages expire after `OUTBOX_TTL_SECONDS` (24 hours by default) and are released at most once. The older `https://<your-host>/outbox` page still works and asks for the owner password on every visit.
+
+### The dashboard
+
+`https://<your-host>/dashboard` is where you look after the server: what is waiting for your approval, what agents changed, which apps are connected, and whether mail, calendar and contacts answer. It works on a phone (tab bar) and on a computer (sidebar), in light and dark mode.
+
+- **Sign in with a passkey.** Sign in once with the owner password, then add a passkey under Security: Face ID, Touch ID or a security key from then on. A passkey only works on your server's own address, so a look-alike page cannot use it. Once you have one, `OWNER_PASSWORD_LOGIN=false` turns password sign-in off. Passkeys need the optional `webauthn` package (`pip install "icloud-mcp-server[passkey]"`); the Docker image has it.
+- **Activity.** Every write an agent makes (moving mail, changing an event, editing a contact), every approval and discard, every sign-in and failed attempt, and every app you connect or sign out is recorded in `DATA_DIR/audit.jsonl`, with names and addresses but never message bodies, passwords or tokens. Each entry carries the hash of the one before it, and the Activity page says whether the file was changed afterwards. Entries are kept for `AUDIT_KEEP_DAYS` (90). Turn it off with `AUDIT_LOG=false`.
+- **Calendar invitations can wait for you too.** With `ALLOW_CALENDAR_INVITES=approve`, a calendar change that makes iCloud email other people (an event with guests created, changed or cancelled, or your answer to an invitation) is held on the Approvals page instead of written. Approving writes exactly what you saw, and only if the event has not changed since; otherwise nothing is written and the page says so. Moving an event to another calendar sends no email and is not held.
+- **Sessions.** A sign-in lasts until `DASHBOARD_SESSION_MINUTES` (30) pass without use, and 12 hours at most. Removing a passkey, changing the password and signing out apps ask you to confirm when your sign-in is older than five minutes.
 
 ## Security
 
@@ -542,7 +551,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `ALLOW_SEND` | true | false = agents can only save drafts |
 | `SEND_REQUIRES_APPROVAL` | true | Queue outgoing mail for browser approval (locally: save it to Drafts) |
 | `OUTBOX_TTL_SECONDS`, `OUTBOX_MAX` | 86400, 20 | Queue lifetime and size |
-| `ALLOW_CALENDAR_INVITES` | false | Allow attendees (iCloud then emails invitations, updates and cancellations) |
+| `ALLOW_CALENDAR_INVITES` | false | Allow attendees (iCloud then emails invitations, updates and cancellations): `true`, or `approve` to hold each such change for you on the dashboard |
 | `SEND_ALLOWLIST` | empty | Only these addresses or domains may receive mail (`@example.org,friend@example.com`) |
 | `MAX_RECIPIENTS` | 25 | Per message |
 | `ALLOW_PERMANENT_DELETE` | false | Allow deleting mail from Trash |
@@ -563,6 +572,10 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `AGENT_NOTES_FILE` | (none) | Your own rules for agents, added to the instructions and served as `icloud://agent-notes` (see `docs/agent-notes.example.md`) |
 | `DATA_DIR` | `./data` (`/data` in Docker) | OAuth state and the outbox |
 | `ADMIN_PORT` | off | Loopback-only admin API for the menu bar app (its token is `admin-token` in `DATA_DIR`) |
+| `DASHBOARD` | true | The owner's dashboard at `/dashboard` (hosted mode only) |
+| `OWNER_PASSWORD_LOGIN` | true | `false` = the dashboard signs in with a passkey only, once one exists |
+| `DASHBOARD_SESSION_MINUTES` | 30 | A dashboard sign-in ends after this long without use (12 hours at most) |
+| `AUDIT_LOG`, `AUDIT_KEEP_DAYS` | true, 90 | The activity log in `DATA_DIR/audit.jsonl` and how many days it keeps |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | `claude.ai,claude.com,chatgpt.com,chat.openai.com,localhost,127.0.0.1` | Where sign-in may return a client: Claude, ChatGPT, and local clients such as Codex. Every sign-in still needs the owner password |
 | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL` | 3600, 30 days | Token lifetimes (refresh tokens rotate) |
 | `LOG_LEVEL` | INFO | |

@@ -142,7 +142,7 @@ class Settings:
     require_approval: bool        # outgoing mail is queued until the owner approves it on /outbox
     outbox_ttl: int               # seconds a queued message stays approvable
     outbox_max: int               # max messages waiting for approval
-    allow_calendar_invites: bool  # calendar writes that make iCloud email other people (attendees)
+    allow_calendar_invites: bool  # calendar writes that make iCloud email other people (attendees); also true for 'approve'
     # --- MCP server / OAuth ---------------------------------------------------
     public_url: str
     owner_password: str
@@ -193,6 +193,7 @@ class Settings:
     dashboard_session_minutes: int = 30  # DASHBOARD_SESSION_MINUTES: a dashboard session ends after this long without use
     audit_log: bool = True        # AUDIT_LOG: record writes, approvals and sign-ins in DATA_DIR/audit.jsonl
     audit_keep_days: int = 90     # AUDIT_KEEP_DAYS: how long activity entries are kept
+    invites_require_approval: bool = False  # ALLOW_CALENDAR_INVITES=approve: such writes wait for the owner on the dashboard
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -242,7 +243,7 @@ class Settings:
             require_approval=_bool("SEND_REQUIRES_APPROVAL", True),
             outbox_ttl=_int("OUTBOX_TTL_SECONDS", 24 * 3600),
             outbox_max=_int("OUTBOX_MAX", 20),
-            allow_calendar_invites=_bool("ALLOW_CALENDAR_INVITES", False),
+            allow_calendar_invites=_bool("ALLOW_CALENDAR_INVITES", False) or _str("ALLOW_CALENDAR_INVITES").lower() == "approve",
             public_url=_str("MCP_PUBLIC_URL").rstrip("/"),
             owner_password=overrides.get("owner_password") or _str("MCP_OWNER_PASSWORD"),
             data_dir=_str("DATA_DIR", "./data"),
@@ -292,6 +293,7 @@ class Settings:
             dashboard_session_minutes=max(5, min(_int("DASHBOARD_SESSION_MINUTES", 30), 720)),
             audit_log=_bool("AUDIT_LOG", True),
             audit_keep_days=max(1, min(_int("AUDIT_KEEP_DAYS", 90), 3650)),
+            invites_require_approval=_str("ALLOW_CALENDAR_INVITES").lower() == "approve",
         )
 
     # ------------------------------------------------------------------
