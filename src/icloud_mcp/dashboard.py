@@ -202,6 +202,14 @@ class MailApprovals(ApprovalSource):
         self.mail.outbox.claim(q.id)
 
 
+_AGENT_HINT = "Run icloud_check_health to see which service is failing."
+
+
+def for_owner(message: str) -> str:
+    """Service errors are written for agents. On the dashboard the owner has a button for the same check."""
+    return message.replace(_AGENT_HINT, "Check now on the Overview shows which service is failing.")
+
+
 def event_when(start: str | None, end: str | None, tz_name: str) -> str:
     """'Fri 20 Nov 2026, 19:00–21:00' in the server's time zone, from the ISO times stored with a held change. All-day events
     show the date only; anything unparsable is shown as stored."""
@@ -1012,7 +1020,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
             log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
             audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind)
-            return await asyncio.to_thread(approvals_page, rec, f"Not sent (still waiting): {e}", True)
+            return await asyncio.to_thread(approvals_page, rec, f"Not sent (still waiting): {for_owner(str(e))}", True)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         return after_action(rec, note)
