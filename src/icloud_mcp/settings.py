@@ -479,6 +479,10 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
                                  f"Here: {display(sp, stored[sp.key])}") for sp in changed)
             cards.append(D.card("Set here", f'<div class="list">{rows}</div>'
                                 + D.hint("Reset goes back to the server's environment or the default.")))
+        if g.slug == "accounts" and getattr(s, "owner_access_team_domain", ""):
+            cards.append(D.card("Accounts per area", D.hint("Mail, calendar and contacts can each come from their own account "
+                                "(for example WEB.DE mail next to iCloud calendar). That is set up on its own page."),
+                                D.link_button("Open account setup", "/setup", "primary")))
         if g.slug == "accounts" and editable:
             cards.append(D.card("App-specific password", D.field("apppw", "New app-specific password",
                                 'type="password" name="password" autocomplete="off" placeholder="abcd-efgh-ijkl-mnop" required',
