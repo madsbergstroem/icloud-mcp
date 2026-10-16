@@ -82,7 +82,9 @@ class _Principal:
         return [_Cal("https://p07-caldav.icloud.com/1/calendars/home/"), _Cal("https://p07-caldav.icloud.com/1/calendars/work/")]
 
 
-def test_only_chosen_calendars_are_seen(env):
+def test_only_chosen_calendars_are_seen(env, monkeypatch):
+    cals = _Principal().calendars()
+    monkeypatch.setattr(CalendarService, "_calendar_objects", lambda self, principal: (cals, cals))   # the listing itself is upstream's
     s = dataclasses.replace(Settings.from_env(), calendars_visible=("https://p01-caldav.icloud.com/1/calendars/work",))
     assert [c.name for c in CalendarService(s)._event_calendars(_Principal())] == ["work"]
     assert len(CalendarService(dataclasses.replace(s, calendars_visible=()))._event_calendars(_Principal())) == 2
