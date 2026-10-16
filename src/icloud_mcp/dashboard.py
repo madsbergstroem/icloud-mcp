@@ -673,11 +673,19 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         body, _ = sign_in_body("Confirm it’s you", lede, back, "", rec)
         return d.auth_page("Confirm", body, link_button("Cancel", back))
 
+    from . import access_sso
+    access = access_sso.from_settings(s)        # fork: behind Cloudflare Access the owner's identity signs the dashboard in
+
     @mcp.custom_route("/dashboard/signin", methods=["GET"])
     async def signin_get(request: Request) -> Response:
+        nxt = safe_next(request.query_params.get("next", "/dashboard"))
         if signed_in(request):
-            return RedirectResponse(safe_next(request.query_params.get("next", "/dashboard")), status_code=303, headers=_HEADERS)
-        return signin_page(nxt=safe_next(request.query_params.get("next", "/dashboard")))
+            return RedirectResponse(nxt, status_code=303, headers=_HEADERS)
+        if access is not None and (who := await access.owner_email(request.headers)):
+            token, _ = d.sessions.create(f"Cloudflare Access ({who})")
+            audit.record("signin.access", actor="owner", via=f"Cloudflare Access ({who})", summary="Signed in through Cloudflare Access")
+            return set_cookie(RedirectResponse(nxt, status_code=303, headers=_HEADERS), token)
+        return signin_page(nxt=nxt)
 
     @mcp.custom_route("/dashboard/signin", methods=["POST"])
     async def signin_post(request: Request) -> Response:

@@ -122,3 +122,34 @@ async def test_keys_from_a_local_file(env, monkeypatch, tmp_path):  # noqa: F811
     other = jwt.encode({"aud": [AUD], "iss": f"https://{TEAM}", "email": OWNER, "iat": int(time.time()), "exp": int(time.time()) + 60},
                        KEY, algorithm="RS256", headers={"kid": "k2"})
     assert await v.owner_email({"cf-access-jwt-assertion": other}) is None
+
+
+async def test_the_dashboard_signs_the_owner_in_through_access(tmp_path, monkeypatch):
+    """Fork: behind Cloudflare Access a verified owner identity opens a dashboard session without the password."""
+    import contextlib
+
+    import httpx
+
+    from icloud_mcp import access_sso
+    from icloud_mcp.config import Settings
+    from icloud_mcp.server import build_app, create_server
+
+    for k, v in dict(ICLOUD_USERNAME="me@icloud.com", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL="https://mcp.example.com",
+                     MCP_OWNER_PASSWORD="correct-horse-battery", DATA_DIR=str(tmp_path), WARMUP_ON_START="false",
+                     OWNER_ACCESS_TEAM_DOMAIN="team.example.com", OWNER_ACCESS_AUD="aud", OWNER_ACCESS_EMAILS="owner@example.org").items():
+        monkeypatch.setenv(k, v)
+
+    async def fake_owner(self, headers):
+        return "owner@example.org" if headers.get("cf-access-jwt-assertion") == "good" else None
+
+    monkeypatch.setattr(access_sso.AccessOwnerVerifier, "owner_email", fake_owner)
+    s = Settings.from_env()
+    mcp, _ = create_server(s)
+    app = build_app(s, mcp)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://mcp.example.com", follow_redirects=False) as c:
+        r = await c.get("/dashboard/signin?next=/dashboard/approvals")
+        assert r.status_code == 200 and "Owner password" in r.text                 # no token: the normal sign-in
+        r = await c.get("/dashboard/signin?next=/dashboard/approvals", headers={"cf-access-jwt-assertion": "good"})
+        assert r.status_code == 303 and r.headers["location"] == "/dashboard/approvals" and "__Host-icloud-dashboard" in r.headers["set-cookie"]
+        assert (await c.get("/dashboard/approvals")).status_code == 200
+    assert mcp._icloud_dashboard.audit.entries()[0]["action"] == "signin.access"
