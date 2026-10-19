@@ -56,10 +56,25 @@ async def test_reusing_an_already_rotated_refresh_token_says_it_was_rotated(setu
     async with T.client_for(app) as c:
         cid, _, rt = await sign_in(c)
         assert (await refresh(c, cid, rt)).status_code == 200                    # first user of this token wins and rotates it
+        provider.recently_rotated.clear()                                        # simulate expiry of rotation grace period
         r = await refresh(c, cid, rt)                                              # a second holder of the same copy
         assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
     msgs = warnings(caplog)
     assert any("already used" in m and "rotated" in m and "stale copy" in m and cid[:8] in m for m in msgs), msgs
+
+
+async def test_rotation_grace_period_serves_concurrent_requests(setup):
+    app, provider, caplog = setup
+    async with T.client_for(app) as c:
+        cid, _, rt = await sign_in(c)
+        r1 = await refresh(c, cid, rt)
+        assert r1.status_code == 200
+        tok1 = r1.json()
+        r2 = await refresh(c, cid, rt)
+        assert r2.status_code == 200
+        tok2 = r2.json()
+        assert tok2["access_token"] == tok1["access_token"]
+        assert tok2["refresh_token"] == tok1["refresh_token"]
 
 
 async def test_an_unknown_refresh_token_is_distinguished_from_a_rotated_one(setup):
