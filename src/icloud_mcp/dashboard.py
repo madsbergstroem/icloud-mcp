@@ -1227,10 +1227,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             row(a["name"], row_action("/dashboard/security/apps/sign-out", rec, {"id": a["id"]}, "Sign out"),
                 f'{a["host"]} · active {d.ago(a["last_used"])}' if a["host"] else f'active {d.ago(a["last_used"])}') for a in apps) + "</div>") \
             if apps else hint("No app is signed in.")
-        warn_msg = "Sign out every connected app?"
         foot = (f'<form method="post" action="/dashboard/security/apps/sign-out-all">{d.csrf_input(rec)}'
-                f'{button("Sign out all apps", "danger", onclick=f"return confirm(\'{warn_msg}\');")}</form>') if apps else ""
-        cards.append(card("Connected apps", app_list + hint("Each app has to be authorised again afterwards."),
+                f'{button("Sign out all apps", "danger")}</form>') if apps else ""
+        cards.append(card("Connected apps", app_list + (hint("Sign out all apps cuts every connected app and assistant off at once; "
+                                                             "each has to be authorised again before it can reach iCloud.") if apps else ""),
                           foot, chip(str(len(apps)), "info") if apps else ""))
         pw_on = d.password_login()
         cards.append(card("Owner password",
