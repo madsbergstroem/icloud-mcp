@@ -146,7 +146,7 @@ GROUPS: list[Group] = [
         Spec("OWNER_ADDRESSES", "My other addresses", "list", "Aliases, so invitations to them count as yours.", section="General"),
         Spec("ALLOW_CALENDAR_INVITES", "Invitations to other people", "choice",
              "Events with guests make iCloud email them: invitations, updates and cancellations.", default="false",
-             choices=(("false", "Off"), ("true", "Allowed")), loosens=_invites_open, section="Invitations"),
+             choices=(("false", "Off"), ("approve", "After my approval"), ("true", "Allowed")), loosens=_invites_open, section="Invitations"),
         Spec("INVITE_ALLOWLIST", "Only invite", "list", "Addresses or domains. Empty means anyone.", loosens=_wider, section="Invitations"),
         Spec("MAX_ATTENDEES", "Guests per event", "int", default="10", min=1, max=200, loosens=_higher, section="Invitations"),
     ], summary=lambda v: f"{v('DEFAULT_TIMEZONE') or 'UTC'} · invitations "
