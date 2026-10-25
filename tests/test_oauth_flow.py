@@ -132,16 +132,8 @@ async def test_full_flow(app):
         assert tok2["access_token"] != tok["access_token"]
         old = await c.post("/mcp", headers=h, json={})
         assert old.status_code == 401  # old access token dropped on rotation
-
-        # within grace period, repeating with old refresh token returns current active pair
         again = await c.post("/token", data={"grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid})
-        assert again.status_code == 200
-        assert again.json()["access_token"] == tok2["access_token"]
-
-        # after grace period ends, old refresh token is rejected
-        provider.recently_rotated.clear()
-        dead = await c.post("/token", data={"grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid})
-        assert dead.status_code == 400
+        assert again.status_code == 400  # old refresh token dead
 
         # revoke
         rv = await c.post("/revoke", data={"token": tok2["access_token"], "client_id": cid, "client_secret": ""})

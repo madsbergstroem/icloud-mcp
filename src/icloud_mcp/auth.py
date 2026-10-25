@@ -69,7 +69,6 @@ class OwnerOAuthProvider:
         self.clients: dict[str, dict[str, Any]] = {}
         self.access: dict[str, dict[str, Any]] = {}    # sha256(token) -> record
         self.refresh: dict[str, dict[str, Any]] = {}
-        self.recently_rotated: dict[str, dict[str, Any]] = {}  # sha256(old_refresh_token) -> active replacement
         self.codes: dict[str, AuthorizationCode] = {}
         self.pending: dict[str, dict[str, Any]] = {}
         self.failures: list[float] = []
@@ -92,7 +91,6 @@ class OwnerOAuthProvider:
         self.clients = data.get("clients", {})
         self.access = data.get("access", {})
         self.refresh = data.get("refresh", {})
-        self.recently_rotated = data.get("recently_rotated", {})
         self._prune()
 
     def _save(self) -> None:
@@ -101,8 +99,7 @@ class OwnerOAuthProvider:
             fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".oauth-", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
-                    json.dump({"clients": self.clients, "access": self.access, "refresh": self.refresh,
-                               "recently_rotated": self.recently_rotated}, f)
+                    json.dump({"clients": self.clients, "access": self.access, "refresh": self.refresh}, f)
                 os.chmod(tmp, 0o600)
                 os.replace(tmp, self.path)
             finally:
@@ -144,7 +141,6 @@ class OwnerOAuthProvider:
             known = client_id in self.clients or any(r["client_id"] == client_id for r in (*self.access.values(), *self.refresh.values()))
             self.access = {k: v for k, v in self.access.items() if v["client_id"] != client_id}
             self.refresh = {k: v for k, v in self.refresh.items() if v["client_id"] != client_id}
-            self.recently_rotated = {k: v for k, v in self.recently_rotated.items() if v.get("client_id") != client_id}
             self.clients.pop(client_id, None)
             self._last_used.pop(client_id, None)
             if known:
@@ -160,7 +156,6 @@ class OwnerOAuthProvider:
             n = self.connected_clients()
             self.access.clear()
             self.refresh.clear()
-            self.recently_rotated.clear()
             self.codes.clear()
             self.pending.clear()
             self.clients.clear()
@@ -173,7 +168,6 @@ class OwnerOAuthProvider:
         now = time.time()
         self.access = {k: v for k, v in self.access.items() if v["expires_at"] > now}
         self.refresh = {k: v for k, v in self.refresh.items() if v["expires_at"] > now}
-        self.recently_rotated = {k: v for k, v in self.recently_rotated.items() if v.get("expires_at", 0) > now}
         self.codes = {k: v for k, v in self.codes.items() if v.expires_at > now}
         self.pending = {k: v for k, v in self.pending.items() if v["expires_at"] > now}
 
@@ -316,10 +310,6 @@ class OwnerOAuthProvider:
         h = _h(refresh_token)
         rec = self.refresh.get(h)
         if not rec or rec["client_id"] != client.client_id or rec["expires_at"] <= time.time():
-            if self.s.rotation_grace_period > 0 and (recent := self.recently_rotated.get(h)):
-                if recent["client_id"] == client.client_id and recent["expires_at"] > time.time():
-                    return RefreshToken(token=refresh_token, client_id=recent["client_id"], scopes=recent["scopes"],
-                                        expires_at=int(recent["expires_at"]), resource=recent.get("resource"), subject="owner")
             cid = self._cid(client.client_id)
             if not rec:
                 ago = self._rotated_ago(h)
@@ -339,39 +329,15 @@ class OwnerOAuthProvider:
 
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token: RefreshToken, scopes: list[str]) -> OAuthToken:
         with self._lock:
-            h = _h(refresh_token.token)
-            if self.s.rotation_grace_period > 0 and (recent := self.recently_rotated.get(h)):
-                if recent["client_id"] == client.client_id and recent["expires_at"] > time.time():
-                    log.info("oauth: refresh token for client %s used within %.0fs grace period; returning current active token pair",
-                             self._cid(client.client_id), time.time() - recent["rotated_at"])
-                    return OAuthToken(access_token=recent["access_token"], token_type="Bearer",
-                                      expires_in=max(1, int(recent["access_expires_at"] - time.time())),
-                                      scope=" ".join(recent["scopes"]), refresh_token=recent["refresh_token"])
-
-            rec = self.refresh.get(h)
+            rec = self.refresh.get(_h(refresh_token.token))
             if not rec:
                 raise TokenError("invalid_grant", "refresh token revoked or expired")
             granted = scopes or rec["scopes"]
             if not set(granted) <= set(rec["scopes"]):
                 raise TokenError("invalid_scope", "requested scope exceeds original grant")
-            old_pair = rec["pair"]
-            self._note_rotated([h] + [k for k, v in self.access.items() if v["pair"] == old_pair])
-            self._drop_pair(old_pair)  # rotate
-            new_tokens = self._issue(client.client_id, granted, rec.get("resource"), "refresh_token")
-            if self.s.rotation_grace_period > 0:
-                now = time.time()
-                self.recently_rotated[h] = {
-                    "client_id": client.client_id,
-                    "scopes": granted,
-                    "resource": rec.get("resource"),
-                    "access_token": new_tokens.access_token,
-                    "refresh_token": new_tokens.refresh_token,
-                    "access_expires_at": now + self.s.access_token_ttl,
-                    "rotated_at": now,
-                    "expires_at": now + self.s.rotation_grace_period,
-                }
-                self._save()
-            return new_tokens
+            self._note_rotated([_h(refresh_token.token)] + [k for k, v in self.access.items() if v["pair"] == rec["pair"]])
+            self._drop_pair(rec["pair"])  # rotate
+            return self._issue(client.client_id, granted, rec.get("resource"), "refresh_token")
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         h = _h(token)
