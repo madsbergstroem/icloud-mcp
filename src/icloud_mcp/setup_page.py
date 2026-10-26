@@ -351,7 +351,7 @@ def register_setup_routes(mcp: Any, settings: Settings, *, provider: Any = None,
 <a class="btn ghost danger" href="/setup?{urlencode({"trennen": a["id"]})}">Dieses Konto trennen</a></div>"""
         outbox = ""
         if settings.require_approval and any("mail" in a["areas"] and not a.get("read_only") for a in accts):
-            outbox = '<p>Mails, die auf deine Freigabe warten: <a class="inl" href="/outbox">Freigaben ansehen</a></p>'
+            outbox = '<p>Mails, die auf deine Freigabe warten: <a class="inl" href="/dashboard/approvals">Freigaben ansehen</a></p>'
         apps = ""
         if provider is not None:
             n = provider.connected_clients()
