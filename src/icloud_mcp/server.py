@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import inspect
 import logging
 import os
@@ -18,10 +19,11 @@ from typing import Annotated, Any, Literal
 import pydantic_core
 import uvicorn
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, ContentBlock, Icon, TextContent, ToolAnnotations
+from mcp.types import CallToolResult, ContentBlock, ElicitRequest, ElicitRequestURLParams, Icon, InputRequiredResult, TextContent, ToolAnnotations
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, Response
@@ -192,7 +194,7 @@ def _audit_call(name: str, kwargs: dict[str, Any], ok: bool, out: Any = None, er
     if isinstance(kwargs.get("uids"), list):
         details["count"] = len(kwargs["uids"])
     text = out if isinstance(out, str) else ""
-    queued = '"queued_for_owner_approval"' in text
+    queued = '"queued_for_owner_approval"' in text or '"queued_waiting_for_files"' in text
     drafted = '"draft_saved"' in text or '"saved_to_drafts' in text
     if queued:
         summary = f"Asked to {verb} {noun.replace('_', ' ')}" + (f" “{label}”" if label else "") + " (waiting for your approval)"
@@ -242,6 +244,36 @@ def _lean_drive_item(item: Any, folder: str) -> Any:
     return item
 
 
+def _owner_link_request(ctx: Any, out: Any) -> InputRequiredResult | None:
+    """A mail that waits for a file, asked by a client that opens links itself (URL elicitation, MCP 2026-07-28): the client
+    shows the owner the attach page directly instead of the agent passing the link on. The first round's result travels in
+    the sealed request_state, so the client's retry returns it without queuing the mail again. Any other client gets the
+    result as it is, link included."""
+    text = out.content[0].text if isinstance(out, CallToolResult) and out.content and isinstance(out.content[0], TextContent) else out
+    if not isinstance(text, str) or '"queued_waiting_for_files"' not in text:
+        return None
+    try:
+        caps = ctx.client_capabilities
+        if ctx.protocol_version not in MODERN_PROTOCOL_VERSIONS or caps is None or caps.elicitation is None or caps.elicitation.url is None:
+            return None
+    except Exception:  # noqa: BLE001  -- no request behind the call (a direct call in a test): nothing to ask
+        return None
+    data = json.loads(text)
+    names = ", ".join(f["filename"] for f in data.get("files_to_add") or [])
+    ask = ElicitRequest(params=ElicitRequestURLParams(
+        message=f"The mail “{data.get('subject') or '(no subject)'}” waits for {names}. Add the file and send the mail on this page.",
+        url=data["owner_link"]))
+    return InputRequiredResult(input_requests={"add_file": ask}, request_state=text)
+
+
+def _resumed(state: str) -> str | CallToolResult:
+    """The retry after the owner was shown the link: the first round's result, exactly as it was."""
+    if not _structured_content:
+        return state
+    data = json.loads(state)
+    return CallToolResult(content=[TextContent(text=state)], structured_content=data if isinstance(data, dict) else {"result": data})
+
+
 def _guard(fn=None, *, lane: str = "main"):
     """Run a blocking service call in a worker thread and convert domain errors into tool errors.
     A call that runs longer than the tool timeout is abandoned with an error, so a client never waits on a hang.
@@ -263,6 +295,9 @@ def _guard(fn=None, *, lane: str = "main"):
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
+        ctx = kwargs.pop("ctx", None)             # only tools that declare it (the mail senders): see _owner_link_request
+        if ctx is not None and ctx.request_state is not None:
+            return _resumed(ctx.request_state)    # the boundary unsealed it, so it is a result this server wrote
         if getattr(fn, "__name__", "") not in ALWAYS_KEPT and is_paused():      # checked per call: the owner can pause any time
             raise ToolError(PAUSED_MESSAGE)
         holder: dict[str, Any] = {"stage": None}
@@ -272,6 +307,8 @@ def _guard(fn=None, *, lane: str = "main"):
             pool = _mac_executor if lane == "mac" else _executor
             out = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(pool, call), timeout=_tool_timeout)
             _audit_call(name, kwargs, True, out)
+            if ctx is not None and (asked := _owner_link_request(ctx, out)) is not None:
+                return asked
             return out
         except asyncio.TimeoutError as e:
             _audit_call(name, kwargs, False, error="timed out; it may still have completed")
@@ -902,6 +939,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 body_html: BodyHtml = None,
                 attachments: Attachments = None,
                 draft: Draft = False,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Compose a new email from scratch and send it, or save it to Drafts with draft=true.
 
@@ -942,6 +980,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 attachments: Attachments = None,
                 draft: Draft = False,
                 uidvalidity: UidValidity = None,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Reply to one received message inside its thread (Re: subject, In-Reply-To and References, quoted original), to the sender or, with reply_all, to everyone.
 
@@ -977,6 +1016,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 note_html: Annotated[str | None, _d("Optional HTML version of the note.")] = None,
                 draft: Draft = False,
                 uidvalidity: UidValidity = None,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Forward one received message inline to new recipients, with a 'Fwd:' subject, the original header block and, by default, its attachments.
 
