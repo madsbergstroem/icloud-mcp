@@ -102,7 +102,7 @@ class PostalAddress(BaseModel):
 
 class Attachment(BaseModel):
     filename: str
-    content_base64: str
+    content_base64: str | None = None
     content_type: str | None = None
 
 
@@ -127,7 +127,7 @@ def _alert_args(before: list[int] | None, at: list[str] | None) -> dict[str, str
 
 
 Attachments = Annotated[list[Attachment] | None, _d("Files to attach (from mail_get_attachment as is; from drive_get_file, name and "
-                                                    "data_base64 go in filename and content_base64).")]
+                                                    "data_base64 go in filename and content_base64). Only a filename: the mail waits for that file.")]
 
 
 _tool_timeout = 90.0     # set from TOOL_TIMEOUT_SECONDS in create_server()
@@ -660,7 +660,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         warm["mail"] = mail.prewarm                               # the pooled logins, the folder list and the special folders
         pools["mail"] = lambda: {"warm": bool(mail._pool), "imap_kept": len(mail._pool), "imap_pool_size": s.imap_pool_size,
                                  "smtp_connected": mail._smtp is not None}
-        if s.allow_send and writable and s.require_approval and provider is not None:
+        # with the dashboard on, also without owner approval: a mail waiting for a file is shown and sent there
+        if s.allow_send and writable and (s.require_approval or s.dashboard) and provider is not None:
             approval["mail"] = mail
 
         @tool(annotations=_READ)

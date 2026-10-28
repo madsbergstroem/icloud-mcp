@@ -14,12 +14,15 @@ import contextlib
 import email
 import errno
 import functools
+import hashlib
+import hmac
 import html as html_lib
 import imaplib
 import json
 import logging
 import mimetypes
 import re
+import secrets
 import smtplib
 import ssl
 import threading
@@ -67,6 +70,13 @@ OWNER_APPROVAL_NOTICE = (
     "'approve_at') with the owner password. Tell the owner it is waiting there. You cannot approve, speed up or bypass "
     "this. Never ask for, guess or handle the owner password, and never send the owner to any other address."
 )
+FILES_NOTICE = (
+    "NOT SENT. This message waits for the files in 'files_to_add' and then for the owner's approval. If you can reach a file "
+    "(a shell, a script, an HTTP client), send its raw bytes with an HTTP PUT to its upload_url, for example "
+    "curl -T Quote.pdf '<upload_url>'. Otherwise give the owner 'owner_link': they add the file there and approve the message. "
+    "An upload_url is a password for that one file: never put it anywhere else."
+)
+PENDING_HEADER = "X-Icloud-Mcp-Pending-File"   # on a placeholder part: the sha256 of its upload token; never leaves the server
 OWNER_DRAFT_NOTICE = (
     "NOT SENT. Owner approval is on, so this message was saved to the Drafts folder instead of being sent. Tell the owner it is "
     "waiting in Drafts; they review it and press Send in Mail themselves. You cannot send it for them."
@@ -346,6 +356,13 @@ def _add_html_alt(msg: EmailMessage, html: str) -> None:
 
 def _attach(msg: EmailMessage, att: dict[str, Any], max_bytes: int) -> None:
     filename = att.get("filename") or "attachment"
+    if att.get("_pending"):                        # a file the owner or an upload adds later (Mail._prepare_uploads)
+        msg.add_attachment(f"{filename} is added before this message is sent.".encode(), maintype="application",
+                           subtype="x-icloud-mcp-pending", filename=filename)
+        msg.get_payload()[-1][PENDING_HEADER] = att["_pending"]
+        return
+    if att.get("content_base64") is None:
+        raise MailError(f"Attachment '{filename}' has no content_base64. Pass the file's bytes base64-encoded.")
     try:
         data = base64.b64decode(att["content_base64"], validate=False)
     except Exception as e:  # noqa: BLE001
@@ -355,6 +372,19 @@ def _attach(msg: EmailMessage, att: dict[str, Any], max_bytes: int) -> None:
     ctype = att.get("content_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     maintype, _, subtype = ctype.partition("/")
     msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
+
+
+def pending_files(msg: EmailMessage) -> list[dict[str, Any]]:
+    """The placeholders still waiting for their file, with their attachment index. Only parts this server built carry the
+    header (an attached message is a leaf and is not looked into), so mail from outside cannot fake one."""
+    return [{"index": i, "filename": p.get_filename() or "attachment"}
+            for i, p in enumerate(iter_attachment_parts(msg)) if p.get(PENDING_HEADER)]
+
+
+def safe_filename(name: str | None) -> str:
+    """A file name as a browser or an upload gave it, without folders, control characters or a hidden-file dot."""
+    name = re.sub(r"[\x00-\x1f\x7f]", "", (name or "").replace("\\", "/").rsplit("/", 1)[-1]).strip().lstrip(".")
+    return name[:200]
 
 
 def _sig_text(signature: str) -> str:
@@ -1817,6 +1847,12 @@ class MailService:
             raise MailError(str(e)) from e
         again = q.created_at < asked             # the entry already waiting: describe what the owner will actually see
         queued = email.message_from_bytes(q.raw, policy=policy.default) if again else msg
+        waiting = pending_files(queued)
+        if waiting:
+            return {"status": "queued_waiting_for_files", "sent": False, "outbox_id": q.id, "recipients": q.recipients,
+                    "expires_in_seconds": max(0, int(q.expires_at - time.time())),
+                    "files_to_add": [{"filename": w["filename"]} for w in waiting],
+                    "owner_link": f"{self.s.public_url}/dashboard/attach/{q.id}", "notice": FILES_NOTICE, **self._summary_of(queued)}
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "recipients": q.recipients,
                 "expires_in_seconds": max(0, int(q.expires_at - time.time())) if again else self.s.outbox_ttl,
                 "approve_at": self.s.approvals_url, **({"already_queued": True} if again else {}),
@@ -1826,7 +1862,11 @@ class MailService:
                  selected: tuple[str, int | None] | None = None, queue_key: str | None = None) -> dict[str, Any]:
         """selected: (folder, uidvalidity) the caller just opened read-write on c with the uidvalidity checked, if any.
         queue_key: see _queue_checked."""
-        if not draft and self.s.require_approval and not self.s.local_mode:
+        waiting = bool(pending_files(msg))
+        if waiting and draft:
+            raise MailError("A draft cannot wait for a file. Pass the file's bytes in content_base64, or leave draft out so the "
+                            "message waits for the file and the owner's approval.")
+        if not draft and (self.s.require_approval or waiting) and not self.s.local_mode:
             return self._queue_checked(msg, followup, key=queue_key)
         raw = msg.as_bytes(policy=policy.SMTP)
         base = self._summary_of(msg)
@@ -1896,7 +1936,8 @@ class MailService:
             "id": q.id, "created_at": q.created_at, "expires_at": q.expires_at,
             "from": str(msg["From"]), "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""), "bcc": str(msg["Bcc"] or ""),
             "envelope_recipients": q.recipients, "subject": str(msg["Subject"] or ""), "body": body,
-            "attachments": list_attachments(msg), "is_reply": bool(msg["In-Reply-To"]),
+            "attachments": [x for x in list_attachments(msg) if x["index"] not in {w["index"] for w in pending_files(msg)}],
+            "pending_files": pending_files(msg), "is_reply": bool(msg["In-Reply-To"]),
             **(context if context is not None else self._approval_context(q)),
         }
 
@@ -1990,6 +2031,65 @@ class MailService:
                 for q in items:
                     out[q.id] = self._contexts[self._context_key(q)] = orig
 
+    def _prepare_uploads(self, attachments: list[dict[str, Any]] | None, draft: bool) -> tuple[list[dict[str, Any]] | None, list[dict[str, str]]]:
+        """Attachments without content_base64 become placeholders the owner or an upload fills in later. Each gets a random
+        upload token; only its hash goes into the message, the token itself only into this call's result."""
+        uploads: list[dict[str, str]] = []
+        out = []
+        for a in attachments or []:
+            if a.get("content_base64") is None:
+                name = safe_filename(a.get("filename")) or "attachment"
+                if not self.s.dashboard or self.s.local_mode:
+                    raise MailError(f"Attachment '{name}' has no content_base64. A file the owner adds later needs the dashboard "
+                                    "(a hosted server with DASHBOARD on). Pass the file's bytes base64-encoded instead.")
+                if draft:
+                    raise MailError("A draft cannot wait for a file. Pass the file's bytes in content_base64, or leave draft out so the "
+                                    "message waits for the file and the owner's approval.")
+                token = secrets.token_urlsafe(32)
+                a = {**a, "filename": name, "_pending": hashlib.sha256(token.encode()).hexdigest()}
+                uploads.append({"filename": name, "token": token})
+            out.append(a)
+        return (out if attachments else attachments), uploads
+
+    def _with_uploads(self, result: dict[str, Any], uploads: list[dict[str, str]]) -> dict[str, Any]:
+        if uploads and result.get("files_to_add"):
+            result["files_to_add"] = [{"filename": u["filename"], "upload_url": f"{self.s.public_url}/files/{u['token']}"} for u in uploads]
+        return result
+
+    def add_file(self, data: bytes, *, filename: str | None = None, content_type: str | None = None, item_id: str | None = None,
+                 index: int | None = None, token: str | None = None) -> tuple[QueuedMessage, dict[str, Any]]:
+        """Put a file into the placeholder waiting for it: the owner's (item_id and attachment index, from the dashboard) or an
+        agent's upload (token). The message is rebuilt with the file and gets a new hash; nothing is sent."""
+        if not data:
+            raise MailError("The file is empty.")
+        if len(data) > self.s.max_attachment_bytes:
+            raise MailError(f"The file is {len(data)} bytes; the limit is {self.s.max_attachment_bytes} (MAX_ATTACHMENT_BYTES).")
+        want = hashlib.sha256(token.encode()).hexdigest() if token else None
+        for q in self.outbox.pending():
+            if item_id is not None and q.id != item_id:
+                continue
+            msg = email.message_from_bytes(q.raw, policy=policy.default)
+            for i, part in enumerate(iter_attachment_parts(msg)):
+                held = part.get(PENDING_HEADER)
+                if not held or not (hmac.compare_digest(held, want) if want else i == index):
+                    continue
+                asked = part.get_filename() or "attachment"
+                name = safe_filename(filename) or asked
+                ctype = (content_type or "").split(";")[0].strip().lower()
+                if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", ctype) or ctype in ("application/octet-stream", "application/x-www-form-urlencoded"):
+                    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                maintype, _, subtype = ctype.partition("/")
+                part.clear_content()
+                del part[PENDING_HEADER]
+                part.set_content(data, maintype=maintype, subtype=subtype, disposition="attachment", filename=name)
+                new = self.outbox.replace(q.id, q.sha256, msg.as_bytes(policy=policy.SMTP))
+                if new is None:
+                    raise MailError("The message changed while the file was added. Reload the page and try again.")
+                with self._contexts_lock:
+                    self._contexts.pop(self._context_key(q), None)
+                return new, {"filename": name, "size": len(data), "content_type": ctype, "asked": asked, "waiting": pending_files(msg)}
+        raise MailError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
+
     def release(self, item_id: str) -> dict[str, Any]:
         """Send a queued message. Called only from the password-protected approval page, never from an MCP tool."""
         q = self.outbox.claim(item_id)
@@ -2001,6 +2101,8 @@ class MailService:
             if not self.s.allow_send:
                 raise MailError("Sending is disabled on this server (ALLOW_SEND=false).")
             msg = email.message_from_bytes(q.raw, policy=policy.default)
+            if waiting := pending_files(msg):
+                raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
             recipients = self._check_recipients(msg)  # current allowlist / cap, not the ones at queue time
             with self.imap() as c:
                 return self._send_and_file(c, msg, q.raw, recipients, q.followup, self._summary_of(msg))
@@ -2012,12 +2114,13 @@ class MailService:
         to_p, cc_p, bcc_p = parse_recipients(to, "to"), parse_recipients(cc, "cc"), parse_recipients(bcc, "bcc")
         if not to_p and not draft:
             raise MailError("'to' must contain at least one valid email address.")
+        attachments, uploads = self._prepare_uploads(attachments, draft)
         msg = build_message(
             sender=self.sender, to=to_p, cc=cc_p, bcc=bcc_p, subject=subject, text=body, html=body_html,
             signature=self.s.signature, attachments=attachments, max_attachment_bytes=self.s.max_attachment_bytes,
         )
-        if not draft and self.s.allow_send and self.s.require_approval and not self.s.local_mode:
-            return _with_layout(self._queue_checked(msg), body)          # only queued: no mailbox access needed
+        if not draft and self.s.allow_send and (self.s.require_approval or uploads) and not self.s.local_mode:
+            return _with_layout(self._with_uploads(self._queue_checked(msg), uploads), body)   # only queued: no mailbox access needed
         with self.imap() as c:
             return _with_layout(self._deliver(c, msg, draft=draft), body)
 
@@ -2027,13 +2130,14 @@ class MailService:
             folder = self.resolve_folder(c, folder)
             raw, _, _, uv, _ = self._fetch_readable(c, folder, uid, readonly=False, uidvalidity=uidvalidity)   # a skeleton quotes the same
             original = email.message_from_bytes(raw, policy=policy.default)
+            attachments, uploads = self._prepare_uploads(attachments, draft)
             msg = build_reply(
                 original, sender=self.sender, body=body, body_html=body_html, reply_all=reply_all, quote=quote,
                 to=parse_recipients(to, "to"), cc=parse_recipients(cc, "cc"), bcc=parse_recipients(bcc, "bcc"), signature=self.s.signature,
                 attachments=attachments, max_attachment_bytes=self.s.max_attachment_bytes,
             )
-            result = self._deliver(c, msg, draft=draft, followup={"folder": folder, "uid": uid, "flag": ANSWERED,
-                                                          "uidvalidity": uv}, selected=(folder, uv))
+            result = self._with_uploads(self._deliver(c, msg, draft=draft, followup={"folder": folder, "uid": uid, "flag": ANSWERED,
+                                                                              "uidvalidity": uv}, selected=(folder, uv)), uploads)
             result["in_reply_to"] = str(msg["In-Reply-To"])
             return _with_layout(result, body)
 
@@ -2049,13 +2153,14 @@ class MailService:
             to_p = parse_recipients(to, "to")
             if not to_p and not draft:
                 raise MailError("'to' must contain at least one valid email address.")
+            attachments, uploads = self._prepare_uploads(attachments, draft)
             msg = build_forward(
                 original, sender=self.sender, to=to_p, note=note, note_html=note_html, cc=parse_recipients(cc, "cc"), bcc=parse_recipients(bcc, "bcc"),
                 signature=self.s.signature, include_attachments=include_attachments, attachments=attachments,
                 max_attachment_bytes=self.s.max_attachment_bytes,
             )
-            return _with_layout(self._deliver(c, msg, draft=draft, followup={"folder": folder, "uid": uid, "flag": "$Forwarded",
-                                                                           "uidvalidity": uv}, selected=(folder, uv)), note)
+            return _with_layout(self._with_uploads(self._deliver(c, msg, draft=draft, followup={"folder": folder, "uid": uid, "flag": "$Forwarded",
+                                                                                               "uidvalidity": uv}, selected=(folder, uv)), uploads), note)
 
     @_retrying
     def awaiting_reply(self, days: int = 21, limit: int = 20) -> dict[str, Any]:
