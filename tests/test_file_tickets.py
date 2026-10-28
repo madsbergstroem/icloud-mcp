@@ -182,3 +182,70 @@ async def test_the_activity_log_says_the_mail_waits_and_was_not_sent(web, tmp_pa
     await mcp._tool_manager.get_tool("mail_send_message").run(ARGS, context=_Ctx(url=False))
     line = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if '"mail_send_message"' in x or "send message" in x][-1]
     assert "waiting for your approval" in line["summary"] and not line["summary"].startswith("Sent")
+
+
+async def test_the_owner_replaces_an_added_file_before_sending(web):
+    app, mcp, _, sent = web()
+    r = ask(mcp)
+    path = f"/dashboard/attach/{r['outbox_id']}"
+    async with client(app) as c:
+        await c.put(f"/files/{token_of(r)}", content=b"%PDF-1.4 the wrong one\n", headers={"content-type": "application/pdf"})
+        await signed_in(c)
+        page = (await c.get(path)).text
+        assert "Replace" in page and "Remove" in page and "Approve and send" in page
+        up = await c.post(f"{path}/file", headers={**SAME, "accept": "application/json"},
+                          data={"csrf": csrf(page), "index": "0"}, files={"file": ("Offer_final.pdf", PDF, "application/pdf")})
+        got = up.json()
+        assert up.status_code == 200 and got["ok"] and got["index"] == 0 and got["asked"] == "Quote-2026.pdf" and got["other_name"]
+        page = (await c.get(path)).text
+        assert "Offer_final.pdf" in page and "asked for Quote-2026.pdf" in page and "Other name" in page
+        act = await c.post("/dashboard/approvals/act", headers={**SAME, "accept": "application/json"},
+                           data={"csrf": csrf(page), "kind": "mail", "id": r["outbox_id"], "sha": got["sha"], "action": "approve"})
+        assert act.json()["ok"], act.text
+    out = email.message_from_bytes(sent[0][0].as_bytes(policy=policy.SMTP), policy=policy.default)
+    atts = list(out.iter_attachments())
+    assert [a.get_filename() for a in atts] == ["Offer_final.pdf"] and atts[0].get_content() == PDF   # one file, the new one
+    assert "x-icloud-mcp" not in out.as_string().lower()                # the server's own headers never leave
+
+
+async def test_removing_an_added_file_makes_the_mail_wait_again(web):
+    app, mcp, _, sent = web()
+    r = ask(mcp)
+    path = f"/dashboard/attach/{r['outbox_id']}"
+    async with client(app) as c:
+        await c.put(f"/files/{token_of(r)}", content=PDF)
+        await signed_in(c)
+        page = (await c.get(path)).text
+        rm = await c.post(f"{path}/remove", headers={**SAME, "accept": "application/json"}, data={"csrf": csrf(page), "index": "0"})
+        got = rm.json()
+        assert rm.status_code == 200 and got["ok"] and got["waiting"] == ["Quote-2026.pdf"] and got["asked"] == "Quote-2026.pdf"
+        page = (await c.get(path)).text
+        assert "Drop Quote-2026.pdf here" in page and "Add the file first" in page
+        act = await c.post("/dashboard/approvals/act", headers={**SAME, "accept": "application/json"},
+                           data={"csrf": csrf(page), "kind": "mail", "id": r["outbox_id"], "sha": got["sha"], "action": "approve"})
+        assert act.status_code == 409 and sent == []                   # waiting for the file again, nothing went out
+        assert (await c.put(f"/files/{token_of(r)}", content=PDF)).status_code == 404   # the agent's link stays used up
+        again = await c.post(f"{path}/remove", headers={**SAME, "accept": "application/json"}, data={"csrf": csrf(page), "index": "0"})
+        assert again.status_code == 409                                # a placeholder is not a file to remove
+        up = await c.post(f"{path}/file", headers={**SAME, "accept": "application/json"},
+                          data={"csrf": csrf(page), "index": "0"}, files={"file": ("Quote-2026.pdf", PDF, "application/pdf")})
+        assert up.json()["ok"] and up.json()["waiting"] == []          # the owner adds it again
+
+
+async def test_the_agents_own_attachment_cannot_be_removed_or_replaced(web):
+    import base64
+    app, mcp, _, _ = web()
+    r = mail_of(mcp).send(to=["anna@example.org"], subject="Quote", body="Hi Anna.",
+                          attachments=[{"filename": "Terms.pdf", "content_base64": base64.b64encode(PDF).decode()},
+                                       {"filename": "Quote-2026.pdf", "content_base64": None}])
+    path = f"/dashboard/attach/{r['outbox_id']}"
+    async with client(app) as c:
+        await signed_in(c)
+        page = (await c.get(path)).text
+        assert "Terms.pdf" in page and "Remove" not in page
+        rm = await c.post(f"{path}/remove", headers={**SAME, "accept": "application/json"}, data={"csrf": csrf(page), "index": "0"})
+        up = await c.post(f"{path}/file", headers={**SAME, "accept": "application/json"},
+                          data={"csrf": csrf(page), "index": "0"}, files={"file": ("x.pdf", PDF, "application/pdf")})
+        assert rm.status_code == 409 and up.status_code == 409
+        foreign = await c.post(f"{path}/remove", headers={"origin": "https://evil.example.net"}, data={"csrf": csrf(page), "index": "1"})
+        assert foreign.status_code == 403

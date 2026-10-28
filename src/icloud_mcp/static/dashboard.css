@@ -302,3 +302,6 @@ background:var(--primary);color:var(--on-primary);cursor:pointer}
 .ticket .card-foot .check{flex-basis:100%}
 .ticket .card-foot .btn:not(.primary){flex:0 0 auto}
 .ticket .card-foot .btn.primary[disabled]{opacity:1;background:var(--fill);border-color:var(--fill);color:var(--muted)}
+[data-file]{flex-wrap:wrap;row-gap:2px}[data-file] .file-txt{flex:1 1 11rem}   /* narrow: the actions move under the name */
+.file .btn.text{flex:0 0 auto;min-width:0;padding:0 6px}
+.file .btn.text+.btn.text{margin-left:-6px}

@@ -11,7 +11,9 @@ Update the Mac helper before the server whenever its version changes.
   send the raw bytes with `curl -T`. The file goes into the stored message, which gets a new hash: the owner approves what
   actually goes out. `PUT /files/<token>` sits outside `/dashboard`, so a sign-in proxy in front of the server has to let
   that path through; the token is its only key. Needs the dashboard. A client that opens links itself (URL elicitation,
-  MCP 2026-07-28) shows the owner the attach page directly; its retry gets the first answer and queues nothing twice.
+  MCP 2026-07-28) shows the owner the attach page directly; its retry gets the first answer and queues nothing twice. Until
+  the mail goes out, the owner can replace an added file there or remove it, which puts the empty slot back and locks Send
+  again. The agent's upload link stays used up, so only the owner adds the next file.
 - **One interface for the owner.** With the dashboard on (the default) every `/outbox` address redirects to
   `/dashboard/approvals`, and tools return that page as `approve_at`. Approving now always follows the dashboard's sign-in
   rules: with `OWNER_PASSWORD_LOGIN=false` the owner password no longer releases messages on `/outbox`. The page that
