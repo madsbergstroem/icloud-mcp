@@ -139,3 +139,46 @@ async def test_uploads_keep_to_the_size_limit(web):
         assert empty.status_code == 400 and "empty" in empty.json()["error"]
         ok = await c.put(f"/files/{token_of(r)}?filename=../../Quote.pdf", content=PDF)
         assert ok.status_code == 200 and json.loads(ok.text)["filename"] == "Quote.pdf"   # no folders in a file name
+
+
+class _Ctx:
+    """What the tool sees of the request: the protocol, the client's capabilities and an echoed request_state."""
+    def __init__(self, url: bool, version: str = "2026-07-28", state: str | None = None):
+        from mcp.types import ClientCapabilities, ElicitationCapability, FormElicitationCapability, UrlElicitationCapability
+        self.protocol_version, self.request_state = version, state
+        self.client_capabilities = ClientCapabilities(elicitation=ElicitationCapability(
+            url=UrlElicitationCapability() if url else None, form=None if url else FormElicitationCapability()))
+
+
+ARGS = {"to": ["anna@example.org"], "subject": "Quote for the spring order", "body": "Hi Anna, here is the quote.",
+        "attachments": [{"filename": "Quote-2026.pdf"}]}
+
+
+async def test_a_client_that_opens_links_shows_the_owner_the_attach_page_and_the_mail_is_queued_once(web):
+    from mcp.types import InputRequiredResult
+    _, mcp, _, _ = web()
+    tool = mcp._tool_manager.get_tool("mail_send_message")
+    first = await tool.run(ARGS, context=_Ctx(url=True))
+    assert isinstance(first, InputRequiredResult)
+    ask = first.input_requests["add_file"].params
+    assert ask.mode == "url" and ask.url.startswith(f"{BASE}/dashboard/attach/") and "Quote-2026.pdf" in ask.message
+    assert len(mail_of(mcp).outbox.pending()) == 1
+    again = await tool.run(ARGS, context=_Ctx(url=True, state=first.request_state))    # the client's retry after the link
+    text = again if isinstance(again, str) else again.content[0].text
+    assert json.loads(text)["status"] == "queued_waiting_for_files" and "upload_url" in text
+    assert len(mail_of(mcp).outbox.pending()) == 1                                    # asked once, queued once
+
+
+@pytest.mark.parametrize("ctx", [_Ctx(url=False), _Ctx(url=True, version="2025-11-25")], ids=["form-only", "older-protocol"])
+async def test_other_clients_get_the_link_in_the_result(web, ctx):
+    _, mcp, _, _ = web()
+    out = await mcp._tool_manager.get_tool("mail_send_message").run(ARGS, context=ctx)
+    text = out if isinstance(out, str) else out.content[0].text
+    assert json.loads(text)["owner_link"].startswith(f"{BASE}/dashboard/attach/")
+
+
+async def test_the_activity_log_says_the_mail_waits_and_was_not_sent(web, tmp_path):
+    _, mcp, _, _ = web()
+    await mcp._tool_manager.get_tool("mail_send_message").run(ARGS, context=_Ctx(url=False))
+    line = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if '"mail_send_message"' in x or "send message" in x][-1]
+    assert "waiting for your approval" in line["summary"] and not line["summary"].startswith("Sent")
