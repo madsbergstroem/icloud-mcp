@@ -249,3 +249,16 @@ async def test_the_agents_own_attachment_cannot_be_removed_or_replaced(web):
         assert rm.status_code == 409 and up.status_code == 409
         foreign = await c.post(f"{path}/remove", headers={"origin": "https://evil.example.net"}, data={"csrf": csrf(page), "index": "1"})
         assert foreign.status_code == 403
+
+
+async def test_a_token_prefix_names_the_server_in_the_upload_path(web):
+    """One proxy in front of several servers sends each upload to the right one by its path, without reading the body."""
+    app, mcp, _, _ = web(FILE_TOKEN_PREFIX="a")
+    r = ask(mcp)
+    url = r["files_to_add"][0]["upload_url"]
+    assert url.startswith(f"{BASE}/files/a.") and len(token_of(r)) > 40
+    async with client(app) as c:
+        assert (await c.put(f"/files/{token_of(r).removeprefix('a.')}", content=PDF)).status_code == 404   # the prefix is part of the key
+        ok = await c.put(f"/files/{token_of(r)}", content=PDF)
+        assert ok.status_code == 200 and ok.json()["still_waiting"] == []
+

@@ -64,3 +64,10 @@ def test_the_origins_match_the_sign_in_clients(good):
             r = client.post("/mcp", json=body, headers={**headers, "Origin": origin})
             assert r.status_code == 200, (origin, r.status_code, r.text[:200])
         assert client.post("/mcp", json=body, headers={**headers, "Origin": "https://evil.example"}).status_code == 403
+
+
+@pytest.mark.parametrize("prefix", ["a.b", "a/b", "x" * 17, "ä"])
+def test_the_upload_token_prefix_is_letters_and_digits_only(good, prefix):
+    with pytest.raises(SystemExit, match="FILE_TOKEN_PREFIX"):
+        dataclasses.replace(good, file_token_prefix=prefix).validate_for_server()
+    dataclasses.replace(good, file_token_prefix="alina2").validate_for_server()

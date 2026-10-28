@@ -14,6 +14,8 @@ Update the Mac helper before the server whenever its version changes.
   MCP 2026-07-28) shows the owner the attach page directly; its retry gets the first answer and queues nothing twice. Until
   the mail goes out, the owner can replace an added file there or remove it, which puts the empty slot back and locks Send
   again. The agent's upload link stays used up, so only the owner adds the next file.
+  `FILE_TOKEN_PREFIX` starts every upload link with a name of your choice (`/files/<prefix>.<token>`), so one proxy in
+  front of several of these servers can send each upload to the right one by its path.
 - **One interface for the owner.** With the dashboard on (the default) every `/outbox` address redirects to
   `/dashboard/approvals`, and tools return that page as `approve_at`. Approving now always follows the dashboard's sign-in
   rules: with `OWNER_PASSWORD_LOGIN=false` the owner password no longer releases messages on `/outbox`. The page that

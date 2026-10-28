@@ -223,6 +223,8 @@ class Settings:
     owner_addresses: tuple[str, ...] = ()   # OWNER_ADDRESSES: more addresses that are the owner's (aliases), e.g. on invitations
     shortcuts_allow: tuple[str, ...] = ()   # SHORTCUTS_ALLOW: exact Shortcut names the assistant may run (the Mac keeps its own list too)
     admin_port: int = 0           # ADMIN_PORT: loopback-only admin API for the menu bar app (0 = off); never the tunnelled port
+    file_token_prefix: str = ""   # FILE_TOKEN_PREFIX: starts every upload token (/files/<prefix>.<token>), so a proxy in front of
+                                  # several servers on one address can tell whose upload it is without reading the body
     overrides_active: tuple[str, ...] = ()  # which OVERRIDABLE settings come from DATA_DIR/overrides.json (names only)
     json_response: bool = True    # MCP_JSON_RESPONSE: answer each POST with one JSON body instead of an SSE stream
     structured_content: bool = False  # MCP_STRUCTURED_CONTENT: also send each result as structuredContent (for a client that needs it)
@@ -339,6 +341,7 @@ class Settings:
             owner_addresses=tuple(a.strip().lower() for a in _list("OWNER_ADDRESSES") if a.strip()),
             shortcuts_allow=tuple(n.strip() for n in _str("SHORTCUTS_ALLOW").split(";" if ";" in _str("SHORTCUTS_ALLOW") else ",") if n.strip()),
             admin_port=max(0, _int("ADMIN_PORT", 0)),
+            file_token_prefix=_str("FILE_TOKEN_PREFIX").lower(),
             overrides_active=tuple(OVERRIDABLE[k] for k in sorted(overrides)),
             json_response=_bool("MCP_JSON_RESPONSE", True),
             structured_content=_bool("MCP_STRUCTURED_CONTENT", False),
@@ -396,6 +399,8 @@ class Settings:
                 raise SystemExit("BRIDGE_TOKEN must differ from MCP_OWNER_PASSWORD.")
         if not (self.enable_mail or self.enable_calendar or self.enable_contacts):
             raise SystemExit("ENABLE_MAIL, ENABLE_CALENDAR and ENABLE_CONTACTS are all false; nothing to serve.")
+        if self.file_token_prefix and not re.fullmatch(r"[a-z0-9]{1,16}", self.file_token_prefix):
+            raise SystemExit("FILE_TOKEN_PREFIX may only hold letters and digits (at most 16), for example 'a' or 'alice'.")
 
     def validate_for_local(self) -> None:
         """Local (stdio) mode: the desktop client on this computer starts the server itself, so there is no public URL or owner password."""
