@@ -273,3 +273,32 @@ background:var(--primary);color:var(--on-primary);cursor:pointer}
 .toast button:hover,.ih-install:hover{opacity:1;text-decoration:underline}
 @media (pointer:fine){.ih-dismiss{width:32px;height:32px;top:6px;right:6px}}
 @media (prefers-reduced-motion:reduce){.toast-bar{display:none}}   /* no countdown bar that jumps; the Undo button stays */
+/* attach page (/dashboard/attach/<id>): a waiting mail, its missing file and Send */
+.ticket h1{font-size:22px;line-height:28px;font-weight:600;letter-spacing:-.01em}
+.t-head{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
+.t-sub{font-size:14px;line-height:20px;color:var(--muted)}
+.t-meta{font-size:12px;color:var(--muted)}
+.mail-meta{display:grid;grid-template-columns:1fr;margin:0;border-top:1px solid var(--quiet)}
+.mail-meta div{display:grid;grid-template-columns:56px 1fr;gap:8px;padding:7px 0;border-bottom:1px solid var(--quiet);font-size:14px}
+.mail-meta dt{color:var(--muted)}.mail-meta dd{margin:0;overflow-wrap:anywhere}
+.mail-body{font-size:14px;line-height:21px;white-space:pre-wrap;overflow-wrap:anywhere;padding:4px 0 2px}
+.js .mail-body{max-height:8.75em;overflow:hidden;-webkit-mask-image:linear-gradient(black 70%,transparent);mask-image:linear-gradient(black 70%,transparent)}
+.js .mail-body.open{max-height:none;-webkit-mask-image:none;mask-image:none}
+.more{display:none;align-self:flex-start;font:inherit;font-size:13px;color:var(--text);text-decoration:underline;text-underline-offset:2px;background:none;border:0;padding:0;cursor:pointer}
+.js .more{display:block}
+.slot-drop{display:flex;align-items:center;gap:12px;min-height:64px;padding:12px 14px;border:1px dashed var(--control);border-radius:8px}
+.slot-drop:hover,.slot-drop.over{border-color:var(--text);background:var(--quiet)}
+.slot-drop.bad{border-color:var(--err);border-style:solid}
+.slot-drop.bad .slot-main{color:var(--err-ink)}
+.slot-pick{display:flex;flex:1;min-width:0;cursor:pointer}
+.js .slot-pick input{position:absolute;width:1px;height:1px;opacity:0}
+.js .slot-go{display:none}
+.slot-txt,.file-txt{display:flex;flex-direction:column;min-width:0;flex:1}
+.slot-main,.file-name{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-sub,.file-sub{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.file{display:flex;align-items:center;gap:12px;min-height:64px;padding:10px 14px;border:1px solid var(--line);border-radius:8px}
+.file .bar{display:block;height:4px;border-radius:2px;background:var(--fill);margin-top:6px;overflow:hidden}
+.file .bar i{display:block;width:0;height:100%;background:var(--text)}
+.ticket .card-foot .check{flex-basis:100%}
+.ticket .card-foot .btn:not(.primary){flex:0 0 auto}
+.ticket .card-foot .btn.primary[disabled]{opacity:1;background:var(--fill);border-color:var(--fill);color:var(--muted)}

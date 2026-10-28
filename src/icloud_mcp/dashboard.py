@@ -44,6 +44,7 @@ from . import passkeys as P
 from .approvals import flagged
 from .audit import AuditLog
 from .config import Settings, owner_password_problem
+from .mail import MailError
 
 log = logging.getLogger(__name__)
 
@@ -204,9 +205,12 @@ class MailApprovals(ApprovalSource):
                                             else f"{orig.get('subject') or '(no subject)'} from {frm or '?'}"))
         if d["attachments"]:
             notes.append("Attachments: " + ", ".join(f"{a.get('filename')} ({a.get('size')} bytes)" for a in d["attachments"]))
+        waiting = [w["filename"] for w in d.get("pending_files") or []]
+        if waiting:
+            notes.append("Waiting for: " + ", ".join(waiting))
         return {"title": d["subject"] or "(no subject)", "badge": "Email reply" if d.get("original") else "Email",
                 "rows": [(k, v) for k, v in rows if v], "text": body, "notes": notes, "warnings": warnings,
-                "needs_override": bool(flagged(d))}
+                "needs_override": bool(flagged(d)), **({"blocked": "Add the file first", "files_link": f"/dashboard/attach/{q.id}"} if waiting else {})}
 
     def release(self, q):
         r = self.mail.release(q.id)
@@ -340,7 +344,7 @@ class IMessageApprovals(ApprovalSource):
 # ---------------------------------------------------------------------------------------------------------------------
 _CSS = (_STATIC / "dashboard.css").read_text()
 _ASSETS = {     # served under /dashboard/ to anyone (the manifest and the worker are fetched without the session cookie)
-    "dashboard.css": "text/css", "dashboard.js": "text/javascript", "install-hint.js": "text/javascript",
+    "dashboard.css": "text/css", "dashboard.js": "text/javascript", "install-hint.js": "text/javascript", "attach.js": "text/javascript",
     "manifest.webmanifest": "application/manifest+json", "sw.js": "text/javascript",
 }
 _ASSET_VERSION = hashlib.sha256(b"".join((_STATIC / name).read_bytes() for name in sorted(_ASSETS))).hexdigest()[:10]
@@ -517,10 +521,11 @@ class Dashboard:
                  + "</section></main>")
         return self._doc(title, inner, status)
 
-    def _doc(self, title: str, body: str, status: int, app: bool = False) -> Response:
-        """app=True (signed-in pages) adds the script for live updates, actions without reloading and the install tip."""
+    def _doc(self, title: str, body: str, status: int, app: bool = False, script: str = "") -> Response:
+        """app=True (signed-in pages) adds the script for live updates, actions without reloading and the install tip.
+        script: one more file from _ASSETS that this page needs (the attach page's upload)."""
         v = _ASSET_VERSION
-        scripts = '<script src="/dashboard/passkey.js" defer></script>'
+        scripts = '<script src="/dashboard/passkey.js" defer></script>' + (f'<script src="/dashboard/{script}?v={v}" defer></script>' if script else "")
         if app:
             scripts += f'<script src="/dashboard/install-hint.js?v={v}" defer></script><script src="/dashboard/dashboard.js?v={v}" defer></script>'
         doc = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
@@ -1005,6 +1010,9 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
                       f'<input type="hidden" name="id" value="{_esc(q.id)}"><input type="hidden" name="sha" value="{_esc(q.sha256)}">')
             label = src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
             foot = button("Discard", name="action", value="discard") + button(_esc(label), "primary", name="action", value="approve")
+            if v.get("blocked"):
+                foot = (button("Discard", name="action", value="discard") + link_button("Add the file", v["files_link"])
+                        + button(_esc(v["blocked"]), "primary", type="button", disabled="disabled"))
             detail = card(v["title"], "".join(body), foot, chip(v["badge"], "kind"), form="/dashboard/approvals/act", hidden_html=hidden,
                           attrs={"data-key": f"{src.kind}:{q.id}", "data-title": v["title"]})
             cards.append(f'<div class="split">{queue}{detail}</div>')
@@ -1062,6 +1070,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             return done("Discarded. Nothing was sent.")
         if v["needs_override"] and str(form.get("override", "")) != "1":
             return await failed("Not sent: tick the box under the warning if you still want it sent.", 422)
+        if action == "approve" and v.get("blocked"):
+            return await failed("Not sent: " + "; ".join(n for n in v["notes"] if n.startswith("Waiting for")) + ". Add the file first.", 409)
         try:
             note = await asyncio.to_thread(src.release, q)
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
@@ -1071,6 +1081,120 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         return done(note)
+
+    # -- files a waiting mail needs ------------------------------------------------------------------------------------
+    # An agent can queue a mail with a file it cannot pass itself (mail.py: placeholders). The owner adds it on the attach
+    # page (the link in the agent's result) and approves there; an agent with a shell PUTs it to /files/<token>. That route
+    # is outside /dashboard so a sign-in proxy in front can let it through: the token is its only key.
+    mail_src = d.sources.get("mail")
+
+    def _size(n: int) -> str:
+        return f"{max(1, round(n / 1024))} KB" if n < 1048576 else (f"{n // 1048576} MB" if n % 1048576 == 0 else f"{n / 1048576:.1f} MB")
+
+    def attach_page(rec: dict[str, Any], item_id: str, error: str = "", status: int = 200) -> Response:
+        q = next((x for x in mail_src.pending() if x.id == item_id), None) if mail_src else None
+        if q is None:
+            body = ('<div class="t-head"><h1>No longer waiting</h1><p class="t-sub">This mail was sent or discarded, or it has '
+                    'expired. Nothing more to do here.</p></div>')
+            return d.auth_page("No longer waiting", body, link_button("Back to the overview", "/dashboard"), 404)
+        ctx = mail_src.contexts([q], prune=False).get(q.id)
+        v = mail_src.describe(q, ctx)
+        dq = mail_src.mail.describe_queued(q, ctx)
+        waiting = dq["pending_files"]
+        limit = d.s.max_attachment_bytes
+        mb = _size(limit)
+        sub_wait, sub_ready = "Written by an agent. It goes out once you add the file and approve it.", "Written by an agent. Check it, then send it."
+        parts = [f'<div class="t-head"><h1>{_esc(v["title"])}</h1><p class="t-sub" data-sub data-ready="{_esc(sub_ready)}">'
+                 f'{_esc(sub_wait if waiting else sub_ready)}</p></div>']
+        parts.append(f'<p class="banner bad" role="alert" data-error{"" if error else " hidden"}>{_esc(error)}</p>')
+        if v["warnings"]:
+            parts.append('<div class="alert" role="alert"><b>Check this first</b><ul>' + "".join(f"<li>{_esc(w)}</li>" for w in v["warnings"]) + "</ul></div>")
+        meta = [(k, val) for k, val in v["rows"] if k in ("To", "Cc", "Bcc", "From")]
+        parts.append('<dl class="mail-meta">' + "".join(f"<div><dt>{_esc(k)}</dt><dd>{_esc(val)}</dd></div>" for k, val in meta) + "</dl>")
+        if v["text"]:
+            parts.append(f'<div class="mail-body" data-body>{_esc(v["text"])}</div><button class="more" type="button" data-more>Show the whole mail</button>')
+        for a in dq["attachments"]:
+            parts.append(f'<div class="file"><span class="file-txt"><span class="file-name">{_esc(a["filename"])}</span>'
+                         f'<span class="file-sub">{_size(a["size"])}</span></span></div>')
+        for w in waiting:
+            parts.append(f'<form class="slot-drop" data-slot data-index="{w["index"]}" method="post" enctype="multipart/form-data" '
+                         f'action="/dashboard/attach/{_esc(q.id)}/file">{d.csrf_input(rec)}<input type="hidden" name="index" value="{w["index"]}">'
+                         f'<label class="slot-pick"><input type="file" name="file" required><span class="slot-txt">'
+                         f'<span class="slot-main">Drop {_esc(w["filename"])} here</span><span class="slot-sub">or tap to choose · up to {mb}</span></span></label>'
+                         f'<button class="btn slot-go" type="submit">Upload</button></form>')
+        parts.append(f'<p class="t-meta">The request expires in {d.time_left(q)}.</p>')
+        override = ('<label class="check"><input type="checkbox" name="override" value="1"><span>I read the warning and still want this sent</span></label>'
+                    if v["needs_override"] else "")
+        send = (button("Add the file first", "primary", name="action", value="approve", disabled="disabled", data_send="", data_label="Approve and send")
+                if waiting else button("Approve and send", "primary", name="action", value="approve", data_send="", data_label="Approve and send"))
+        foot = (f'<form class="card-foot" data-approve method="post" action="/dashboard/approvals/act">{d.csrf_input(rec)}'
+                f'<input type="hidden" name="kind" value="mail"><input type="hidden" name="id" value="{_esc(q.id)}">'
+                f'<input type="hidden" name="sha" value="{_esc(q.sha256)}"><input type="hidden" name="back" value="/dashboard">'
+                f'{override}{button("Discard", name="action", value="discard")}{send}</form>')
+        inner = (f'<main class="auth"><section class="card ticket" data-attach data-id="{_esc(q.id)}" data-csrf="{_esc(rec["csrf"])}" '
+                 f'data-limit="{limit}"><div class="card-head">{d.brand()}</div><div class="card-body">{"".join(parts)}</div>{foot}</section></main>')
+        return d._doc(v["title"], inner, status, script="attach.js")
+
+    @mcp.custom_route("/dashboard/attach/{item_id}", methods=["GET"])
+    async def attach_get(request: Request) -> Response:
+        got = signed_in(request)
+        if got is None:
+            return to_signin(request)
+        return await asyncio.to_thread(attach_page, got[1], request.path_params["item_id"])
+
+    @mcp.custom_route("/dashboard/attach/{item_id}/file", methods=["POST"])
+    async def attach_post(request: Request) -> Response:
+        got = await checked_form(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, form = got
+        item_id = request.path_params["item_id"]
+        as_json = "application/json" in request.headers.get("accept", "")
+        up = form.get("file")
+
+        async def failed(note: str, code: int) -> Response:
+            if as_json:
+                return JSONResponse({"ok": False, "error": note}, status_code=code, headers=_HEADERS)
+            return await asyncio.to_thread(attach_page, rec, item_id, note, code)
+
+        if mail_src is None or not hasattr(up, "read"):
+            return await failed("Choose a file first.", 400)
+        data = await up.read(d.s.max_attachment_bytes + 1)
+        try:
+            q, info = await asyncio.to_thread(mail_src.mail.add_file, data, filename=up.filename, content_type=up.content_type,
+                                              item_id=item_id, index=int(str(form.get("index", "-1"))))
+        except (MailError, ValueError) as e:
+            return await failed(str(e), 409)
+        audit.record("approval.file_added", actor="owner", via=rec.get("via", ""), kind="mail",
+                     summary=f"Added {info['filename']} to a waiting mail")
+        if as_json:
+            return JSONResponse({"ok": True, "sha": q.sha256, "filename": info["filename"], "size": info["size"], "asked": info["asked"],
+                                 "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]},
+                                headers=_HEADERS)
+        return RedirectResponse(f"/dashboard/attach/{quote(item_id)}", status_code=303, headers=_HEADERS)
+
+    @mcp.custom_route("/files/{token}", methods=["PUT"])
+    async def file_put(request: Request) -> Response:
+        """An agent's upload: the raw bytes of one file a waiting mail asked for. The token from the agent's result is the key."""
+        if mail_src is None:
+            return JSONResponse({"ok": False, "error": "Mail is off on this server."}, status_code=404, headers=_HEADERS)
+        limit, body = d.s.max_attachment_bytes, bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > limit:
+                return JSONResponse({"ok": False, "error": f"The file is larger than {limit} bytes (MAX_ATTACHMENT_BYTES)."},
+                                    status_code=413, headers=_HEADERS)
+        try:
+            q, info = await asyncio.to_thread(mail_src.mail.add_file, bytes(body), filename=request.query_params.get("filename"),
+                                              content_type=request.headers.get("content-type"), token=request.path_params["token"])
+        except MailError as e:
+            gone = str(e).startswith("No file is waiting")
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=404 if gone else 400, headers=_HEADERS)
+        audit.record("approval.file_added", actor="agent", kind="mail", summary=f"An upload added {info['filename']} to a waiting mail")
+        left = [w["filename"] for w in info["waiting"]]
+        return JSONResponse({"ok": True, "filename": info["filename"], "size": info["size"], "still_waiting": left,
+                             "next": ("Upload the other files too." if left else "The mail now waits for the owner's approval. It is not sent yet.")},
+                            headers=_HEADERS)
 
     # -- activity ------------------------------------------------------------------------------------------------------
     _FILTERS = {"all": ("All", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agents", ("tool.",)),
