@@ -1,6 +1,7 @@
 /*
  * attach.js: the attach page (/dashboard/attach/<id>). A file dropped on or chosen in a slot is uploaded at once, with its
- * progress; Send unlocks when no file is missing. Without this script each slot is a plain form with its own Upload button.
+ * progress; Send unlocks when no file is missing. An added file can be replaced or removed until the mail is sent, and Send
+ * locks again while a file is missing. Without this script each slot and file row is a plain form with its own buttons.
  */
 (function () {
   "use strict";
@@ -11,7 +12,9 @@
   var approve = root.querySelector("[data-approve]"), sha = approve.querySelector('input[name="sha"]');
   var send = approve.querySelector("[data-send]"), sub = root.querySelector("[data-sub]"), err = root.querySelector("[data-error]");
 
-  function mb(n) { return n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+  function mb(n) {   // as the server writes it (_size in dashboard.py)
+    return n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " KB" : (n % 1048576 ? (n / 1048576).toFixed(1) : n / 1048576) + " MB";
+  }
   function esc(t) { var e = document.createElement("div"); e.textContent = t; return e.innerHTML; }
   function frag(html) { var t = document.createElement("template"); t.innerHTML = html; return t.content.firstChild; }
   function say(text) { err.textContent = text; err.hidden = !text; }
@@ -22,20 +25,21 @@
     slot.querySelector(".slot-sub").textContent = "Drop another file or tap to choose one.";
   }
 
-  function upload(slot, file) {
-    say("");
-    if (file.size > limit) { fail(slot, "This file is " + mb(file.size) + ". The limit is " + mb(limit) + "."); return; }
-    var row = frag('<div class="file busy"><span class="file-txt"><span class="file-name">' + esc(file.name) +
-      '</span><span class="file-sub">Uploading · 0%</span><span class="bar"><i></i></span></span></div>');
-    slot.replaceWith(row);
-    var fd = new FormData();
+  // Send unlocks once nothing is missing, and locks again when a file is taken back out
+  function ready(r) {
+    sha.value = r.sha;
+    var none = !r.waiting.length;
+    send.disabled = !none;
+    send.textContent = none ? send.getAttribute("data-label") : "Add the file first";
+    sub.textContent = sub.getAttribute(none ? "data-ready" : "data-wait");
+  }
+
+  function post(url, fd, row, done, failed) {
     fd.append("csrf", csrf);
-    fd.append("index", slot.getAttribute("data-index"));
-    fd.append("file", file, file.name);
     var x = new XMLHttpRequest();
-    x.open("POST", "/dashboard/attach/" + encodeURIComponent(id) + "/file");
+    x.open("POST", "/dashboard/attach/" + encodeURIComponent(id) + url);
     x.setRequestHeader("Accept", "application/json");
-    x.upload.onprogress = function (e) {
+    if (row) x.upload.onprogress = function (e) {
       if (!e.lengthComputable) return;
       var p = Math.round(e.loaded / e.total * 100);
       row.querySelector(".file-sub").textContent = "Uploading · " + p + "%";
@@ -44,23 +48,63 @@
     x.onload = function () {
       var r = {};
       try { r = JSON.parse(x.responseText); } catch (e) { /* not JSON: the generic message below */ }
-      if (x.status !== 200 || !r.ok) { row.replaceWith(slot); fail(slot, r.error || "The upload failed. Try again."); return; }
-      sha.value = r.sha;
-      row.className = "file";
-      row.innerHTML = '<span class="file-txt"><span class="file-name">' + esc(r.filename) + '</span><span class="file-sub">' +
-        mb(r.size) + (r.other_name ? " · asked for " + esc(r.asked) : "") + "</span></span>" +
-        (r.other_name ? '<span class="chip warn">Other name</span>' : "");
-      if (!r.waiting.length) {
-        send.disabled = false;
-        send.textContent = send.getAttribute("data-label");
-        sub.textContent = sub.getAttribute("data-ready");
-      }
+      if (x.status !== 200 || !r.ok) failed(r.error || "That did not work. Try again.");
+      else done(r);
     };
-    x.onerror = function () { row.replaceWith(slot); fail(slot, "The upload failed. Check the connection and try again."); };
+    x.onerror = function () { failed("That did not go through. Check the connection and try again."); };
     x.send(fd);
   }
 
-  root.querySelectorAll("[data-slot]").forEach(function (slot) {
+  // a file added for a placeholder: its name, Replace and Remove (the same markup the server renders)
+  function fileRow(r) {
+    var other = r.filename !== r.asked;
+    var el = frag('<div class="file" data-file data-index="' + r.index + '"><span class="file-txt"><span class="file-name">' +
+      esc(r.filename) + '</span><span class="file-sub">' + mb(r.size) + (other ? " · asked for " + esc(r.asked) : "") +
+      "</span></span>" + (other ? '<span class="chip warn">Other name</span>' : "") +
+      '<label class="btn text" data-replace>Replace<input type="file" name="file" hidden></label>' +
+      '<button class="btn text danger" type="button" data-remove>Remove</button></div>');
+    wireFile(el);
+    return el;
+  }
+
+  // the empty slot again, after Remove
+  function slotRow(index, asked) {
+    var el = frag('<form class="slot-drop" data-slot data-index="' + index + '"><label class="slot-pick">' +
+      '<input type="file" name="file"><span class="slot-txt"><span class="slot-main">Drop ' + esc(asked) +
+      ' here</span><span class="slot-sub">or tap to choose · up to ' + mb(limit) + "</span></span></label></form>");
+    wireSlot(el);
+    return el;
+  }
+
+  // slot: the empty slot or the row of the file being replaced; it comes back if the upload fails
+  function upload(slot, file) {
+    say("");
+    var isSlot = slot.hasAttribute("data-slot");
+    function failed(text) { row.replaceWith(slot); if (isSlot) fail(slot, text); else say(text); }
+    if (file.size > limit) {
+      var big = "This file is " + mb(file.size) + ". The limit is " + mb(limit) + ".";
+      if (isSlot) fail(slot, big); else say(big);
+      return;
+    }
+    var row = frag('<div class="file busy"><span class="file-txt"><span class="file-name">' + esc(file.name) +
+      '</span><span class="file-sub">Uploading · 0%</span><span class="bar"><i></i></span></span></div>');
+    slot.replaceWith(row);
+    var fd = new FormData();
+    fd.append("index", slot.getAttribute("data-index"));
+    fd.append("file", file, file.name);
+    post("/file", fd, row, function (r) { row.replaceWith(fileRow(r)); ready(r); }, failed);
+  }
+
+  function remove(el, btn) {
+    say("");
+    btn.disabled = true;
+    var fd = new FormData();
+    fd.append("index", el.getAttribute("data-index"));
+    post("/remove", fd, null, function (r) { el.replaceWith(slotRow(r.index, r.asked)); ready(r); },
+      function (text) { btn.disabled = false; say(text); });
+  }
+
+  function wireSlot(slot) {
     var input = slot.querySelector('input[type="file"]');
     input.addEventListener("change", function () { if (input.files[0]) upload(slot, input.files[0]); });
     slot.addEventListener("dragover", function (e) { e.preventDefault(); slot.classList.add("over"); });
@@ -70,7 +114,16 @@
       slot.classList.remove("over");
       if (e.dataTransfer.files[0]) upload(slot, e.dataTransfer.files[0]);
     });
-  });
+  }
+
+  function wireFile(el) {
+    var input = el.querySelector("[data-replace] input"), btn = el.querySelector("[data-remove]");
+    input.addEventListener("change", function () { if (input.files[0]) upload(el, input.files[0]); });
+    btn.addEventListener("click", function (e) { e.preventDefault(); remove(el, btn); });
+  }
+
+  root.querySelectorAll("[data-slot]").forEach(wireSlot);
+  root.querySelectorAll("[data-file]").forEach(wireFile);
 
   approve.addEventListener("submit", function (e) {
     var btn = e.submitter;

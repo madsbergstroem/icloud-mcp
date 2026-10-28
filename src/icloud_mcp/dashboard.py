@@ -1104,7 +1104,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         limit = d.s.max_attachment_bytes
         mb = _size(limit)
         sub_wait, sub_ready = "Written by an agent. It goes out once you add the file and approve it.", "Written by an agent. Check it, then send it."
-        parts = [f'<div class="t-head"><h1>{_esc(v["title"])}</h1><p class="t-sub" data-sub data-ready="{_esc(sub_ready)}">'
+        parts = [f'<div class="t-head"><h1>{_esc(v["title"])}</h1><p class="t-sub" data-sub data-ready="{_esc(sub_ready)}" data-wait="{_esc(sub_wait)}">'
                  f'{_esc(sub_wait if waiting else sub_ready)}</p></div>']
         parts.append(f'<p class="banner bad" role="alert" data-error{"" if error else " hidden"}>{_esc(error)}</p>')
         if v["warnings"]:
@@ -1113,9 +1113,21 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         parts.append('<dl class="mail-meta">' + "".join(f"<div><dt>{_esc(k)}</dt><dd>{_esc(val)}</dd></div>" for k, val in meta) + "</dl>")
         if v["text"]:
             parts.append(f'<div class="mail-body" data-body>{_esc(v["text"])}</div><button class="more" type="button" data-more>Show the whole mail</button>')
+        added = {x["index"]: x["asked"] for x in dq["added_files"]}
         for a in dq["attachments"]:
-            parts.append(f'<div class="file"><span class="file-txt"><span class="file-name">{_esc(a["filename"])}</span>'
-                         f'<span class="file-sub">{_size(a["size"])}</span></span></div>')
+            txt = (f'<span class="file-txt"><span class="file-name">{_esc(a["filename"])}</span><span class="file-sub">{_size(a["size"])}'
+                   + (f' · asked for {_esc(added[a["index"]])}</span></span><span class="chip warn">Other name</span>'
+                      if added.get(a["index"], a["filename"]) != a["filename"] else "</span></span>"))
+            if a["index"] not in added:          # the agent's own attachment: shown, not changed here
+                parts.append(f'<div class="file">{txt}</div>')
+                continue
+            # a file added for a placeholder: Replace picks another one, Remove puts the empty slot back
+            parts.append(f'<form class="file" data-file data-index="{a["index"]}" method="post" enctype="multipart/form-data" '
+                         f'action="/dashboard/attach/{_esc(q.id)}/file">{d.csrf_input(rec)}<input type="hidden" name="index" value="{a["index"]}">'
+                         f'{txt}<label class="btn text" data-replace>Replace<input type="file" name="file" hidden></label>'
+                         f'<button class="btn slot-go" type="submit">Upload</button>'
+                         f'<button class="btn text danger" type="submit" formaction="/dashboard/attach/{_esc(q.id)}/remove" '
+                         f'formnovalidate data-remove>Remove</button></form>')
         for w in waiting:
             parts.append(f'<form class="slot-drop" data-slot data-index="{w["index"]}" method="post" enctype="multipart/form-data" '
                          f'action="/dashboard/attach/{_esc(q.id)}/file">{d.csrf_input(rec)}<input type="hidden" name="index" value="{w["index"]}">'
@@ -1168,9 +1180,32 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         audit.record("approval.file_added", actor="owner", via=rec.get("via", ""), kind="mail",
                      summary=f"Added {info['filename']} to a waiting mail")
         if as_json:
-            return JSONResponse({"ok": True, "sha": q.sha256, "filename": info["filename"], "size": info["size"], "asked": info["asked"],
+            return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "filename": info["filename"], "size": info["size"], "asked": info["asked"],
                                  "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]},
                                 headers=_HEADERS)
+        return RedirectResponse(f"/dashboard/attach/{quote(item_id)}", status_code=303, headers=_HEADERS)
+
+    @mcp.custom_route("/dashboard/attach/{item_id}/remove", methods=["POST"])
+    async def attach_remove(request: Request) -> Response:
+        got = await checked_form(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, form = got
+        item_id = request.path_params["item_id"]
+        as_json = "application/json" in request.headers.get("accept", "")
+        try:
+            if mail_src is None:
+                raise MailError("Mail is off on this server.")
+            q, info = await asyncio.to_thread(mail_src.mail.remove_file, item_id, int(str(form.get("index", "-1"))))
+        except (MailError, ValueError) as e:
+            if as_json:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=409, headers=_HEADERS)
+            return await asyncio.to_thread(attach_page, rec, item_id, str(e), 409)
+        audit.record("approval.file_removed", actor="owner", via=rec.get("via", ""), kind="mail",
+                     summary=f"Took the file for {info['asked']} out of a waiting mail")
+        if as_json:
+            return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "asked": info["asked"],
+                                 "waiting": [w["filename"] for w in info["waiting"]]}, headers=_HEADERS)
         return RedirectResponse(f"/dashboard/attach/{quote(item_id)}", status_code=303, headers=_HEADERS)
 
     @mcp.custom_route("/files/{token}", methods=["PUT"])

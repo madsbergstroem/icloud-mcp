@@ -77,6 +77,7 @@ FILES_NOTICE = (
     "An upload_url is a password for that one file: never put it anywhere else."
 )
 PENDING_HEADER = "X-Icloud-Mcp-Pending-File"   # on a placeholder part: the sha256 of its upload token; never leaves the server
+ADDED_HEADER = "X-Icloud-Mcp-Added-File"       # on a file that filled a placeholder: the name asked for; removed before sending
 OWNER_DRAFT_NOTICE = (
     "NOT SENT. Owner approval is on, so this message was saved to the Drafts folder instead of being sent. Tell the owner it is "
     "waiting in Drafts; they review it and press Send in Mail themselves. You cannot send it for them."
@@ -357,8 +358,7 @@ def _add_html_alt(msg: EmailMessage, html: str) -> None:
 def _attach(msg: EmailMessage, att: dict[str, Any], max_bytes: int) -> None:
     filename = att.get("filename") or "attachment"
     if att.get("_pending"):                        # a file the owner or an upload adds later (Mail._prepare_uploads)
-        msg.add_attachment(f"{filename} is added before this message is sent.".encode(), maintype="application",
-                           subtype="x-icloud-mcp-pending", filename=filename)
+        msg.add_attachment(_placeholder_text(filename), maintype="application", subtype="x-icloud-mcp-pending", filename=filename)
         msg.get_payload()[-1][PENDING_HEADER] = att["_pending"]
         return
     if att.get("content_base64") is None:
@@ -374,11 +374,21 @@ def _attach(msg: EmailMessage, att: dict[str, Any], max_bytes: int) -> None:
     msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
 
 
+def _placeholder_text(filename: str) -> bytes:
+    return f"{filename} is added before this message is sent.".encode()
+
+
 def pending_files(msg: EmailMessage) -> list[dict[str, Any]]:
     """The placeholders still waiting for their file, with their attachment index. Only parts this server built carry the
     header (an attached message is a leaf and is not looked into), so mail from outside cannot fake one."""
     return [{"index": i, "filename": p.get_filename() or "attachment"}
             for i, p in enumerate(iter_attachment_parts(msg)) if p.get(PENDING_HEADER)]
+
+
+def added_files(msg: EmailMessage) -> list[dict[str, Any]]:
+    """The files that filled a placeholder (the owner's or an upload): the owner can still replace or remove them."""
+    return [{"index": i, "filename": p.get_filename() or "attachment", "asked": str(p.get(ADDED_HEADER))}
+            for i, p in enumerate(iter_attachment_parts(msg)) if p.get(ADDED_HEADER)]
 
 
 def safe_filename(name: str | None) -> str:
@@ -1937,7 +1947,7 @@ class MailService:
             "from": str(msg["From"]), "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""), "bcc": str(msg["Bcc"] or ""),
             "envelope_recipients": q.recipients, "subject": str(msg["Subject"] or ""), "body": body,
             "attachments": [x for x in list_attachments(msg) if x["index"] not in {w["index"] for w in pending_files(msg)}],
-            "pending_files": pending_files(msg), "is_reply": bool(msg["In-Reply-To"]),
+            "pending_files": pending_files(msg), "added_files": added_files(msg), "is_reply": bool(msg["In-Reply-To"]),
             **(context if context is not None else self._approval_context(q)),
         }
 
@@ -2059,7 +2069,8 @@ class MailService:
     def add_file(self, data: bytes, *, filename: str | None = None, content_type: str | None = None, item_id: str | None = None,
                  index: int | None = None, token: str | None = None) -> tuple[QueuedMessage, dict[str, Any]]:
         """Put a file into the placeholder waiting for it: the owner's (item_id and attachment index, from the dashboard) or an
-        agent's upload (token). The message is rebuilt with the file and gets a new hash; nothing is sent."""
+        agent's upload (token). The owner can also replace a file added before. The message is rebuilt with the file and gets
+        a new hash; nothing is sent."""
         if not data:
             raise MailError("The file is empty.")
         if len(data) > self.s.max_attachment_bytes:
@@ -2070,25 +2081,52 @@ class MailService:
                 continue
             msg = email.message_from_bytes(q.raw, policy=policy.default)
             for i, part in enumerate(iter_attachment_parts(msg)):
-                held = part.get(PENDING_HEADER)
-                if not held or not (hmac.compare_digest(held, want) if want else i == index):
+                held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
+                if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
                     continue
-                asked = part.get_filename() or "attachment"
+                asked = str(added) if added else part.get_filename() or "attachment"
                 name = safe_filename(filename) or asked
                 ctype = (content_type or "").split(";")[0].strip().lower()
                 if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", ctype) or ctype in ("application/octet-stream", "application/x-www-form-urlencoded"):
                     ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
                 maintype, _, subtype = ctype.partition("/")
                 part.clear_content()
-                del part[PENDING_HEADER]
+                del part[PENDING_HEADER], part[ADDED_HEADER]
                 part.set_content(data, maintype=maintype, subtype=subtype, disposition="attachment", filename=name)
-                new = self.outbox.replace(q.id, q.sha256, msg.as_bytes(policy=policy.SMTP))
-                if new is None:
-                    raise MailError("The message changed while the file was added. Reload the page and try again.")
-                with self._contexts_lock:
-                    self._contexts.pop(self._context_key(q), None)
-                return new, {"filename": name, "size": len(data), "content_type": ctype, "asked": asked, "waiting": pending_files(msg)}
+                part[ADDED_HEADER] = asked
+                new = self._store_rebuilt(q, msg)
+                return new, {"index": i, "filename": name, "size": len(data), "content_type": ctype, "asked": asked,
+                             "waiting": pending_files(msg)}
         raise MailError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
+
+    def remove_file(self, item_id: str, index: int) -> tuple[QueuedMessage, dict[str, Any]]:
+        """Take a file the owner or an upload added back out: its place waits for a file again. The new placeholder gets a
+        fresh token nobody holds, so an agent's old upload link stays used up and only the owner adds the next file."""
+        for q in self.outbox.pending():
+            if q.id != item_id:
+                continue
+            msg = email.message_from_bytes(q.raw, policy=policy.default)
+            parts = iter_attachment_parts(msg)
+            if not 0 <= index < len(parts) or not parts[index].get(ADDED_HEADER):
+                break
+            part = parts[index]
+            asked = str(part[ADDED_HEADER])
+            part.clear_content()
+            del part[ADDED_HEADER]
+            part.set_content(_placeholder_text(asked), maintype="application", subtype="x-icloud-mcp-pending",
+                             disposition="attachment", filename=asked)
+            part[PENDING_HEADER] = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+            new = self._store_rebuilt(q, msg)
+            return new, {"index": index, "asked": asked, "waiting": pending_files(msg)}
+        raise MailError("There is no added file here to remove: the message was sent, discarded or has expired.")
+
+    def _store_rebuilt(self, q: QueuedMessage, msg: EmailMessage) -> QueuedMessage:
+        new = self.outbox.replace(q.id, q.sha256, msg.as_bytes(policy=policy.SMTP))
+        if new is None:
+            raise MailError("The message changed while the file was added. Reload the page and try again.")
+        with self._contexts_lock:
+            self._contexts.pop(self._context_key(q), None)
+        return new
 
     def release(self, item_id: str) -> dict[str, Any]:
         """Send a queued message. Called only from the password-protected approval page, never from an MCP tool."""
@@ -2103,9 +2141,14 @@ class MailService:
             msg = email.message_from_bytes(q.raw, policy=policy.default)
             if waiting := pending_files(msg):
                 raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
+            raw = q.raw
+            if added := [p for p in iter_attachment_parts(msg) if p.get(ADDED_HEADER)]:
+                for p in added:                       # what the owner approved, without the server's own bookkeeping
+                    del p[ADDED_HEADER]
+                raw = msg.as_bytes(policy=policy.SMTP)
             recipients = self._check_recipients(msg)  # current allowlist / cap, not the ones at queue time
             with self.imap() as c:
-                return self._send_and_file(c, msg, q.raw, recipients, q.followup, self._summary_of(msg))
+                return self._send_and_file(c, msg, raw, recipients, q.followup, self._summary_of(msg))
         except Exception:
             self.outbox.restore(q)  # not sent: keep it so the owner can retry or discard
             raise
