@@ -2056,6 +2056,8 @@ class MailService:
                     raise MailError("A draft cannot wait for a file. Pass the file's bytes in content_base64, or leave draft out so the "
                                     "message waits for the file and the owner's approval.")
                 token = secrets.token_urlsafe(32)
+                if self.s.file_token_prefix:             # names this server to a proxy in front (a token never holds a '.')
+                    token = f"{self.s.file_token_prefix}.{token}"
                 a = {**a, "filename": name, "_pending": hashlib.sha256(token.encode()).hexdigest()}
                 uploads.append({"filename": name, "token": token})
             out.append(a)
