@@ -685,3 +685,140 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         state["restart_needed"] = True
         d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary="Replaced the iCloud app-specific password")
         return RedirectResponse("/dashboard/settings?m=settings_saved", status_code=303, headers=D._HEADERS)
+
+    # -- JSON for the Ionic app (dashboard_api.py has the guards) ------------------------------------------------------
+    def spec_json(sp: Spec, stored: dict[str, str]) -> dict[str, Any]:
+        v, src = current(sp.key, stored)
+        shown = v
+        if sp.kind == "int" and sp.unit != 1:
+            try:
+                shown = f"{int(v) / sp.unit:g}"
+            except ValueError:
+                pass
+        if sp.kind == "textarea":
+            shown = v.replace("\\n", "\n")
+        return {"key": sp.key, "label": sp.label, "kind": sp.kind, "help": sp.help, "value": _on(v) if sp.kind == "bool" else shown,
+                "display": display(sp, v), "source": src, "section": sp.section, "choices": [list(c) for c in sp.choices],
+                "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored}
+
+    def group_json(g: Group, stored: dict[str, str], full: bool) -> dict[str, Any]:
+        set_up = not (g.needs_bridge and not s.bridge_token)
+        out = {"slug": g.slug, "title": g.title, "lede": g.lede, "needs_mac": g.needs_bridge, "set_up": set_up,
+               "summary": (g.summary(lambda k: current(k, stored)[0]) if g.summary else group_summary(g, stored)) if set_up
+               else "Not set up. See the Mac helper guide."}
+        if full:
+            out["fields"] = [spec_json(sp, stored) for sp in g.specs if not sp.hidden]
+            if g.slug == "mail":
+                allow = current("ALLOW_SEND", stored)[0]
+                appr = current("SEND_REQUIRES_APPROVAL", stored)[0]
+                out["send_mode"] = "drafts" if not _on(allow) else ("approval" if _on(appr) else "direct")
+        return out
+
+    @mcp.custom_route("/dashboard/api/settings", methods=["GET"])
+    async def api_settings(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        stored = store.read()
+        server = [{"title": title, "rows": [[label, (":".join(os.environ.get(k, "") or "default" for k in key) if how == "hostport" else
+                                                     ("set" if os.environ.get(key, "").strip() else "not set") if how == "set" else
+                                                     (os.environ.get(key, "").strip() or "default"))] for label, key, how in items]}
+                  for title, items in SERVER_VIEW]
+        return d.api_ok({"editable": editable, "restart_needed": bool(state["restart_needed"] or stored != started_with),
+                         "groups": [group_json(g, stored, True) for g in GROUPS], "server": server, "mac": d.bridge_state(),
+                         "values": {sp.key: current(sp.key, stored)[0] for g in GROUPS for sp in g.specs}})
+
+    @mcp.custom_route("/dashboard/api/settings/restart", methods=["POST"])
+    async def api_restart(request: Request) -> Response:
+        got = await d.api_writer(request)
+        if isinstance(got, Response):
+            return got
+        rec = got[1]
+        d.audit.record("server.restart", actor="owner", via=rec.get("via", ""), summary="Restarted the server to apply settings")
+        log.warning("Owner asked for a restart from the dashboard")
+        threading.Timer(0.7, d.exit_fn).start()
+        return d.api_ok({"note": "Restarting. The server is back in about half a minute."})
+
+    @mcp.custom_route("/dashboard/api/settings/accounts/app-password", methods=["POST"])
+    async def api_app_password(request: Request) -> Response:
+        got = await d.api_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, body = got
+        if not editable:
+            return d.api_err("These settings cannot be changed here.", 403)
+        if not d.recent(rec):
+            return d.api_need_confirm()
+        value = str(body.get("password", "")).replace(" ", "").replace("-", "")
+        if len(value) != 16:
+            return d.api_err("An app-specific password has 16 letters, like abcd-efgh-ijkl-mnop.", 400)
+        value = "-".join(value[i:i + 4] for i in range(0, 16, 4))
+        from .mail import MailService
+        try:
+            c = await asyncio.to_thread(MailService(dataclasses.replace(s, app_password=value))._login)
+            await asyncio.to_thread(c.logout)
+        except Exception:  # noqa: BLE001 - the reason can quote the account; say only that it failed
+            return d.api_err("iCloud did not accept this password. Nothing was changed.", 400)
+        from .admin import save_override
+        save_override(s.data_dir, "icloud_app_password", value)
+        state["restart_needed"] = True
+        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary="Replaced the iCloud app-specific password")
+        return d.api_ok({"note": "Saved. It applies after a restart.", "restart_needed": True})
+
+    @mcp.custom_route("/dashboard/api/settings/{slug}", methods=["POST"])
+    async def api_save(request: Request) -> Response:
+        got = await d.api_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, body = got
+        g = group_for(request)
+        if g is None:
+            return d.api_err("These settings cannot be changed here.", 403)
+        raw = body.get("values") if isinstance(body.get("values"), dict) else {}
+        stored = store.read()
+        # The app sends only what changed; every other field of the group keeps its current value, in the form's units
+        form = {}
+        for sp in g.specs:
+            cur = spec_json(sp, stored)["value"]
+            form[sp.key] = ("true" if cur else "false") if sp.kind == "bool" else str(cur)
+        form.update({k: ("true" if v is True else "false" if v is False else str(v)) for k, v in raw.items()})
+        new, changes, looser, _entered, _typed, errors = read_form(g, form, stored)
+        if errors:
+            return d.api_err("Not saved: " + next(iter(errors.values())), 400, fields=errors)
+        if not changes:
+            return d.api_ok({"note": "Nothing changed."})
+        if looser and not d.recent(rec):
+            return d.api_need_confirm()
+        if problem := await asyncio.to_thread(validate, new, known_tools()):
+            key, why = problem
+            return d.api_err(f"Not saved: {why}", 400, fields={key: why} if key else {})
+        store.update({sp.key: v for sp, _, v in changes})
+        state["restart_needed"] = True
+        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), ok=True,
+                       summary=f"Changed {g.title.lower()} settings: " + ", ".join(f"{sp.label} {display(sp, o)} → {display(sp, v)}" for sp, o, v in changes),
+                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser])
+        log.warning("Owner changed %s from the dashboard; they apply after a restart", ", ".join(sp.key for sp, _, _ in changes))
+        return d.api_ok({"note": "Saved. It applies after a restart.", "restart_needed": True})
+
+    @mcp.custom_route("/dashboard/api/settings/{slug}/reset", methods=["POST"])
+    async def api_reset(request: Request) -> Response:
+        got = await d.api_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, body = got
+        g = group_for(request)
+        key = str(body.get("key", ""))
+        stored = store.read()
+        if g is None or key not in stored or key not in {sp.key for sp in g.specs}:
+            return d.api_err("That setting was not changed here.", 404)
+        sp = SPECS[key]
+        new = {k: v for k, v in stored.items() if k != key}
+        back, _ = current(key, new)
+        if sp.loosens and sp.loosens(stored[key], back) and not d.recent(rec):
+            return d.api_need_confirm()
+        if problem := await asyncio.to_thread(validate, new, known_tools()):
+            return d.api_err(f"Not reset: {problem[1]}", 400)
+        store.update(remove=(key,))
+        state["restart_needed"] = True
+        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key])
+        return d.api_ok({"note": f"{sp.label} now follows the server again ({display(sp, back)}). Restart to apply.", "restart_needed": True})

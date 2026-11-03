@@ -1424,6 +1424,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
 
     # other parts (settings.py) build on the same guards
     d.signed_in, d.to_signin, d.checked_form, d.recent, d.confirm = signed_in, to_signin, checked_form, recent, confirm_page
+    from .dashboard_api import register_api
+    register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
+                 record_failure_line=record_failure_line, headers=_HEADERS, filters=_FILTERS, for_owner=for_owner,
+                 owner_password_problem=owner_password_problem)
     return d
 
 
