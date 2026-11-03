@@ -29,12 +29,15 @@ class Today extends HTMLElement {
     this.onChange = () => this.load();
     window.addEventListener("icm:changed", this.onChange);
     window.addEventListener("icm:open", (this.onOpen = (e) => this.open(e.detail)));
+    this.mq = window.matchMedia("(min-width: 900px)");
+    this.mq.addEventListener("change", (this.onWidth = () => { if (this.data) this.render(); }));   // a window or an iPad turned
     this.load();
   }
 
   disconnectedCallback() {
     window.removeEventListener("icm:changed", this.onChange);
     window.removeEventListener("icm:open", this.onOpen);
+    this.mq.removeEventListener("change", this.onWidth);
   }
 
   async load() {
