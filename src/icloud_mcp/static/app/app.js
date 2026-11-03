@@ -81,7 +81,7 @@ function setCount(n) {
 
 function setLive() {
   const dot = root().querySelector("[data-live-dot]"), text = root().querySelector("[data-live-text]");
-  if (dot) dot.style.color = app.online ? "#3f8a62" : "#b07a1d";
+  if (dot) dot.style.color = app.online ? "var(--positive)" : "var(--note-ink)";
   if (text) text.textContent = app.online ? "Live" : "Offline";
 }
 

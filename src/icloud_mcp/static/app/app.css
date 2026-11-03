@@ -1,34 +1,49 @@
 /* The dashboard app. Ionic Core draws every control; this file maps our tokens onto Ionic's variables and sets the few
    pieces of our own (the greeting, the live line, the mail card, the missing-file slot). docs/DESIGN.md has the rules. */
 :root {
+  color-scheme: light dark;
   --ground: #f3f4f5; --surface: #ffffff; --raised: #f7f8f9; --active: #e6e9ec;
-  --border: #e5e8eb; --rule: #eef0f2; --control: #cfd5da;
-  --text: #1d2226; --muted: #5d666e;
-  --fog: #4f5d6a;
+  --border: #e5e8eb; --rule: #e9ecef; --control: #c9d0d6;
+  --text: #1d2226; --muted: #525b63;
+  --fog: #4f5d6a; --fog-ink: #ffffff;
   --positive: #247b50; --negative: #b3263a; --neg-bg: #fdecee; --neg-ink: #7f1d2b;
-  --note-bg: #fff8e6; --note-ink: #7a4b0a; --ok-bg: #e4f3ea; --ok-ink: #1d4d33;
+  --note-bg: #fff6e0; --note-ink: #6e440a; --ok-bg: #e4f3ea; --ok-ink: #1d4d33;
   --serif: ui-serif, "New York", Georgia, serif;
   --radius: 16px;
-
+}
+/* dark: follows the system, with the same roles one step apart in lightness */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0f1113; --surface: #1b1e21; --raised: #23272b; --active: #2c3136;
+    --border: #2a2e33; --rule: #2a2e33; --control: #4a5259;
+    --text: #eceef0; --muted: #a9b1b8;
+    --fog: #a9bccd; --fog-ink: #0f1113;
+    --positive: #5fc28d; --negative: #f07a8a; --neg-bg: #3a1f25; --neg-ink: #f6c7cf;
+    --note-bg: #3a2f17; --note-ink: #f2d39a; --ok-bg: #1d3427; --ok-ink: #bfe6cd;
+  }
+}
+/* Ionic's own variables point at ours, on body so they win over Ionic's dark palette in either mode */
+.ios body, body {
   --ion-font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --ion-background-color: var(--ground);
-  --ion-background-color-rgb: 243, 244, 245;
   --ion-text-color: var(--text);
-  --ion-text-color-rgb: 29, 34, 38;
   --ion-item-background: var(--surface);
+  --ion-card-background: var(--surface);
   --ion-toolbar-background: var(--ground);
   --ion-tab-bar-background: var(--surface);
   --ion-tab-bar-color: var(--muted);
   --ion-tab-bar-color-selected: var(--text);
+  --ion-tab-bar-border-color: var(--border);
   --ion-border-color: var(--rule);
-  --ion-color-primary: #4f5d6a; --ion-color-primary-rgb: 79, 93, 106; --ion-color-primary-contrast: #ffffff;
-  --ion-color-primary-contrast-rgb: 255, 255, 255; --ion-color-primary-shade: #46525d; --ion-color-primary-tint: #616d79;
-  --ion-color-danger: #b3263a; --ion-color-danger-rgb: 179, 38, 58; --ion-color-danger-contrast: #ffffff;
-  --ion-color-danger-contrast-rgb: 255, 255, 255; --ion-color-danger-shade: #9e2133; --ion-color-danger-tint: #bb3c4e;
-  --ion-color-success: #247b50; --ion-color-success-rgb: 36, 123, 80; --ion-color-success-contrast: #ffffff;
-  --ion-color-success-contrast-rgb: 255, 255, 255; --ion-color-success-shade: #206c46; --ion-color-success-tint: #3a8862;
-  --ion-color-medium: #5d666e; --ion-color-medium-rgb: 93, 102, 110; --ion-color-medium-contrast: #ffffff;
-  --ion-color-medium-contrast-rgb: 255, 255, 255; --ion-color-medium-shade: #525a61; --ion-color-medium-tint: #6d757d;
+  --ion-item-border-color: var(--rule);
+  --ion-color-step-600: var(--muted);
+  --ion-color-primary: var(--fog); --ion-color-primary-contrast: var(--fog-ink);
+  --ion-color-primary-shade: var(--fog); --ion-color-primary-tint: var(--fog);
+  --ion-color-danger: var(--negative); --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-shade: var(--negative); --ion-color-danger-tint: var(--negative);
+  --ion-color-success: var(--positive);
+  --ion-color-medium: var(--muted); --ion-color-medium-contrast: var(--ground);
+  --ion-color-medium-shade: var(--muted); --ion-color-medium-tint: var(--muted);
 }
 
 .num { font-variant-numeric: tabular-nums; }
@@ -39,8 +54,8 @@ ion-content { --padding-bottom: 24px; }
 .title h1 { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.1; letter-spacing: -0.015em; margin: 0; }
 .title p { margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
 .fresh { display: flex; align-items: center; gap: 6px; padding: 6px 20px 0; color: var(--muted); font-size: 13px; }
-.fresh i { width: 7px; height: 7px; border-radius: 50%; background: #3f8a62; display: inline-block; }
-.fresh.off i { background: #b07a1d; }
+.fresh i { width: 7px; height: 7px; border-radius: 50%; background: var(--positive); display: inline-block; }
+.fresh.off i { background: var(--note-ink); }
 
 /* section heads and inset lists */
 ion-list-header.sec { --background: transparent; padding-top: 18px; font-size: 16px; font-weight: 600; min-height: 32px; }
@@ -49,9 +64,13 @@ ion-list-header.sec .aside { margin-left: auto; padding-right: 20px; font-size: 
 ion-list.inset { --ion-item-background: var(--surface); margin: 6px 16px 0 !important; border-radius: var(--radius) !important; }
 ion-item { --min-height: 54px; }
 ion-item h2 { font-weight: 600 !important; font-size: 16px !important; }
-ion-item p { color: var(--muted) !important; font-size: 14px !important; }
+ion-item p { color: var(--muted) !important; font-size: 15px !important; line-height: 1.35 !important; }
+ion-note { color: var(--muted); font-size: 15px; }
+ion-item h2 { color: var(--text); }
 ion-note.state-on { color: var(--positive); }
 ion-note.state-off { color: var(--muted); }
+.sub { color: var(--muted); font-size: 14px; }
+ion-toggle::part(label) { white-space: normal; }
 .note { padding: 10px 20px 0; color: var(--muted); font-size: 14px; line-height: 1.45; margin: 0; }
 .note a { color: var(--fog); font-weight: 600; text-decoration: none; }
 
@@ -91,10 +110,10 @@ ion-note.state-off { color: var(--muted); }
 .preview { height: 100%; display: flex; flex-direction: column; background: var(--ground); }
 .preview img { max-width: 100%; margin: 16px auto; display: block; border-radius: 6px; }
 .preview iframe { flex: 1; border: 0; width: 100%; background: #fff; }
-.preview pre { white-space: pre-wrap; margin: 16px; padding: 16px; background: #fff; border-radius: 8px; font-size: 14px; }
+.preview pre { white-space: pre-wrap; margin: 16px; padding: 16px; background: var(--surface); color: var(--text); border-radius: 8px; font-size: 14px; }
 
 /* the toast with Undo sits above the tab bar */
-ion-toast.undo { --background: var(--text); --color: #fff; --button-color: #cfe0ee; }
+ion-toast.undo { --background: var(--text); --color: var(--ground); --button-color: var(--fog); }
 
 /* the sign-in screen */
 .signin { max-width: 420px; margin: 0 auto; padding-top: 8vh; }

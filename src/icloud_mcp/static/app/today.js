@@ -66,8 +66,9 @@ class Today extends HTMLElement {
     const items = d.waiting.map((w) => `<ion-item button detail="true" data-key="${esc(w.key)}" class="${w.key === this.selected ? "sel" : ""}">
       <ion-label class="ion-text-wrap"><h2>${esc(w.title)}</h2><p>${itemSub(w)}</p></ion-label>
       <ion-note slot="end" class="num">${esc(ago(w.created_at).replace(" ago", ""))}</ion-note></ion-item>`).join("");
-    const sent = d.sent_today.map((e) => `<ion-item><ion-label class="ion-text-wrap"><p style="color:var(--text)!important">
-      ${esc(e.who)} ${esc(e.what)}</p></ion-label><ion-note slot="end" class="num">${esc(e.time)}</ion-note></ion-item>`).join("");
+    const sent = d.sent_today.map((e) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(e.title)}</h2>
+      <p>${esc([e.what, e.to ? `to ${e.to}` : ""].filter(Boolean).join(" "))}</p></ion-label>
+      <ion-note slot="end" class="num">${esc(e.time)}</ion-note></ion-item>`).join("");
     return titleBlock(greeting(), esc(finding(d.waiting)))
       + `<div class="fresh ${app.online ? "" : "off"}"><i></i>${app.online ? `Live · updated ${esc(ago(app.updated))}` : "Offline · showing the last state"}</div>`
       + this.notices()

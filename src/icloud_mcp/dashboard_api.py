@@ -13,6 +13,7 @@ import hmac
 import importlib.metadata
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from email import policy
@@ -137,6 +138,20 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return resp
 
     # -- what waits ----------------------------------------------------------------------------------------------------
+    def short_names(addresses: str) -> str:
+        """'Segway Support <support@example.org>, bob@example.org' -> 'Segway Support, bob@example.org': the list reads as people."""
+        from email.utils import getaddresses
+        names = [n or a for n, a in getaddresses([addresses or ""]) if n or a]
+        return ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+    def sent_item(e: dict[str, Any]) -> dict[str, Any]:
+        """An approval from the log as a row: the title, what it was and to whom, when."""
+        text = str(e.get("summary") or "")
+        m = re.match(r"Approved (.+?) “(.*)”$", text)
+        rcpt = (e.get("details") or {}).get("recipients") or []
+        return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else text,
+                "what": (m.group(1)[:1].upper() + m.group(1)[1:]) if m else "", "to": short_names(", ".join(map(str, rcpt[:1])))}
+
     def label_of(src: Any, q: Any) -> str:
         return src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
 
@@ -144,7 +159,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return next((val for k, val in v["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
 
     def summary(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
-        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": to_of(v),
+        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": short_names(to_of(v)) if src.kind != "calendar" else to_of(v),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked"))}
 
@@ -170,7 +185,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                 if datetime.fromtimestamp(e.get("t", 0), d.tz).date() == day]
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
         return ok({"waiting": [summary(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
-                   "sent_today": [entry(e) for e in sent[:10]],
+                   "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 
     @route("/state", ["GET"])

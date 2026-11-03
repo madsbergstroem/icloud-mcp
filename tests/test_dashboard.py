@@ -155,7 +155,7 @@ async def test_approve_sends_once_and_is_logged(web):
         assert first["who"] == "You" and first["what"] == "approved email “Lunch <b>now</b>”"
         assert a["chain"]["ok"] is True and a["chain"]["entries"] >= 2                        # none changed since they were written
         sent_today = (await c.get("/dashboard/api/today")).json()["sent_today"]
-        assert [e["what"] for e in sent_today] == ["approved email “Lunch <b>now</b>”"]
+        assert [(e["title"], e["what"], e["to"]) for e in sent_today] == [("Lunch <b>now</b>", "Email", "bob@example.org")]
 
 
 async def test_a_changed_message_is_not_sent_and_discard_sends_nothing(web):

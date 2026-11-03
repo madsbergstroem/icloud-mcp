@@ -42,11 +42,35 @@ class Activity extends HTMLElement {
 customElements.define("icm-activity", Activity);
 
 // -- Settings -----------------------------------------------------------------------------------------------------------
-const ICLOUD = [["mail", "Mail", "ENABLE_MAIL"], ["calendar", "Calendar", "ENABLE_CALENDAR"], ["contacts", "Contacts", "ENABLE_CONTACTS"]];
-const MAC = [["Messages", "ENABLE_IMESSAGE"], ["Reminders", "ENABLE_REMINDERS"], ["Notes", "ENABLE_NOTES"], ["iCloud Drive", "ENABLE_DRIVE"],
-  ["Maps", "ENABLE_MAPS"], ["Health", "ENABLE_HEALTH"]];
+// Every setting lives in exactly one place. A switch with nothing behind it sits in its row; an area with rules opens a
+// page that starts with the area's own switch and then shows only its rules.
 const on = (v) => ["1", "true", "yes", "on"].includes(String(v).toLowerCase());
 const state = (v) => ({ note: on(v) ? "On" : "Off", noteClass: on(v) ? "state-on" : "state-off" });
+const MAC_SWITCHES = [["Reminders", "ENABLE_REMINDERS"], ["Notes", "ENABLE_NOTES"], ["iCloud Drive", "ENABLE_DRIVE"], ["Maps", "ENABLE_MAPS"], ["Health", "ENABLE_HEALTH"]];
+
+// What each page shows: the group whose fields it edits, an area switch from another group at the top, keys or sections
+// it leaves to another page.
+export const PAGES = {
+  mail: { slug: "mail", title: "Mail", lead: "ENABLE_MAIL", hide: ["ALLOW_PERMANENT_DELETE"], sendMode: true },
+  calendar: { slug: "calendar", title: "Calendar", lead: "ENABLE_CALENDAR" },
+  contacts: { slug: "contacts", title: "Contacts", lead: "ENABLE_CONTACTS" },
+  messages: { slug: "helper", title: "Messages", lead: "ENABLE_IMESSAGE", leadLabel: "Agents can read Messages", sections: ["Messages"] },
+  helper: { slug: "helper", title: "Mac helper", sections: ["Shortcuts and timing"] },
+  tools: { slug: "areas", title: "Only these tools", keys: ["TOOLS"] },
+  accounts: { slug: "accounts", title: "Account" },
+  log: { slug: "dashboard", title: "Activity log", sections: ["Activity log", "Sign-in"], hide: ["OWNER_PASSWORD_LOGIN"] },
+};
+
+function owner(st, key) { return (st.groups.find((g) => g.fields.some((f) => f.key === key)) || {}).slug; }
+
+async function saveKeys(st, values) {
+  // one request per group the keys belong to; a change that weakens protection asks to confirm first (api.js)
+  const by = {};
+  for (const [k, v] of Object.entries(values)) (by[owner(st, k)] = by[owner(st, k)] || {})[k] = v;
+  let note = "";
+  for (const [slug, vals] of Object.entries(by)) note = (await post(`/settings/${slug}`, { values: vals })).note || note;
+  return note;
+}
 
 class Settings extends HTMLElement {
   connectedCallback() {
@@ -61,45 +85,46 @@ class Settings extends HTMLElement {
     let st, sec;
     try { [st, sec] = await Promise.all([get("/settings"), get("/security")]); } catch (e) { fail(e); return; }
     this.st = st;
-    const v = st.values, mac = st.mac || {};
+    const v = st.values, mac = st.mac || {}, s = session.data, ed = st.editable ? "" : "disabled";
     const g = (slug) => st.groups.find((x) => x.slug === slug) || {};
-    const s = session.data;
-    const macAside = !mac.set_up ? "Not set up" : mac.online ? `<span style="color:var(--positive)">● Mac online</span>`
-      : `<span style="color:var(--note-ink)">Offline${mac.last_seen_at ? ` since ${esc(ago(mac.last_seen_at))}` : ""}</span>`;
-    const macRows = !mac.set_up ? row({ title: "Mac helper", sub: "Reminders, Notes, iCloud Drive, Maps, Messages and Health work through a small helper on your Mac. See the Mac helper guide.", button: true, attrs: 'data-group="helper"' })
-      : MAC.map(([label, key]) => row({ title: esc(label), sub: on(v[key]) && !mac.online ? "Waits until your Mac is back" : key === "ENABLE_IMESSAGE" && on(v[key]) ? (on(v.IMESSAGE_ALLOW_SEND) ? "Sending needs approval" : "Reads chats") : "",
-          ...(on(v[key]) && !mac.online ? { note: "On", noteClass: "state-off" } : state(v[key])), button: true, attrs: 'data-group="helper"' })).join("")
-        + row({ title: "Mac helper", sub: "Shortcuts, wait time, setup", button: true, attrs: 'data-group="helper"' });
-    this.querySelector("[data-body]").innerHTML = titleBlock("Settings", `${esc(s.host)} · ${st.restart_needed ? "restart to apply changes" : "running"}`)
+    const sw = (key, label, sub) => `<ion-item><ion-toggle data-switch="${key}" ${on(v[key]) ? "checked" : ""} ${ed}>${esc(label)}${sub ? `<br><small class="sub">${esc(sub)}</small>` : ""}</ion-toggle></ion-item>`;
+    const macAside = !mac.set_up ? "Not set up" : mac.online ? `<span style="color:var(--positive)">● Online</span>`
+      : `<span style="color:var(--note-ink)">Offline${mac.last_seen_at ? `, seen ${esc(ago(mac.last_seen_at))}` : ""}</span>`;
+    const macList = !mac.set_up
+      ? row({ title: "Not set up", sub: "Reminders, Notes, iCloud Drive, Maps, Messages and Health work through a small helper on your Mac. See the Mac helper guide." })
+      : row({ title: "Messages", sub: on(v.ENABLE_IMESSAGE) ? (on(v.IMESSAGE_ALLOW_SEND) ? "Reads chats, sends after your approval" : "Reads chats") : "", ...state(v.ENABLE_IMESSAGE), button: true, attrs: 'data-page="messages"' })
+        + MAC_SWITCHES.map(([label, key]) => sw(key, label, on(v[key]) && !mac.online ? "Waits until your Mac is back" : "")).join("")
+        + row({ title: "Shortcuts and timing", sub: v.SHORTCUTS_ALLOW ? esc(v.SHORTCUTS_ALLOW) : "No Shortcuts allowed", button: true, attrs: 'data-page="helper"' });
+    this.querySelector("[data-body]").innerHTML = titleBlock("Settings", esc(s.host))
       + (st.restart_needed ? `<div class="notice pause"><span>Saved changes apply after a restart. Agents are disconnected for about half a minute.</span>
           <ion-button size="small" data-restart>Restart now</ion-button></div>` : "")
-      + (st.editable ? "" : `<div class="notice pause"><span>Settings can only be viewed here (DASHBOARD_SETTINGS=view).</span></div>`)
+      + (st.editable ? "" : `<div class="notice pause"><span>Settings can only be viewed here.</span></div>`)
       + section("Sign-in and security") + `<ion-list class="inset">
-        ${row({ title: "Notifications", sub: "Know when something waits", button: true, attrs: 'data-page="icm-notifications"' })}
-        ${row({ title: "Passkeys", sub: sec.passkeys.length ? esc(sec.passkeys.map((k) => k.name).join(", ")) : "None yet", note: String(sec.passkeys.length), button: true, attrs: 'data-page="icm-passkeys"' })}
-        ${row({ title: "Connected apps", sub: sec.apps.length ? esc(sec.apps.map((a) => a.name).join(", ")) : "None", note: String(sec.apps.length), button: true, attrs: 'data-page="icm-apps"' })}
-        ${row({ title: "Owner password", sub: "Change it, or how it signs in", ...state(sec.password_login), button: true, attrs: 'data-page="icm-password"' })}
-        ${row({ title: "This device", sub: `Signed in with ${esc(sec.via)} ${esc(ago(sec.signed_in_at))}` })}
-        <ion-item button detail="false" data-signout><ion-label color="danger">Sign out</ion-label></ion-item></ion-list>
-        <p class="note">Removing a passkey, changing the password and signing out apps ask you to confirm again after 5 minutes.</p>`
-      + section("iCloud", "Always available") + `<ion-list class="inset">${ICLOUD.map(([slug, label, key]) =>
-        row({ title: label, sub: esc(g(slug).summary || ""), ...state(v[key]), button: true, attrs: `data-group="${slug}"` })).join("")}</ion-list>`
-      + section("Your Mac", macAside) + `<ion-list class="inset">${macRows}</ion-list>`
-      + `<ion-list class="inset" style="margin-top:14px!important">
-        <ion-item><ion-toggle data-readonly ${on(v.READ_ONLY) ? "checked" : ""} ${st.editable ? "" : "disabled"}>
-          <span>Read-only server</span><br><small style="color:var(--muted)">Nothing can be sent, moved or deleted</small></ion-toggle></ion-item>
-        ${row({ title: "Emptying Trash", ...state(v.ALLOW_PERMANENT_DELETE), button: true, attrs: 'data-group="mail"' })}
-        ${row({ title: "Only these tools", sub: v.TOOLS ? esc(v.TOOLS) : "Every tool of the areas that are on", note: v.TOOLS ? "" : "All", button: true, attrs: 'data-group="areas"' })}</ion-list>`
+        ${row({ title: "Notifications", button: true, attrs: 'data-nav="icm-notifications"' })}
+        ${row({ title: "Passkeys", note: String(sec.passkeys.length), button: true, attrs: 'data-nav="icm-passkeys"' })}
+        ${row({ title: "Connected apps", note: String(sec.apps.length), button: true, attrs: 'data-nav="icm-apps"' })}
+        ${row({ title: "Owner password", ...state(sec.password_login), button: true, attrs: 'data-nav="icm-password"' })}
+        ${row({ title: "This device", sub: `Signed in with ${esc(sec.via)}, ${esc(ago(sec.signed_in_at))}` })}
+        <ion-item button detail="false" data-signout><ion-label color="danger">Sign out</ion-label></ion-item></ion-list>`
+      + section("iCloud") + `<ion-list class="inset">
+        ${row({ title: "Mail", ...state(v.ENABLE_MAIL), button: true, attrs: 'data-page="mail"' })}
+        ${row({ title: "Calendar", ...state(v.ENABLE_CALENDAR), button: true, attrs: 'data-page="calendar"' })}
+        ${row({ title: "Contacts", ...state(v.ENABLE_CONTACTS), button: true, attrs: 'data-page="contacts"' })}</ion-list>`
+      + section("Your Mac", macAside) + `<ion-list class="inset">${macList}</ion-list>`
+      + section("Safety") + `<ion-list class="inset">
+        ${sw("READ_ONLY", "Read-only server", "Nothing can be sent, moved or deleted")}
+        ${sw("ALLOW_PERMANENT_DELETE", "Allow emptying Trash")}
+        ${row({ title: "Only these tools", note: v.TOOLS ? "Some" : "All", button: true, attrs: 'data-page="tools"' })}</ion-list>`
       + section("Account and server") + `<ion-list class="inset">
-        ${row({ title: "Account", sub: esc(g("accounts").summary || ""), button: true, attrs: 'data-group="accounts"' })}
-        ${row({ title: "Dashboard and log", sub: esc(g("dashboard").summary || ""), button: true, attrs: 'data-group="dashboard"' })}
-        ${row({ title: "Server", sub: `Version ${esc(s.version)}`, button: true, attrs: 'data-page="icm-server"' })}</ion-list>`;
+        ${row({ title: "Account", sub: esc(g("accounts").summary || ""), button: true, attrs: 'data-page="accounts"' })}
+        ${row({ title: "Activity log", button: true, attrs: 'data-page="log"' })}
+        ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}</ion-list>`;
     this.wire();
   }
 
   wire() {
-    this.querySelectorAll("[data-page]").forEach((n) => n.addEventListener("click", () => push(this, n.dataset.page)));
-    this.querySelectorAll("[data-group]").forEach((n) => n.addEventListener("click", () => push(this, "icm-group", { slug: n.dataset.group })));
+    this.querySelectorAll("[data-nav]").forEach((n) => n.addEventListener("click", () => push(this, n.dataset.nav)));
+    this.querySelectorAll("[data-page]").forEach((n) => n.addEventListener("click", () => push(this, "icm-group", { page: n.dataset.page })));
     this.querySelector("[data-signout]").addEventListener("click", async () => {
       if (!(await ask("Sign out?", "You need your passkey or the password to come back.", "Sign out", { danger: true }))) return;
       try { await post("/signout"); } catch (e) { /* signed out anyway */ }
@@ -108,73 +133,75 @@ class Settings extends HTMLElement {
     this.querySelector("[data-restart]")?.addEventListener("click", async () => {
       try { const r = await post("/settings/restart"); toast(r.note, { duration: 8000 }); setTimeout(() => location.reload(), 30000); } catch (e) { fail(e); }
     });
-    const ro = this.querySelector("[data-readonly]");
-    ro.addEventListener("ionChange", async (e) => {
-      try { const r = await post("/settings/safety", { values: { READ_ONLY: e.detail.checked } }); toast(r.note); this.load(); }
-      catch (err) { fail(err); this.load(); }
-    });
+    this.querySelectorAll("[data-switch]").forEach((n) => n.addEventListener("ionChange", async (e) => {
+      try { toast(await saveKeys(this.st, { [n.dataset.switch]: e.detail.checked })); } catch (err) { fail(err); }
+      this.load();
+    }));
   }
 }
 customElements.define("icm-settings", Settings);
 
-// -- one settings area --------------------------------------------------------------------------------------------------
+// -- one settings page --------------------------------------------------------------------------------------------------
 class Group extends HTMLElement {
   async connectedCallback() {
     const body = page(this, "", "Settings");
     let st;
     try { st = await get("/settings"); } catch (e) { fail(e); return; }
-    const g = st.groups.find((x) => x.slug === this.slug);
-    if (!g) { body.innerHTML = titleBlock("Not found", "There is no such settings area."); return; }
-    this.g = g; this.changed = {};
-    if (!g.set_up) { body.innerHTML = titleBlock(g.title, esc(g.summary)); return; }
+    const cfg = PAGES[this.page] || { slug: this.page };
+    const g = st.groups.find((x) => x.slug === cfg.slug);
+    if (!g) { body.innerHTML = titleBlock("Not found", "There is no such settings page."); return; }
+    this.st = st; this.changed = {};
+    if (!g.set_up) { body.innerHTML = titleBlock(cfg.title || g.title, esc(g.summary)); return; }
+    const fields = g.fields.filter((f) => (!cfg.sections || cfg.sections.includes(f.section)) && (!cfg.keys || cfg.keys.includes(f.key))
+      && !(cfg.hide || []).includes(f.key) && f.key !== cfg.lead);
     const sections = {};
-    g.fields.forEach((f) => { (sections[f.section || ""] = sections[f.section || ""] || []).push(f); });
-    let h = titleBlock(g.title, esc(g.lede));
-    if (g.slug === "mail") {
+    fields.forEach((f) => { (sections[f.section || ""] = sections[f.section || ""] || []).push(f); });
+    const lead = cfg.lead ? st.groups.flatMap((x) => x.fields).find((f) => f.key === cfg.lead) : null;
+    let h = titleBlock(cfg.title || g.title, esc(cfg.keys ? (fields[0] || {}).help || "" : g.lede));
+    if (lead) h += `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-toggle data-key="${esc(lead.key)}" ${lead.value ? "checked" : ""} ${st.editable ? "" : "disabled"}>
+      ${esc(cfg.leadLabel || `Agents can use ${cfg.title}`)}</ion-toggle></ion-item></ion-list>`;
+    if (cfg.sendMode) {
       h += section("When agents send mail") + `<div style="padding:6px 16px 0"><ion-segment value="${esc(g.send_mode)}" data-sendmode ${st.editable ? "" : "disabled"}>
-        <ion-segment-button value="drafts"><ion-label>Drafts only</ion-label></ion-segment-button>
+        <ion-segment-button value="drafts"><ion-label>Drafts</ion-label></ion-segment-button>
         <ion-segment-button value="approval"><ion-label>After approval</ion-label></ion-segment-button>
         <ion-segment-button value="direct"><ion-label>Directly</ion-label></ion-segment-button></ion-segment></div>
-        <p class="note" data-sendnote>${esc({ drafts: "Agents save drafts; you send them in Mail.", approval: "Agents queue mail; you send it from Today.", direct: "Mail leaves at once. Your client's own prompt is the only check." }[g.send_mode])}</p>`;
+        <p class="note" data-sendnote>${esc(SEND_NOTES[g.send_mode])}</p>`;
     }
-    for (const [name, fields] of Object.entries(sections)) {
-      h += (name ? section(name) : `<div style="height:12px"></div>`) + `<ion-list class="inset">${fields.map((f) => this.field(f, st.editable)).join("")}</ion-list>`;
+    for (const [name, list] of Object.entries(sections)) {
+      const helps = list.filter((f) => f.help && !cfg.keys).map((f) => `${f.label}: ${f.help}`);
+      const env = list.filter((f) => f.source === "environment").map((f) => f.label);
+      h += (name && Object.keys(sections).length > 1 ? section(name) : `<div style="height:14px"></div>`)
+        + `<ion-list class="inset">${list.map((f) => this.field(f, st.editable)).join("")}</ion-list>`
+        + (helps.length || env.length ? `<p class="note">${esc(helps.join(" "))}${env.length ? ` ${esc(env.join(", "))} ${env.length === 1 ? "comes" : "come"} from the server's environment.` : ""}</p>` : "");
     }
-    const here = g.fields.filter((f) => f.set_here);
+    const here = fields.filter((f) => f.set_here);
     if (here.length && st.editable) {
       h += section("Changed here") + `<ion-list class="inset">${here.map((f) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(f.label)}</h2>
-        <p>Here: ${esc(f.display)}</p></ion-label><ion-button slot="end" fill="clear" size="small" data-reset="${esc(f.key)}">Reset</ion-button></ion-item>`).join("")}</ion-list>
-        <p class="note">Reset goes back to the server's environment or the default.</p>`;
+        <p>${esc(f.display)}</p></ion-label><ion-button slot="end" fill="clear" size="small" data-reset="${esc(f.key)}" data-slug="${esc(cfg.slug)}">Reset</ion-button></ion-item>`).join("")}</ion-list>`;
     }
-    if (g.slug === "accounts" && st.editable) {
+    if (cfg.slug === "accounts" && st.editable) {
       h += section("App-specific password") + `<ion-list class="inset"><ion-item><ion-input type="password" label="New app-specific password"
-        label-placement="stacked" placeholder="abcd-efgh-ijkl-mnop" helper-text="Create it at account.apple.com. iCloud checks it before anything is saved." data-apppw></ion-input></ion-item></ion-list>
+        label-placement="stacked" placeholder="abcd-efgh-ijkl-mnop" data-apppw></ion-input></ion-item></ion-list>
+        <p class="note">Create it at account.apple.com. iCloud checks it before anything is saved.</p>
         <div class="acts"><ion-button fill="outline" color="medium" data-apppw-save>Replace password</ion-button></div>`;
     }
-    h += `<p class="note">Saved changes apply after a restart. Every change is recorded in Activity.</p>`;
     body.innerHTML = h;
-    if (st.editable) this.querySelector("[data-end]").innerHTML = `<ion-button strong disabled data-save>Save</ion-button>`;
+    if (st.editable && (fields.length || lead)) this.querySelector("[data-end]").innerHTML = `<ion-button strong disabled data-save>Save</ion-button>`;
     this.wire();
   }
 
   field(f, editable) {
     const dis = editable ? "" : "disabled";
-    const help = [f.help, f.source === "environment" ? "Set in the environment" : ""].filter(Boolean).join(" · ");
     const attrs = `data-key="${esc(f.key)}" ${dis}`;
-    if (f.kind === "bool") {
-      return `<ion-item><ion-toggle ${attrs} ${f.value ? "checked" : ""}><span>${esc(f.label)}</span>${help ? `<br><small style="color:var(--muted)">${esc(help)}</small>` : ""}</ion-toggle></ion-item>`;
-    }
+    if (f.kind === "bool") return `<ion-item><ion-toggle ${attrs} ${f.value ? "checked" : ""}>${esc(f.label)}</ion-toggle></ion-item>`;
     if (f.kind === "choice") {
       return `<ion-item><ion-select ${attrs} label="${esc(f.label)}" interface="action-sheet" value="${esc(String(f.value).toLowerCase())}">
-        ${f.choices.map(([c, l]) => `<ion-select-option value="${esc(c)}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>
-        ${help ? `<ion-item lines="none"><ion-label class="ion-text-wrap"><p>${esc(help)}</p></ion-label></ion-item>` : ""}`;
+        ${f.choices.map(([c, l]) => `<ion-select-option value="${esc(c)}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>`;
     }
-    if (f.kind === "textarea") {
-      return `<ion-item><ion-textarea ${attrs} label="${esc(f.label)}" label-placement="stacked" auto-grow="true" value="${esc(f.value)}" helper-text="${esc(help)}"></ion-textarea></ion-item>`;
-    }
+    if (f.kind === "textarea") return `<ion-item><ion-textarea ${attrs} label="${esc(f.label)}" label-placement="stacked" auto-grow="true" value="${esc(f.value)}"></ion-textarea></ion-item>`;
     const type = f.kind === "int" ? `type="number" inputmode="numeric" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""}` : `type="text" autocomplete="off"`;
     return `<ion-item><ion-input ${attrs} ${type} label="${esc(f.label)}${f.unit_label ? ` (${esc(f.unit_label)})` : ""}" label-placement="stacked"
-      value="${esc(f.value)}" helper-text="${esc(help)}" ${f.kind === "list" ? 'placeholder="comma-separated"' : ""}></ion-input></ion-item>`;
+      value="${esc(f.value)}" ${f.kind === "list" ? 'placeholder="Comma-separated"' : ""}></ion-input></ion-item>`;
   }
 
   wire() {
@@ -183,17 +210,15 @@ class Group extends HTMLElement {
     this.querySelectorAll("ion-toggle[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.checked)));
     this.querySelectorAll("ion-select[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.value)));
     this.querySelectorAll("ion-input[data-key],ion-textarea[data-key]").forEach((n) => n.addEventListener("ionInput", (e) => mark(n.dataset.key, e.detail.value)));
-    const sm = this.querySelector("[data-sendmode]");
-    sm?.addEventListener("ionChange", (e) => {
+    this.querySelector("[data-sendmode]")?.addEventListener("ionChange", (e) => {
       const mode = e.detail.value;
-      this.querySelector("[data-sendnote]").textContent = { drafts: "Agents save drafts; you send them in Mail.", approval: "Agents queue mail; you send it from Today.", direct: "Mail leaves at once. Your client's own prompt is the only check." }[mode];
+      this.querySelector("[data-sendnote]").textContent = SEND_NOTES[mode];
       mark("ALLOW_SEND", mode !== "drafts"); mark("SEND_REQUIRES_APPROVAL", mode !== "direct");
     });
     save?.addEventListener("click", async () => {
       this.querySelectorAll("[data-key]").forEach((n) => n.classList.remove("ion-invalid", "ion-touched"));
       try {
-        const r = await post(`/settings/${this.slug}`, { values: this.changed });
-        toast(r.note);
+        toast(await saveKeys(this.st, this.changed));
         window.dispatchEvent(new Event("icm:settings"));
         this.closest("ion-nav").pop();
       } catch (e) {
@@ -205,7 +230,7 @@ class Group extends HTMLElement {
       }
     });
     this.querySelectorAll("[data-reset]").forEach((b) => b.addEventListener("click", async () => {
-      try { const r = await post(`/settings/${this.slug}/reset`, { key: b.dataset.reset }); toast(r.note); window.dispatchEvent(new Event("icm:settings")); this.closest("ion-nav").pop(); }
+      try { const r = await post(`/settings/${b.dataset.slug}/reset`, { key: b.dataset.reset }); toast(r.note); window.dispatchEvent(new Event("icm:settings")); this.closest("ion-nav").pop(); }
       catch (e) { fail(e); }
     }));
     this.querySelector("[data-apppw-save]")?.addEventListener("click", async () => {
@@ -216,6 +241,8 @@ class Group extends HTMLElement {
   }
 }
 customElements.define("icm-group", Group);
+const SEND_NOTES = { drafts: "Agents save drafts; you send them in Mail.", approval: "Agents queue mail; you send it from Today.",
+  direct: "Mail leaves at once. Your client's own prompt is the only check." };
 
 // -- passkeys -----------------------------------------------------------------------------------------------------------
 class Passkeys extends HTMLElement {
@@ -282,13 +309,20 @@ customElements.define("icm-apps", Apps);
 class Password extends HTMLElement {
   async connectedCallback() {
     const body = page(this, "", "Settings");
-    const sec = await get("/security").catch(fail);
+    const [sec, st] = await Promise.all([get("/security"), get("/settings")]).catch((e) => { fail(e); return [null, null]; });
     if (!sec) return;
-    body.innerHTML = titleBlock("Owner password", sec.password_login ? "Signs in here and approves new apps on the connect page."
-      : "Sign-in with the password is off; it still approves new apps on the connect page.")
-      + `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-input type="password" label="New owner password" label-placement="stacked"
-        autocomplete="new-password" minlength="12" helper-text="At least 12 characters. It applies after the server restarts." data-pw></ion-input></ion-item></ion-list>
+    const ed = st.editable ? "" : "disabled";
+    body.innerHTML = titleBlock("Owner password", "It also approves new apps on the connect page.")
+      + `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-toggle data-login ${on(st.values.OWNER_PASSWORD_LOGIN) ? "checked" : ""} ${ed}>
+        Sign in with the password</ion-toggle></ion-item></ion-list>
+        <p class="note">${sec.passkeys.length ? "Off means passkey and Tailscale only." : "Stays on until you have a passkey."}</p>`
+      + section("Change it") + `<ion-list class="inset"><ion-item><ion-input type="password" label="New owner password" label-placement="stacked"
+        autocomplete="new-password" minlength="12" data-pw></ion-input></ion-item></ion-list>
+        <p class="note">At least 12 characters. It applies after the server restarts.</p>
         <div class="acts"><ion-button data-save>Change password</ion-button></div>`;
+    this.querySelector("[data-login]").addEventListener("ionChange", async (e) => {
+      try { toast(await saveKeys(st, { OWNER_PASSWORD_LOGIN: e.detail.checked })); window.dispatchEvent(new Event("icm:settings")); } catch (err) { fail(err); }
+    });
     this.querySelector("[data-save]").addEventListener("click", async () => {
       const value = await this.querySelector("[data-pw]").getInputElement().then((i) => i.value);
       try { const r = await post("/security/password", { password: value }); toast(r.note); this.closest("ion-nav").pop(); } catch (e) { fail(e); }
