@@ -66,7 +66,7 @@ class Today extends HTMLElement {
     const items = d.waiting.map((w) => `<ion-item button detail="true" data-key="${esc(w.key)}" class="${w.key === this.selected ? "sel" : ""}">
       <ion-label class="ion-text-wrap"><h2>${esc(w.title)}</h2><p>${itemSub(w)}</p></ion-label>
       <ion-note slot="end" class="num">${esc(ago(w.created_at).replace(" ago", ""))}</ion-note></ion-item>`).join("");
-    const sent = d.sent_today.map((e) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(e.title)}</h2>
+    const sent = d.sent_today.map((e) => `<ion-item class="sent"><ion-label class="ion-text-wrap"><h2>${esc(e.title)}</h2>
       <p>${esc([e.what, e.to ? `to ${e.to}` : ""].filter(Boolean).join(" "))}</p></ion-label>
       <ion-note slot="end" class="num">${esc(e.time)}</ion-note></ion-item>`).join("");
     return titleBlock(greeting(), esc(finding(d.waiting)))
@@ -168,14 +168,21 @@ class Item extends HTMLElement {
         <div class="s">Up to ${esc(size(it.max_bytes))}</div></div><ion-button data-pick="${m.index}">Choose file</ion-button>
         <input type="file" hidden data-input="${m.index}"></div>`).join("");
     }
-    const rows = it.rows.filter(([k]) => !(it.kind === "mail" && k === "Will be delivered to" && it.rows.some(([k2, v2]) => k2 === "To" && v2 === it.rows.find(([k3]) => k3 === "Will be delivered to")[1])));
-    const long = (it.text || "").length > 900;
+    const addrs = (s) => (String(s).match(/[^\s<>,]+@[^\s<>,]+/g) || []).map((a) => a.toLowerCase()).sort().join(",");
+    const visible = addrs(it.rows.filter(([k]) => k === "To" || k === "Cc").map(([, v]) => v).join(","));
+    const rows = it.rows.filter(([k, v]) => !(k === "Will be delivered to" && addrs(v) === visible));      // the same people twice
+    // the quoted mail it answers is folded away, so the new text and the buttons are what you see first
+    const m = /^(On .+ wrote:|Am .+ schrieb .+:|-{2,} ?Original Message ?-{2,}|>)/m.exec(it.text || "");
+    const own = m ? it.text.slice(0, m.index).trimEnd() : (it.text || "");
+    const quoted = m ? it.text.slice(m.index) : "";
+    const long = own.length > 900;
     if (it.kind === "calendar") {
       h += section("Event") + `<ion-list class="inset">${rows.map(([k, v]) => `<ion-item><ion-label>${esc(k)}</ion-label><ion-note slot="end" class="ion-text-wrap" style="text-align:right;max-width:65%">${esc(v)}</ion-note></ion-item>`).join("")}</ion-list>`
         + (it.text ? `<div class="mail"><div class="body">${esc(it.text)}</div></div>` : "");
     } else {
       h += section(it.kind === "imessage" ? "Message" : "Message") + `<div class="mail">${rows.length ? `<dl>${rows.map(([k, v]) => `<dt>${esc(k === "Will be delivered to" ? "Sent to" : k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
-        <div class="body${long ? " short" : ""}" data-text>${esc(it.text)}</div>${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}</div>`;
+        <div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
+        ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}</div>`;
     }
     if (it.files.length) {
       h += section("Attached", `<span class="num">${it.files.length}</span>`) + `<ion-list class="inset">${it.files.map((f) => `
@@ -203,6 +210,7 @@ class Item extends HTMLElement {
   wire(id) {
     const $ = (s) => this.querySelector(s);
     $("[data-more]")?.addEventListener("click", (e) => { $("[data-text]").classList.remove("short"); e.target.remove(); });
+    $("[data-quote]")?.addEventListener("click", (e) => { $("[data-quoted]").hidden = false; e.target.remove(); });
     $("[data-approve]")?.addEventListener("click", () => this.approve(false));
     $("[data-anyway]")?.addEventListener("click", async () => {
       if (await ask("Send it anyway?", `It goes to ${this.it.to || "the recipients"} although the mail it answers looked like an attempt to steer the agent.`, "Send", { danger: true })) this.approve(true);
