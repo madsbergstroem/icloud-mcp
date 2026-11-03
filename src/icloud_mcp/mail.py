@@ -1862,7 +1862,7 @@ class MailService:
             return {"status": "queued_waiting_for_files", "sent": False, "outbox_id": q.id, "recipients": q.recipients,
                     "expires_in_seconds": max(0, int(q.expires_at - time.time())),
                     "files_to_add": [{"filename": w["filename"]} for w in waiting],
-                    "owner_link": f"{self.s.public_url}/dashboard/attach/{q.id}", "notice": FILES_NOTICE, **self._summary_of(queued)}
+                    "owner_link": f"{self.s.public_url}/dashboard#/item/mail:{q.id}", "notice": FILES_NOTICE, **self._summary_of(queued)}
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "recipients": q.recipients,
                 "expires_in_seconds": max(0, int(q.expires_at - time.time())) if again else self.s.outbox_ttl,
                 "approve_at": self.s.approval_link("mail", q.id), **({"already_queued": True} if again else {}),

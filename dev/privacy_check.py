@@ -40,9 +40,15 @@ def scan(where: str, text: str) -> list[str]:
     return found
 
 
+# Vendored third-party builds (minified, pinned, unchanged) are not ours to scan; their numbers look like coordinates
+VENDORED = ("src/icloud_mcp/static/vendor/",)
+
+
 def main(base: str | None) -> int:
     problems: list[str] = []
     for path in git("ls-files").splitlines():
+        if path.startswith(VENDORED):
+            continue
         try:
             data = open(path, "rb").read()
         except OSError:
@@ -58,7 +64,7 @@ def main(base: str | None) -> int:
             for line in git("show", "--format=", "--unified=0", "--no-color", sha).splitlines():
                 if line.startswith("+++ "):
                     current = line[6:] if line.startswith("+++ b/") else line[4:]
-                elif line.startswith("+") and not line.startswith("+++"):
+                elif line.startswith("+") and not line.startswith("+++") and not current.startswith(VENDORED):
                     problems += [p.replace("<added>:1", f"commit {sha[:8]} {current}") for p in scan("<added>", line[1:])]
             problems += [p.replace("<message>", f"commit {sha[:8]} message") for p in scan("<message>", git("show", "-s", "--format=%B", sha))]
     for p in problems:

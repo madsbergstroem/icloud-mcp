@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import threading
-import time
 from dataclasses import dataclass, field as dfield
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -326,7 +325,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
 
     store = SettingsStore(s.data_dir)
     editable = s.dashboard_settings == "edit"
-    d.extra_nav.append(("settings", "Settings", "/dashboard/settings"))
+    d.extra_nav.append(("settings", "Settings", "/dashboard#/settings"))
     started_with = dict(s.settings_active and store.read() or {})
     state = {"restart_needed": False}
 
@@ -354,192 +353,6 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
             return f"{v} {sp.unit_label}"
         return v or "(empty)"
 
-    def control(sp: Spec, v: str, src: str, typed: str | None = None, error: str = "") -> str:
-        dis = "" if editable else " disabled"
-        sub = D._esc(sp.help)
-        tag = "Set in the environment" if src == "environment" else ""   # values set here are listed in the card below
-        meta = f'<p class="hint">{sub}{" · " if sub and tag else ""}{tag}</p>' if sub or tag else ""
-        fid = f"f-{sp.key.lower()}"
-        if error:
-            meta = f'<p class="field-error" id="{fid}-err">{D._esc(error)}</p>' + meta
-            dis += f' aria-invalid="true" aria-describedby="{fid}-err"'
-        if typed is not None:
-            v = typed
-        if sp.kind == "bool":
-            return (f'<div class="switch-row"><label for="{fid}"><span>{D._esc(sp.label)}</span>{meta}</label>'
-                    f'<input id="{fid}" class="switch" type="checkbox" role="switch" name="{sp.key}" value="true"{" checked" if _on(v) else ""}{dis}></div>')
-        if sp.kind == "choice" and len(sp.choices) <= 4:
-            # Up to four short, equal options are shown side by side (a segmented control), so every choice is visible at once
-            opts = "".join(f'<label><input type="radio" name="{sp.key}" value="{D._esc(c)}"{" checked" if c == v.lower() else ""}{dis}>'
-                           f'<span>{D._esc(lbl)}</span></label>' for c, lbl in sp.choices)
-            return (f'<div class="field"><span class="field-label" id="{fid}">{D._esc(sp.label)}</span>'
-                    f'<div class="radio-seg" role="radiogroup" aria-labelledby="{fid}">{opts}</div>{meta}</div>')
-        if sp.kind == "choice":
-            opts = "".join(f'<option value="{D._esc(c)}"{" selected" if c == v.lower() else ""}>{D._esc(lbl)}</option>' for c, lbl in sp.choices)
-            inp = f'<select id="{fid}" name="{sp.key}"{dis}>{opts}</select>'
-        elif sp.kind == "textarea":
-            inp = f'<textarea id="{fid}" name="{sp.key}" rows="3"{dis}>{D._esc(v.replace(chr(92) + "n", chr(10)))}</textarea>'
-        elif sp.kind == "int":
-            shown = v
-            if sp.unit != 1 and typed is None:
-                try:
-                    shown = f"{int(v) / sp.unit:g}"
-                except ValueError:
-                    pass
-            unit = f'<span class="hint">{D._esc(sp.unit_label)}</span>' if sp.unit_label else ""
-            inp = (f'<span style="display:flex;align-items:center;gap:8px"><input id="{fid}" name="{sp.key}" type="number" inputmode="numeric" '
-                   f'value="{D._esc(shown)}" min="{sp.min if sp.min is not None else ""}" max="{sp.max if sp.max is not None else ""}" '
-                   f'style="max-width:9rem"{dis}>{unit}</span>')
-        else:
-            inp = f'<input id="{fid}" name="{sp.key}" type="text" value="{D._esc(v)}" autocomplete="off"{dis}>'
-        return f'<div class="field"><label for="{fid}">{D._esc(sp.label)}</label>{inp}{meta}</div>'
-
-    def send_mode(stored: dict[str, str], entered: dict[str, str]) -> str:
-        allow = entered.get("ALLOW_SEND") or current("ALLOW_SEND", stored)[0]
-        appr, src = current("SEND_REQUIRES_APPROVAL", stored)
-        appr = entered.get("SEND_REQUIRES_APPROVAL") or appr
-        mode = "drafts" if not _on(allow) else ("approval" if _on(appr) else "direct")
-        dis = "" if editable else " disabled"
-        opts = "".join(f'<label><input type="radio" name="SEND_MODE" value="{val}"{" checked" if val == mode else ""}{dis}><span>{label}</span></label>'
-                       for val, label in (("drafts", "Drafts only"), ("approval", "After approval"), ("direct", "Directly")))
-        explain = {"drafts": "Agents save drafts; you send them in Mail.", "approval": "Agents queue mail; you send it on Approvals.",
-                   "direct": "Mail leaves at once. Your client's own prompt is the only check."}[mode]
-        tag = "Set in the environment" if src == "environment" else ""
-        return (f'<div class="field"><span class="field-label" id="sendmode">When agents send mail</span>'
-                f'<div class="radio-seg" role="radiogroup" aria-labelledby="sendmode">{opts}</div><p class="hint">{explain}{" · " + tag if tag else ""}</p></div>')
-
-    def area_tabs(current_slug: str) -> str:
-        """The settings areas as underline tabs, so the owner moves between them without going back to the list."""
-        areas = [(g.slug, g.title) for g in GROUPS] + [("server", "Server")]
-        links = "".join(f'<a href="/dashboard/settings/{slug}"{" aria-current=page" if slug == current_slug else ""}>{D._esc(title)}</a>'
-                        for slug, title in areas)
-        return f'<nav class="subtabs" aria-label="Settings areas">{links}</nav>'
-
-    def index_page(rec: dict[str, Any], flash: str = "", bad: bool = False) -> Response:
-        stored = store.read()
-        cards = []
-        if state["restart_needed"] or stored != started_with:
-            cards.append(D.card("Restart to apply", D.hint("Saved changes take effect when the server starts again. Agents are "
-                                "disconnected for about half a minute."), D.button("Restart now", "primary"),
-                                D.chip("Waiting", "warn"), form="/dashboard/settings/restart", hidden_html=d.csrf_input(rec)))
-        if not editable:
-            cards.append('<p class="alert">Settings can only be viewed here (DASHBOARD_SETTINGS=view). Change them in the server’s environment.</p>')
-        rows = []
-        for g in GROUPS:
-            if g.needs_bridge and not s.bridge_token:
-                sub = "Not set up. See the Mac helper guide."
-            else:
-                sub = g.summary(lambda k: current(k, stored)[0]) if g.summary else group_summary(g, stored)
-            rows.append(f'<a class="row" href="/dashboard/settings/{g.slug}" style="color:inherit;text-decoration:none">'
-                        f'<span class="row-main"><span>{D._esc(g.title)}</span><span class="row-sub">{D._esc(sub)}</span></span>'
-                        f'<span aria-hidden="true" class="hint">›</span></a>')
-        rows.append('<a class="row" href="/dashboard/settings/server" style="color:inherit;text-decoration:none"><span class="row-main">'
-                    '<span>Server</span><span class="row-sub">Address, app sign-in, connections, performance · view only</span></span>'
-                    '<span aria-hidden="true" class="hint">›</span></a>')
-        cards.append(D.card("", f'<div class="list">{"".join(rows)}</div>'))
-        cards.append(D.hint("Values changed here are stored in the server's data folder and win over its environment. "
-                            "Every change is recorded in Activity."))
-        return d.page("Settings", "settings", "".join(cards), rec, flash=flash, bad=bad, lede="Everything this server does, in one place.")
-
-    def group_page(rec: dict[str, Any], g: Group, flash: str = "", bad: bool = False, status: int = 200,
-                   entered: dict[str, str] | None = None, typed: dict[str, str] | None = None,
-                   errors: dict[str, str] | None = None) -> Response:
-        """After a refused save, entered holds the values that parsed, typed the raw text of those that did not, and errors
-        the message per setting; the form shows them instead of the saved values, so nothing the owner typed is lost."""
-        stored = store.read()
-        entered, typed, errors = entered or {}, typed or {}, errors or {}
-        if g.needs_bridge and not s.bridge_token:
-            body = D.hint("These areas work through a small helper on your Mac. Set BRIDGE_TOKEN and follow the Mac helper guide first; "
-                          "then they can be switched on here.")
-            return d.page(g.title, "settings", D.card("Not set up", body, D.link_button("Back to Settings", "/dashboard/settings")),
-                          rec, status, flash, bad, g.lede)
-        sections: dict[str, list[str]] = {}
-        for sp in g.specs:
-            if sp.hidden:
-                continue
-            v, src = current(sp.key, stored)
-            sections.setdefault(sp.section, []).append(control(sp, entered.get(sp.key, v), src, typed.get(sp.key), errors.get(sp.key, "")))
-        if g.slug == "mail":
-            sections.setdefault("Sending", []).insert(0, send_mode(stored, entered))
-        foot = ('<p class="foot-hint">Saved changes apply after a restart.</p>' + D.button("Save", "primary")) if editable \
-            else '<p class="foot-hint">These settings can only be viewed here.</p>' 
-        names = list(sections)
-        # each section is a row: its name on the left, its fields on the right (stacked on a phone); one Save at the end
-        inner = "".join(f'<div class="srow"><div class="srow-head"><h2>{D._esc(name)}</h2></div><section class="card">'
-                        + f'<div class="card-body">{"".join(items)}</div>'
-                        + (f'<div class="card-foot">{foot}</div>' if i == len(names) - 1 else "") + "</section></div>"
-                        for i, (name, items) in enumerate(sections.items()))
-        cards = [area_tabs(g.slug)]
-        cards.append(f'<form class="stack" method="post" action="/dashboard/settings/{g.slug}">{d.csrf_input(rec)}{inner}</form>' if editable
-                     else f'<div class="stack">{inner}</div>')
-        changed = [sp for sp in g.specs if sp.key in stored]
-        if changed and editable:
-            rows = "".join(D.row(sp.label, f'<form method="post" action="/dashboard/settings/{g.slug}/reset">{d.csrf_input(rec)}'
-                                           f'<input type="hidden" name="key" value="{sp.key}">{D.button("Reset", "text")}</form>',
-                                 f"Here: {display(sp, stored[sp.key])}") for sp in changed)
-            cards.append(D.card("Set here", f'<div class="list">{rows}</div>'
-                                + D.hint("Reset goes back to the server's environment or the default.")))
-        if g.slug == "accounts" and getattr(s, "owner_access_team_domain", ""):
-            cards.append(D.card("Accounts per area", D.hint("Mail, calendar and contacts can each come from their own account "
-                                "(for example WEB.DE mail next to iCloud calendar). That is set up on its own page."),
-                                D.link_button("Open account setup", "/setup", "primary")))
-        if g.slug == "accounts" and editable:
-            cards.append(D.card("App-specific password", D.field("apppw", "New app-specific password",
-                                'type="password" name="password" autocomplete="off" placeholder="abcd-efgh-ijkl-mnop" required',
-                                "Create it at account.apple.com. iCloud checks it before anything is saved."),
-                                D.button("Replace password"), form="/dashboard/settings/accounts/app-password", hidden_html=d.csrf_input(rec)))
-        return d.page(g.title, "settings", "".join(cards), rec, status, flash, bad, g.lede)
-
-    def server_page(rec: dict[str, Any]) -> Response:
-        cards = [area_tabs("server"), '<p class="banner">These are set in the server’s environment by whoever runs it. A browser cannot change them.</p>']
-        for title, items in SERVER_VIEW:
-            rows = []
-            for label, key, how in items:
-                if how == "hostport":
-                    val = ":".join(os.environ.get(k, "") or "default" for k in key)
-                elif how == "set":
-                    val = "set" if os.environ.get(key, "").strip() else "not set"
-                else:
-                    val = os.environ.get(key, "").strip() or "default"
-                rows.append(D.row(label, D.value(val)))
-            cards.append(D.card(title, f'<div class="list">{"".join(rows)}</div>'))
-        return d.page("Server", "settings", "".join(cards), rec, lede="Where this server listens, how apps sign in, and what it connects to.")
-
-    def checked(fn):
-        async def wrapper(request: Request) -> Response:
-            got = d.signed_in(request)
-            if got is None:
-                return d.to_signin(request)
-            return await fn(request, got[1])
-        return wrapper
-
-    @mcp.custom_route("/dashboard/settings", methods=["GET"])
-    @checked
-    async def settings_index(request: Request, rec) -> Response:
-        return index_page(rec, D._flash(request))
-
-    @mcp.custom_route("/dashboard/settings/server", methods=["GET"])
-    @checked
-    async def settings_server(request: Request, rec) -> Response:
-        return server_page(rec)
-
-    @mcp.custom_route("/dashboard/settings/{slug}", methods=["GET"])
-    @checked
-    async def settings_group(request: Request, rec) -> Response:
-        g = next((x for x in GROUPS if x.slug == request.path_params["slug"]), None)
-        if g is None:
-            return d.message(rec, "Not found", "There is no such settings page.", 404)
-        return group_page(rec, g)
-
-    # A change that weakens protection waits here while the owner confirms it's them, so it need not be entered again.
-    held: dict[str, tuple[float, str, str, dict[str, str]]] = {}     # session csrf -> (when, group slug, "save" | "reset", form)
-
-    def hold(rec: dict[str, Any], g: Group, action: str, form: dict[str, str], lede: str) -> Response:
-        while len(held) > 200:
-            held.pop(next(iter(held)))
-        held[rec["csrf"]] = (time.time(), g.slug, action, form)
-        return d.confirm(rec, f"/dashboard/settings/{g.slug}/confirmed", lede)
-
     def read_form(g: Group, form: dict[str, str], stored: dict[str, str]):
         if g.slug == "mail" and form.get("SEND_MODE") in ("drafts", "approval", "direct"):
             mode = form.get("SEND_MODE")
@@ -562,129 +375,17 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
                 looser.append(sp)
         return new, changes, looser, entered, typed, errors
 
-    async def save(rec: dict[str, Any], g: Group, form: dict[str, str]) -> Response:
-        new, changes, looser, entered, typed, errors = read_form(g, form, store.read())
-        if errors:
-            first = next(iter(errors.values()))
-            more = f" ({len(errors) - 1} more marked below)" if len(errors) > 1 else ""
-            return group_page(rec, g, f"Not saved: {first}{more}", True, 400, entered, typed, errors)
-        if not changes:
-            return group_page(rec, g, "Nothing changed.")
-        if looser and not d.recent(rec):
-            return hold(rec, g, "save", form, "This change weakens protection (" + ", ".join(sp.label for sp in looser)
-                        + "), so it asks you to sign in again. It is saved as soon as you have.")
-        if problem := await asyncio.to_thread(validate, new, known_tools()):
-            key, why = problem
-            return group_page(rec, g, f"Not saved: {why}", True, 400, entered, errors={key: why} if key else None)
-        store.update({sp.key: v for sp, _, v in changes})
-        state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), ok=True,
-                       summary=f"Changed {g.title.lower()} settings: " + ", ".join(f"{sp.label} {display(sp, o)} → {display(sp, v)}" for sp, o, v in changes),
-                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser])
-        log.warning("Owner changed %s from the dashboard; they apply after a restart", ", ".join(sp.key for sp, _, _ in changes))
-        return RedirectResponse("/dashboard/settings?m=settings_saved", status_code=303, headers=D._HEADERS)
-
-    async def reset(rec: dict[str, Any], g: Group, key: str) -> Response:
-        stored = store.read()
-        if key not in stored or key not in {sp.key for sp in g.specs}:
-            return d.message(rec, "Not found", "That setting was not changed here.", 404)
-        sp = SPECS[key]
-        new = {k: v for k, v in stored.items() if k != key}
-        back, _ = current(key, new)
-        if sp.loosens and sp.loosens(stored[key], back) and not d.recent(rec):
-            return hold(rec, g, "reset", {"key": key}, "Going back to the server's value weakens protection, so it asks you to sign in "
-                        "again. It is reset as soon as you have.")
-        if problem := await asyncio.to_thread(validate, new, known_tools()):
-            return group_page(rec, g, f"Not reset: {problem[1]}", True, 400)
-        store.update(remove=(key,))
-        state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""),
-                       summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key])
-        return group_page(rec, g, f"{sp.label} now follows the server again ({display(sp, back)}). Restart to apply.")
-
     def group_for(request: Request) -> Group | None:
         g = next((x for x in GROUPS if x.slug == request.path_params["slug"]), None)
         return g if g is not None and editable else None
 
-    # Registered before /dashboard/settings/{slug}: routes match in order, and "restart" would be taken for a group name.
-    @mcp.custom_route("/dashboard/settings/restart", methods=["POST"])
-    async def restart(request: Request) -> Response:
-        got = await d.checked_form(request)
-        if isinstance(got, Response):
-            return got
-        rec = got[1]
-        d.audit.record("server.restart", actor="owner", via=rec.get("via", ""), summary="Restarted the server to apply settings")
-        log.warning("Owner asked for a restart from the dashboard")
-        threading.Timer(0.7, d.exit_fn).start()           # after the page has gone out; Docker or launchd starts it again
-        return d.page("Restarting", "settings", D.card("Restarting", D.hint("The server starts again in about half a minute. "
-                                                                             "Reload this page then."), D.link_button("Reload", "/dashboard/settings")),
-                      rec, lede="")
+    @mcp.custom_route("/dashboard/settings", methods=["GET"])
+    async def settings_old_address(_: Request) -> Response:
+        return RedirectResponse("/dashboard#/settings", status_code=303, headers=D._HEADERS)
 
-    @mcp.custom_route("/dashboard/settings/{slug}", methods=["POST"])
-    async def settings_save(request: Request) -> Response:
-        got = await d.checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        g = group_for(request)
-        if g is None:
-            return d.message(rec, "Not allowed", "These settings cannot be changed here.", 403)
-        return await save(rec, g, {k: str(v) for k, v in form.items() if k != "csrf"})
-
-    @mcp.custom_route("/dashboard/settings/{slug}/reset", methods=["POST"])
-    async def settings_reset(request: Request) -> Response:
-        got = await d.checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        g = group_for(request)
-        if g is None:
-            return d.message(rec, "Not found", "That setting was not changed here.", 404)
-        return await reset(rec, g, str(form.get("key", "")))
-
-    @mcp.custom_route("/dashboard/settings/{slug}/confirmed", methods=["GET"])
-    @checked
-    async def settings_confirmed(request: Request, rec) -> Response:
-        """Where the confirm card returns to, after signing in again or after Cancel. Only a change this session submitted
-        itself (with its CSRF token) in the last ten minutes is applied, once."""
-        g = group_for(request)
-        item = held.pop(rec["csrf"], None)
-        if g is None or item is None or item[1] != g.slug or time.time() - item[0] > 600:
-            return RedirectResponse(f"/dashboard/settings/{request.path_params['slug']}", status_code=303, headers=D._HEADERS)
-        _, _, action, form = item
-        if not d.recent(rec):                                    # Cancel: show the change again, unsaved
-            if action == "reset":
-                return group_page(rec, g, "Not reset: it was not confirmed.", True)
-            _, _, _, entered, typed, _ = read_form(g, form, store.read())
-            return group_page(rec, g, "Not saved: it was not confirmed. Save again to confirm.", True, 200, entered, typed)
-        return await (save(rec, g, form) if action == "save" else reset(rec, g, form.get("key", "")))
-
-    @mcp.custom_route("/dashboard/settings/accounts/app-password", methods=["POST"])
-    async def app_password(request: Request) -> Response:
-        got = await d.checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        g = next(x for x in GROUPS if x.slug == "accounts")
-        if not editable:
-            return d.message(rec, "Not allowed", "These settings cannot be changed here.", 403)
-        if not d.recent(rec):
-            return d.confirm(rec, "/dashboard/settings/accounts", "Replacing the app password asks you to sign in again.")
-        value = str(form.get("password", "")).replace(" ", "").replace("-", "")
-        if len(value) != 16:
-            return group_page(rec, g, "An app-specific password has 16 letters, like abcd-efgh-ijkl-mnop.", True, 400)
-        value = "-".join(value[i:i + 4] for i in range(0, 16, 4))
-        from .mail import MailService
-        try:
-            c = await asyncio.to_thread(MailService(dataclasses.replace(s, app_password=value))._login)
-            await asyncio.to_thread(c.logout)
-        except Exception:  # noqa: BLE001 - the reason can quote the account; say only that it failed
-            return group_page(rec, g, "iCloud did not accept this password. Nothing was changed.", True, 400)
-        from .admin import save_override
-        save_override(s.data_dir, "icloud_app_password", value)
-        state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary="Replaced the iCloud app-specific password")
-        return RedirectResponse("/dashboard/settings?m=settings_saved", status_code=303, headers=D._HEADERS)
+    @mcp.custom_route("/dashboard/settings/{rest:path}", methods=["GET"])
+    async def settings_old_pages(_: Request) -> Response:
+        return RedirectResponse("/dashboard#/settings", status_code=303, headers=D._HEADERS)
 
     # -- JSON for the Ionic app (dashboard_api.py has the guards) ------------------------------------------------------
     def spec_json(sp: Spec, stored: dict[str, str]) -> dict[str, Any]:

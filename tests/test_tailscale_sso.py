@@ -17,7 +17,7 @@ class Req:
 
 @pytest.mark.parametrize("host, login, expected", [
     ("127.0.0.1", OWNER, OWNER),                 # the proxy on the same host
-    ("172.20.0.5", OWNER.upper(), OWNER),        # inside the proxy's network range, any case
+    ("198.51.100.5", OWNER.upper(), OWNER),      # inside the proxy's network range, any case
     ("::ffff:127.0.0.1", OWNER, OWNER),          # IPv4 seen through an IPv6 socket
     ("100.64.1.2", OWNER, None),                 # someone else in the tailnet sending the header themselves
     ("127.0.0.1", "stranger@example.org", None), # the proxy, but a login that is not the owner's
@@ -25,7 +25,7 @@ class Req:
     (None, OWNER, None),
 ])
 def test_the_header_counts_only_from_a_trusted_proxy_and_for_an_owner_login(host, login, expected):
-    ts = access_sso.TailscaleOwner((OWNER,), ("127.0.0.1", "172.20.0.0/16"))
+    ts = access_sso.TailscaleOwner((OWNER,), ("127.0.0.1", "198.51.100.0/24"))
     assert ts.owner(Req(login, host)) == expected
 
 
@@ -46,15 +46,15 @@ async def test_the_dashboard_signs_the_owner_in_through_the_trusted_proxy_only(w
     app, mcp, *_ = web(OWNER_TAILSCALE_LOGINS=OWNER, TRUSTED_PROXY_IPS="127.0.0.1")
     headers = {"tailscale-user-login": OWNER}
     async with client_from(app, "100.64.9.9") as c:          # straight from the tailnet, header made up by the client
-        r = await c.get("/dashboard/signin", headers=headers)
-        assert r.status_code == 200 and "Sign in" in r.text
-        assert (await c.get("/dashboard")).status_code == 303
+        r = await c.get("/dashboard", headers=headers)
+        assert r.status_code == 200 and "set-cookie" not in r.headers
+        assert (await c.get("/dashboard/api/session")).json()["signed_in"] is False
     async with client_from(app, "127.0.0.1") as c:
-        r = await c.get("/dashboard/signin", headers={"tailscale-user-login": "stranger@example.org"})
-        assert r.status_code == 200 and "Sign in" in r.text
-        r = await c.get("/dashboard/signin", headers=headers)
-        assert r.status_code == 303 and r.headers["location"] == "/dashboard"
-        assert (await c.get("/dashboard")).status_code == 200
+        r = await c.get("/dashboard", headers={"tailscale-user-login": "stranger@example.org"})
+        assert "set-cookie" not in r.headers
+        r = await c.get("/dashboard", headers=headers)
+        assert r.status_code == 200 and "set-cookie" in r.headers
+        assert (await c.get("/dashboard/api/session")).json()["signed_in"] is True
     entries = mcp._icloud_dashboard.audit.entries(limit=5)
     assert any(e.get("via") == f"Tailscale ({OWNER})" for e in entries)
 
@@ -66,7 +66,7 @@ async def test_outbox_and_connect_page_take_the_tailscale_owner(web):
         assert r.status_code == 200 and f"Signed in as {OWNER}" in r.text
         r = await c.get("/outbox", headers={"tailscale-user-login": "stranger@example.org"})
         assert f"Signed in as" not in r.text
-    async with client_from(app, "10.0.0.7") as c:
+    async with client_from(app, "203.0.113.7") as c:
         r = await c.get("/outbox", headers={"tailscale-user-login": OWNER})
         assert "Signed in as" not in r.text
 

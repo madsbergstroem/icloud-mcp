@@ -53,6 +53,7 @@ class Outbox:
         self.ttl, self.max_items = ttl, max_items
         self._lock = threading.RLock()
         self._items: dict[str, QueuedMessage] = {}
+        self.on_new: Any = None            # called with each newly queued item (the dashboard's push note), never on a repeat
         self._load()
 
     # -- persistence ---------------------------------------------------------
@@ -106,7 +107,12 @@ class Outbox:
             q = QueuedMessage(secrets.token_urlsafe(12), now, now + self.ttl, raw, recipients, followup, sha, key)
             self._items[q.id] = q
             self._save()
-            return q
+        if self.on_new is not None:
+            try:
+                self.on_new(q)
+            except Exception:  # noqa: BLE001  -- a failed note must never fail the queueing
+                pass
+        return q
 
     def pending(self) -> list[QueuedMessage]:
         with self._lock:

@@ -5,6 +5,16 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **The dashboard is an app (fork).** `/dashboard` is now an Ionic Core app with three tabs, Today, Activity and Settings,
+  that talks to a JSON API under `/dashboard/api`. A request opens with its message, its attachments in a preview and,
+  when a file is missing, the place to add it. Settings shows each area once, splits iCloud from the areas that work
+  through the Mac and says whether the Mac helper is online. The old pages are gone; their addresses lead into the app,
+  and tools now link one request as `approve_at`: `/dashboard#/item/<kind>:<id>`. Ionic is vendored under
+  `static/vendor`; the rules for the look are in `docs/DESIGN.md`.
+- **Push notes (fork).** A device can get a note when something waits for approval or a waiting mail got its file. The
+  note says only what kind of item waits and is encrypted for the device (RFC 8291) and signed with the server's own
+  VAPID key, both in `DATA_DIR/push.json`.
+
 - **A mail can wait for a file.** An attachment with only a `filename` and no `content_base64` makes the mail wait for that
   file, also with `SEND_REQUIRES_APPROVAL=false`. The tool result gives the owner a link to `/dashboard/attach/<id>`, where
   they drop or choose the file and send the mail, and gives the agent an `upload_url` per file, so an agent with a shell can

@@ -147,9 +147,10 @@ async def test_the_dashboard_signs_the_owner_in_through_access(tmp_path, monkeyp
     mcp, _ = create_server(s)
     app = build_app(s, mcp)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://mcp.example.com", follow_redirects=False) as c:
-        r = await c.get("/dashboard/signin?next=/dashboard/approvals")
-        assert r.status_code == 200 and "Owner password" in r.text                 # no token: the normal sign-in
-        r = await c.get("/dashboard/signin?next=/dashboard/approvals", headers={"cf-access-jwt-assertion": "good"})
-        assert r.status_code == 303 and r.headers["location"] == "/dashboard/approvals" and "__Host-icloud-dashboard" in r.headers["set-cookie"]
-        assert (await c.get("/dashboard/approvals")).status_code == 200
+        r = await c.get("/dashboard")
+        assert r.status_code == 200 and "set-cookie" not in r.headers                # no token: the app asks for the password
+        assert (await c.get("/dashboard/api/session")).json()["signed_in"] is False
+        r = await c.get("/dashboard", headers={"cf-access-jwt-assertion": "good"})
+        assert r.status_code == 200 and "__Host-icloud-dashboard" in r.headers["set-cookie"]
+        assert (await c.get("/dashboard/api/session")).json()["signed_in"] is True
     assert mcp._icloud_dashboard.audit.entries()[0]["action"] == "signin.access"

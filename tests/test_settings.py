@@ -1,11 +1,25 @@
-"""Settings on the dashboard: stored in DATA_DIR/settings.json, only what DASHBOARD_EDITABLE allows, checked before saving,
+"""Settings on the dashboard (GET/POST /dashboard/api/settings): stored in DATA_DIR/settings.json, only what DASHBOARD_EDITABLE allows, checked before saving,
 and a change that weakens protection asks for the owner again."""
 import json
 
 
 from icloud_mcp.config import DASHBOARD_EDITABLE, Settings
 
-from test_dashboard import SAME, client, signed_in, web  # noqa: F401  (the web fixture)
+from test_dashboard import PASSWORD, SAME, client, signed_in, web  # noqa: F401  (the web fixture)
+
+
+def api(token):
+    return {**SAME, "x-csrf": token}
+
+
+def stale(d):
+    for rec in d.sessions._items.values():
+        rec["auth_at"] -= 600
+
+
+def field(st, slug, key):
+    g = next(g for g in st["groups"] if g["slug"] == slug)
+    return next(f for f in g["fields"] if f["key"] == key)
 
 
 def test_dashboard_values_win_over_the_environment_but_only_for_editable_keys(tmp_path, monkeypatch):
@@ -26,19 +40,32 @@ async def test_a_change_is_saved_converted_and_logged(web):  # noqa: F811
     app, mcp, _, _ = web()
     async with client(app) as c:
         token = await signed_in(c)
-        page = (await c.get("/dashboard/settings/mail")).text
-        assert 'name="MAX_ATTACHMENT_BYTES"' in page and 'value="5"' in page and "Default" not in page   # only non-default origins are named
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data={
-            "csrf": token, "ALLOW_SEND": "true", "SEND_REQUIRES_APPROVAL": "true", "SAVE_SENT_COPY": "true",
-            "MAX_RECIPIENTS": "25", "MAIL_MAX_AGE_DAYS": "0", "MAX_BODY_CHARS": "30000", "MAX_ATTACHMENT_BYTES": "20",
-            "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""})
-        assert r.status_code == 303 and r.headers["location"] == "/dashboard/settings?m=settings_saved"
+        st = (await c.get("/dashboard/api/settings")).json()
+        f = field(st, "mail", "MAX_ATTACHMENT_BYTES")
+        assert st["editable"] is True and f["value"] == "5" and f["source"] == "default" and f["set_here"] is False
+        assert st["restart_needed"] is False
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_ATTACHMENT_BYTES": "20"}})
+        assert r.status_code == 200 and r.json()["restart_needed"] is True
         stored = json.loads((mcp._icloud_dashboard.sessions.path.parent / "settings.json").read_text())
-        assert stored == {"MAX_ATTACHMENT_BYTES": str(20 * 1024 * 1024)}
-        page = (await c.get("/dashboard/settings")).text
-        assert "Restart to apply" in page and " changed</span>" not in page   # no badge: the restart card says it
+        assert stored == {"MAX_ATTACHMENT_BYTES": str(20 * 1024 * 1024)}                 # only what changed, in bytes
+        st = (await c.get("/dashboard/api/settings")).json()
+        f = field(st, "mail", "MAX_ATTACHMENT_BYTES")
+        assert st["restart_needed"] is True and f["value"] == "20" and f["source"] == "dashboard" and f["set_here"] is True
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_ATTACHMENT_BYTES": 20}})
+        assert r.json()["note"] == "Nothing changed."
     entry = mcp._icloud_dashboard.audit.entries()[0]
     assert entry["action"] == "settings.changed" and "Largest attachment 5 MiB → 20 MiB" in entry["summary"]
+
+
+async def test_writes_need_the_csrf_token_and_this_origin(web):  # noqa: F811
+    app, mcp, _, _ = web()
+    async with client(app) as c:
+        assert (await c.get("/dashboard/api/settings")).status_code == 401
+        token = await signed_in(c)
+        body = {"values": {"MAX_RECIPIENTS": "3"}}
+        assert (await c.post("/dashboard/api/settings/mail", headers=SAME, json=body)).status_code == 403
+        assert (await c.post("/dashboard/api/settings/mail", headers={**api(token), "origin": "https://evil.example.net"}, json=body)).status_code == 403
+    assert not (mcp._icloud_dashboard.sessions.path.parent / "settings.json").exists()
 
 
 async def test_weakening_protection_asks_again(web):  # noqa: F811
@@ -46,92 +73,43 @@ async def test_weakening_protection_asks_again(web):  # noqa: F811
     d = mcp._icloud_dashboard
     async with client(app) as c:
         token = await signed_in(c)
-        for rec in d.sessions._items.values():
-            rec["auth_at"] -= 600
-        form = {"csrf": token, "ALLOW_SEND": "true", "SAVE_SENT_COPY": "true", "MAX_RECIPIENTS": "25", "MAIL_MAX_AGE_DAYS": "0",
-                "MAX_BODY_CHARS": "30000", "MAX_ATTACHMENT_BYTES": "5", "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""}
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data=form)            # SEND_REQUIRES_APPROVAL unticked
-        assert "Confirm it’s you" in r.text and "Send only after my approval" in r.text and "saved as soon as you have" in r.text
-        assert 'name="next" value="/dashboard/settings/mail/confirmed"' in r.text
+        stale(d)
+        body = {"values": {"SEND_REQUIRES_APPROVAL": False}}
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json=body)
+        assert r.status_code == 403 and r.json()["confirm"] is True
         assert not (d.sessions.path.parent / "settings.json").exists()
-        r = await c.post("/dashboard/signin", headers=SAME,
-                         data={"csrf": token, "password": "correct-horse-battery", "next": "/dashboard/settings/mail/confirmed"})
-        assert r.headers["location"] == "/dashboard/settings/mail/confirmed"
-        r = await c.get("/dashboard/settings/mail/confirmed")                          # the held change, without entering it again
-        assert r.status_code == 303 and r.headers["location"] == "/dashboard/settings?m=settings_saved"
-        assert (await c.get("/dashboard/settings/mail/confirmed")).headers["location"] == "/dashboard/settings/mail"   # only once
+        r = await c.post("/dashboard/api/signin", headers=api(token), json={"password": PASSWORD})
+        assert r.status_code == 200 and r.json()["confirmed"] is True
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json=body)       # the app repeats the call
+        assert r.status_code == 200
     assert json.loads((d.sessions.path.parent / "settings.json").read_text()) == {"SEND_REQUIRES_APPROVAL": "false"}
     assert d.audit.entries()[0]["details"]["weakened"] == ["SEND_REQUIRES_APPROVAL"]
 
 
-async def test_cancelling_the_confirmation_saves_nothing_but_keeps_the_change_on_screen(web):  # noqa: F811
+async def test_a_stricter_change_does_not_ask_again(web):  # noqa: F811
     app, mcp, _, _ = web()
     d = mcp._icloud_dashboard
     async with client(app) as c:
         token = await signed_in(c)
-        for rec in d.sessions._items.values():
-            rec["auth_at"] -= 600
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data={
-            "csrf": token, "SEND_MODE": "direct", "SAVE_SENT_COPY": "true", "MAX_RECIPIENTS": "25", "MAIL_MAX_AGE_DAYS": "0",
-            "MAX_BODY_CHARS": "30000", "MAX_ATTACHMENT_BYTES": "7", "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""})
-        assert "Confirm it’s you" in r.text
-        r = await c.get("/dashboard/settings/mail/confirmed")                          # Cancel leads here without signing in again
-        assert r.status_code == 200 and "it was not confirmed" in r.text
-        assert 'name="SEND_MODE" value="direct" checked' in r.text and 'value="7"' in r.text
-    assert not (d.sessions.path.parent / "settings.json").exists()
-
-
-async def test_a_held_change_belongs_to_the_session_that_made_it(web):  # noqa: F811
-    app, mcp, _, _ = web()
-    d = mcp._icloud_dashboard
-    async with client(app) as a, client(app) as b:
-        token = await signed_in(a)
-        await signed_in(b)
-        for rec in d.sessions._items.values():
-            rec["auth_at"] -= 600
-        await a.post("/dashboard/settings/mail", headers=SAME, data={
-            "csrf": token, "SEND_MODE": "direct", "SAVE_SENT_COPY": "true", "MAX_RECIPIENTS": "25", "MAIL_MAX_AGE_DAYS": "0",
-            "MAX_BODY_CHARS": "30000", "MAX_ATTACHMENT_BYTES": "5", "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""})
-        for rec in d.sessions._items.values():
-            rec["auth_at"] = rec["auth_at"] + 600
-        r = await b.get("/dashboard/settings/mail/confirmed")
-        assert r.headers["location"] == "/dashboard/settings/mail"
-    assert not (d.sessions.path.parent / "settings.json").exists()
+        stale(d)
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_ATTACHMENT_BYTES": "2"}})
+        assert r.status_code == 200
+    assert json.loads((d.sessions.path.parent / "settings.json").read_text()) == {"MAX_ATTACHMENT_BYTES": str(2 * 1024 * 1024)}
 
 
 async def test_values_the_server_could_not_start_with_are_refused(web):  # noqa: F811
     app, mcp, _, _ = web()
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.post("/dashboard/settings/calendar", headers=SAME, data={
-            "csrf": token, "DEFAULT_TIMEZONE": "Mars/Olympus", "DEFAULT_CALENDAR": "", "ALLOW_CALENDAR_INVITES": "false",
-            "INVITE_ALLOWLIST": "", "MAX_ATTENDEES": "10", "OWNER_ADDRESSES": ""})
-        assert r.status_code == 400 and "not a time zone" in r.text
-        r = await c.post("/dashboard/settings/areas", headers=SAME, data={
-            "csrf": token, "ENABLE_MAIL": "true", "ENABLE_CALENDAR": "true", "ENABLE_CONTACTS": "true", "TOOLS": "mail,no_such_tool"})
-        assert r.status_code == 400 and "no_such_tool" in r.text
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data={"csrf": token, "MAX_RECIPIENTS": "abc"})
-        assert r.status_code == 400 and "enter a number" in r.text
-    assert not (mcp._icloud_dashboard.sessions.path.parent / "settings.json").exists()
-
-
-async def test_a_refused_save_keeps_what_was_typed_and_marks_the_field(web):  # noqa: F811
-    app, mcp, _, _ = web()
-    async with client(app) as c:
-        token = await signed_in(c)
-        r = await c.post("/dashboard/settings/calendar", headers=SAME, data={
-            "csrf": token, "DEFAULT_TIMEZONE": "Mars/Olympus", "DEFAULT_CALENDAR": "Club", "ALLOW_CALENDAR_INVITES": "false",
-            "INVITE_ALLOWLIST": "jana@example.org", "MAX_ATTENDEES": "4", "OWNER_ADDRESSES": ""})
-        assert r.status_code == 400
-        assert 'value="Mars/Olympus" autocomplete="off" aria-invalid="true" aria-describedby="f-default_timezone-err"' in r.text
-        assert 'value="Club"' in r.text and 'value="jana@example.org"' in r.text and 'value="4"' in r.text
-        assert 'name="ALLOW_CALENDAR_INVITES" value="false" checked' in r.text
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data={
-            "csrf": token, "SEND_MODE": "drafts", "SAVE_SENT_COPY": "true", "MAX_RECIPIENTS": "abc", "MAIL_MAX_AGE_DAYS": "0",
-            "MAX_BODY_CHARS": "30000", "MAX_ATTACHMENT_BYTES": "9999", "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""})
-        assert r.status_code == 400 and "(1 more marked below)" in r.text
-        assert 'value="abc"' in r.text and 'value="9999"' in r.text and r.text.count('aria-invalid="true"') == 2
-        assert 'name="SEND_MODE" value="drafts" checked' in r.text
+        r = await c.post("/dashboard/api/settings/calendar", headers=api(token), json={"values": {"DEFAULT_TIMEZONE": "Mars/Olympus"}})
+        assert r.status_code == 400 and "not a time zone" in r.json()["fields"]["DEFAULT_TIMEZONE"]
+        r = await c.post("/dashboard/api/settings/areas", headers=api(token), json={"values": {"TOOLS": "mail,no_such_tool"}})
+        assert r.status_code == 400 and "no_such_tool" in r.json()["error"]
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_RECIPIENTS": "abc"}})
+        assert r.status_code == 400 and "enter a number" in r.json()["fields"]["MAX_RECIPIENTS"]
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token),
+                         json={"values": {"MAX_RECIPIENTS": "abc", "MAX_ATTACHMENT_BYTES": "9999"}})
+        assert r.status_code == 400 and set(r.json()["fields"]) == {"MAX_RECIPIENTS", "MAX_ATTACHMENT_BYTES"}   # every field named
     assert not (mcp._icloud_dashboard.sessions.path.parent / "settings.json").exists()
 
 
@@ -141,31 +119,41 @@ async def test_reset_goes_back_to_the_environment(web):  # noqa: F811
     path.write_text(json.dumps({"DEFAULT_TIMEZONE": "Asia/Tokyo"}))
     async with client(app) as c:
         token = await signed_in(c)
-        page = (await c.get("/dashboard/settings/calendar")).text
-        assert "Asia/Tokyo" in page and page.count("Set here") == 1                 # the card with Reset, no note at the field
-        assert "· Set here" not in page
-        r = await c.post("/dashboard/settings/calendar/reset", headers=SAME, data={"csrf": token, "key": "DEFAULT_TIMEZONE"})
-        assert "follows the server again (Europe/Berlin)" in r.text
+        f = field((await c.get("/dashboard/api/settings")).json(), "calendar", "DEFAULT_TIMEZONE")
+        assert f["value"] == "Asia/Tokyo" and f["source"] == "dashboard" and f["set_here"] is True
+        r = await c.post("/dashboard/api/settings/calendar/reset", headers=api(token), json={"key": "DEFAULT_TIMEZONE"})
+        assert r.status_code == 200 and "follows the server again (Europe/Berlin)" in r.json()["note"]
+        r = await c.post("/dashboard/api/settings/calendar/reset", headers=api(token), json={"key": "DEFAULT_TIMEZONE"})
+        assert r.status_code == 404                                                    # nothing set here any more
     assert json.loads(path.read_text()) == {}
 
 
-async def test_view_only_and_the_server_page(web):  # noqa: F811
+async def test_view_only_shows_but_does_not_change(web):  # noqa: F811
     app, mcp, _, _ = web(DASHBOARD_SETTINGS="view")
+    path = mcp._icloud_dashboard.sessions.path.parent / "settings.json"
     async with client(app) as c:
         token = await signed_in(c)
-        page = (await c.get("/dashboard/settings/mail")).text
-        assert " disabled" in page and 'action="/dashboard/settings/mail"' not in page
-        r = await c.post("/dashboard/settings/mail", headers=SAME, data={"csrf": token, "MAX_RECIPIENTS": "3"})
+        st = (await c.get("/dashboard/api/settings")).json()
+        assert st["editable"] is False and field(st, "mail", "MAX_RECIPIENTS")["value"]
+        server = {label: value for sec in st["server"] for label, value in sec["rows"]}
+        assert "https://mcp.example.com" in server.values()
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_RECIPIENTS": "3"}})
         assert r.status_code == 403
-        page = (await c.get("/dashboard/settings/server")).text
-        assert '<span class="row-value">https://mcp.example.com</span>' in page and "<form" not in page.split("<main>")[1].split("</main>")[0]
+        r = await c.post("/dashboard/api/settings/mail/reset", headers=api(token), json={"key": "MAX_RECIPIENTS"})
+        assert r.status_code == 404
+        r = await c.post("/dashboard/api/settings/accounts/app-password", headers=api(token), json={"password": "abcd-efgh-ijkl-mnop"})
+        assert r.status_code == 403
+    assert not path.exists()
 
 
 async def test_settings_can_be_left_out(web):  # noqa: F811
     app, *_ = web(DASHBOARD_SETTINGS="off")
     async with client(app) as c:
-        await signed_in(c)
-        assert (await c.get("/dashboard/settings")).status_code == 404
+        token = await signed_in(c)
+        assert (await c.get("/dashboard/api/session")).json()["settings"] is False
+        assert (await c.get("/dashboard/api/settings")).status_code == 404
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"MAX_RECIPIENTS": "3"}})
+        assert r.status_code == 404
 
 
 async def test_the_sending_choice_sets_both_switches(web):  # noqa: F811
@@ -173,31 +161,36 @@ async def test_the_sending_choice_sets_both_switches(web):  # noqa: F811
     path = mcp._icloud_dashboard.sessions.path.parent / "settings.json"
     async with client(app) as c:
         token = await signed_in(c)
-        page = (await c.get("/dashboard/settings/mail")).text
-        assert 'name="SEND_MODE" value="approval" checked' in page and 'name="ALLOW_SEND"' not in page
-        base = {"csrf": token, "SAVE_SENT_COPY": "true", "MAX_RECIPIENTS": "25", "MAIL_MAX_AGE_DAYS": "0", "MAX_BODY_CHARS": "30000",
-                "MAX_ATTACHMENT_BYTES": "5", "OUTBOX_TTL_SECONDS": "24", "OUTBOX_MAX": "20", "SEND_ALLOWLIST": ""}
-        assert (await c.post("/dashboard/settings/mail", headers=SAME, data={**base, "SEND_MODE": "drafts"})).status_code == 303
+        st = (await c.get("/dashboard/api/settings")).json()
+        mail = next(g for g in st["groups"] if g["slug"] == "mail")
+        assert mail["send_mode"] == "approval" and "ALLOW_SEND" not in {f["key"] for f in mail["fields"]}   # one choice, not two switches
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"ALLOW_SEND": False, "SEND_REQUIRES_APPROVAL": True}})
+        assert r.status_code == 200                                                   # drafts
         assert json.loads(path.read_text()) == {"ALLOW_SEND": "false"}
-        assert (await c.post("/dashboard/settings/mail", headers=SAME, data={**base, "SEND_MODE": "direct"})).status_code == 303
+        st = (await c.get("/dashboard/api/settings")).json()
+        assert next(g for g in st["groups"] if g["slug"] == "mail")["send_mode"] == "drafts"
+        r = await c.post("/dashboard/api/settings/mail", headers=api(token), json={"values": {"ALLOW_SEND": True, "SEND_REQUIRES_APPROVAL": False}})
+        assert r.status_code == 200                                                   # direct (the sign-in is recent)
         assert json.loads(path.read_text()) == {"ALLOW_SEND": "true", "SEND_REQUIRES_APPROVAL": "false"}
+        st = (await c.get("/dashboard/api/settings")).json()
+        assert next(g for g in st["groups"] if g["slug"] == "mail")["send_mode"] == "direct"
 
 
-async def test_a_reset_that_weakens_protection_is_applied_after_confirming(web):  # noqa: F811
+async def test_a_reset_that_weakens_protection_needs_a_fresh_sign_in(web):  # noqa: F811
     app, mcp, _, _ = web(SEND_REQUIRES_APPROVAL="false")
     d = mcp._icloud_dashboard
     path = d.sessions.path.parent / "settings.json"
     path.write_text(json.dumps({"SEND_REQUIRES_APPROVAL": "true"}))
     async with client(app) as c:
         token = await signed_in(c)
-        for rec in d.sessions._items.values():
-            rec["auth_at"] -= 600
-        r = await c.post("/dashboard/settings/mail/reset", headers=SAME, data={"csrf": token, "key": "SEND_REQUIRES_APPROVAL"})
-        assert "Confirm it’s you" in r.text and "reset as soon as you have" in r.text
-        await c.post("/dashboard/signin", headers=SAME, data={"csrf": token, "password": "correct-horse-battery",
-                                                              "next": "/dashboard/settings/mail/confirmed"})
-        r = await c.get("/dashboard/settings/mail/confirmed")
-        assert "now follows the server again" in r.text
+        stale(d)
+        body = {"key": "SEND_REQUIRES_APPROVAL"}
+        r = await c.post("/dashboard/api/settings/mail/reset", headers=api(token), json=body)
+        assert r.status_code == 403 and r.json()["confirm"] is True
+        assert json.loads(path.read_text()) == {"SEND_REQUIRES_APPROVAL": "true"}
+        await c.post("/dashboard/api/signin", headers=api(token), json={"password": PASSWORD})
+        r = await c.post("/dashboard/api/settings/mail/reset", headers=api(token), json=body)
+        assert r.status_code == 200 and "now follows the server again" in r.json()["note"]
     assert json.loads(path.read_text()) == {}
 
 
@@ -209,8 +202,9 @@ async def test_restart_now_restarts_the_server(web):  # noqa: F811
     d.exit_fn = done.set
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.post("/dashboard/settings/restart", headers=SAME, data={"csrf": token})
-        assert r.status_code == 200 and "Restarting" in r.text and "cannot be changed here" not in r.text
+        assert (await c.post("/dashboard/api/settings/restart", headers=SAME)).status_code == 403 and not done.wait(1)
+        r = await c.post("/dashboard/api/settings/restart", headers=api(token))
+        assert r.status_code == 200 and "Restarting" in r.json()["note"]
     assert done.wait(3)
     assert d.audit.entries()[0]["action"] == "server.restart"
 

@@ -1,0 +1,121 @@
+/* The dashboard app. Ionic Core draws every control; this file maps our tokens onto Ionic's variables and sets the few
+   pieces of our own (the greeting, the live line, the mail card, the missing-file slot). docs/DESIGN.md has the rules. */
+:root {
+  --ground: #f3f4f5; --surface: #ffffff; --raised: #f7f8f9; --active: #e6e9ec;
+  --border: #e5e8eb; --rule: #eef0f2; --control: #cfd5da;
+  --text: #1d2226; --muted: #5d666e;
+  --fog: #4f5d6a;
+  --positive: #247b50; --negative: #b3263a; --neg-bg: #fdecee; --neg-ink: #7f1d2b;
+  --note-bg: #fff8e6; --note-ink: #7a4b0a; --ok-bg: #e4f3ea; --ok-ink: #1d4d33;
+  --serif: ui-serif, "New York", Georgia, serif;
+  --radius: 16px;
+
+  --ion-font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --ion-background-color: var(--ground);
+  --ion-background-color-rgb: 243, 244, 245;
+  --ion-text-color: var(--text);
+  --ion-text-color-rgb: 29, 34, 38;
+  --ion-item-background: var(--surface);
+  --ion-toolbar-background: var(--ground);
+  --ion-tab-bar-background: var(--surface);
+  --ion-tab-bar-color: var(--muted);
+  --ion-tab-bar-color-selected: var(--text);
+  --ion-border-color: var(--rule);
+  --ion-color-primary: #4f5d6a; --ion-color-primary-rgb: 79, 93, 106; --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255; --ion-color-primary-shade: #46525d; --ion-color-primary-tint: #616d79;
+  --ion-color-danger: #b3263a; --ion-color-danger-rgb: 179, 38, 58; --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255; --ion-color-danger-shade: #9e2133; --ion-color-danger-tint: #bb3c4e;
+  --ion-color-success: #247b50; --ion-color-success-rgb: 36, 123, 80; --ion-color-success-contrast: #ffffff;
+  --ion-color-success-contrast-rgb: 255, 255, 255; --ion-color-success-shade: #206c46; --ion-color-success-tint: #3a8862;
+  --ion-color-medium: #5d666e; --ion-color-medium-rgb: 93, 102, 110; --ion-color-medium-contrast: #ffffff;
+  --ion-color-medium-contrast-rgb: 255, 255, 255; --ion-color-medium-shade: #525a61; --ion-color-medium-tint: #6d757d;
+}
+
+.num { font-variant-numeric: tabular-nums; }
+ion-content { --padding-bottom: 24px; }
+
+/* the one serif: each screen's title */
+.title { padding: 18px 20px 2px; }
+.title h1 { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.1; letter-spacing: -0.015em; margin: 0; }
+.title p { margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.fresh { display: flex; align-items: center; gap: 6px; padding: 6px 20px 0; color: var(--muted); font-size: 13px; }
+.fresh i { width: 7px; height: 7px; border-radius: 50%; background: #3f8a62; display: inline-block; }
+.fresh.off i { background: #b07a1d; }
+
+/* section heads and inset lists */
+ion-list-header.sec { --background: transparent; padding-top: 18px; font-size: 16px; font-weight: 600; min-height: 32px; }
+ion-list-header.sec ion-label { margin: 0; }
+ion-list-header.sec .aside { margin-left: auto; padding-right: 20px; font-size: 14px; font-weight: 400; color: var(--muted); }
+ion-list.inset { --ion-item-background: var(--surface); margin: 6px 16px 0 !important; border-radius: var(--radius) !important; }
+ion-item { --min-height: 54px; }
+ion-item h2 { font-weight: 600 !important; font-size: 16px !important; }
+ion-item p { color: var(--muted) !important; font-size: 14px !important; }
+ion-note.state-on { color: var(--positive); }
+ion-note.state-off { color: var(--muted); }
+.note { padding: 10px 20px 0; color: var(--muted); font-size: 14px; line-height: 1.45; margin: 0; }
+.note a { color: var(--fog); font-weight: 600; text-decoration: none; }
+
+/* notices on Today: a result, a pause, the install tip */
+.notice { margin: 12px 16px 0; border-radius: 14px; padding: 12px 14px; font-size: 15px; line-height: 1.4; display: flex; gap: 10px; align-items: center; }
+.notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.notice.bad { background: var(--neg-bg); color: var(--neg-ink); }
+.notice.pause { background: var(--note-bg); color: var(--note-ink); }
+.notice span { flex: 1; }
+.notice ion-button { margin: 0; }
+
+/* a request, exactly as it will go out */
+.mail { background: var(--surface); border-radius: var(--radius); margin: 6px 16px 0; padding: 16px; }
+.mail dl { display: grid; grid-template-columns: 64px 1fr; gap: 6px 8px; margin: 0 0 14px; font-size: 15px; }
+.mail dt { color: var(--muted); }
+.mail dd { margin: 0; overflow-wrap: anywhere; }
+.mail .body { white-space: pre-wrap; font-size: 16px; line-height: 1.55; border-top: 1px solid var(--rule); padding-top: 14px; overflow-wrap: anywhere; }
+.mail .body.short { max-height: 16em; overflow: hidden; }
+.warn { margin: 6px 16px 0; background: var(--neg-bg); color: var(--neg-ink); border-radius: var(--radius); padding: 14px 16px; font-size: 15px; line-height: 1.45; }
+.warn strong { display: flex; align-items: center; gap: 6px; color: var(--negative); margin-bottom: 6px; }
+.warn ul { margin: 0; padding-left: 18px; }
+.slot { margin: 6px 16px 0; border: 1.5px dashed var(--control); border-radius: var(--radius); background: var(--surface); padding: 14px 16px;
+  display: flex; align-items: center; gap: 14px; }
+.slot.drag { border-color: var(--fog); background: var(--raised); }
+.slot .main { flex: 1; min-width: 0; }
+.slot .t { font-weight: 600; overflow-wrap: anywhere; }
+.slot .s { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.slot ion-button { margin: 0; }
+.pill { display: inline-block; flex: none; white-space: nowrap; font-size: 12px; font-weight: 500; border-radius: 99px; padding: 2px 9px;
+  background: var(--note-bg); color: var(--note-ink); margin-left: 6px; vertical-align: 2px; }
+.acts { display: flex; gap: 10px; padding: 10px 16px; }
+.acts ion-button { flex: 1; margin: 0; --border-radius: 14px; height: 50px; font-weight: 600; }
+.acts.stack { flex-direction: column; gap: 4px; }
+.empty { padding: 48px 32px; text-align: center; color: var(--muted); }
+
+/* the attachment preview sheet */
+.preview { height: 100%; display: flex; flex-direction: column; background: var(--ground); }
+.preview img { max-width: 100%; margin: 16px auto; display: block; border-radius: 6px; }
+.preview iframe { flex: 1; border: 0; width: 100%; background: #fff; }
+.preview pre { white-space: pre-wrap; margin: 16px; padding: 16px; background: #fff; border-radius: 8px; font-size: 14px; }
+
+/* the toast with Undo sits above the tab bar */
+ion-toast.undo { --background: var(--text); --color: #fff; --button-color: #cfe0ee; }
+
+/* the sign-in screen */
+.signin { max-width: 420px; margin: 0 auto; padding-top: 8vh; }
+.signin .acts { flex-direction: column; }
+.or { text-align: center; color: var(--muted); font-size: 14px; margin: 14px 0 4px; }
+
+/* wide screens: navigation on the left, Today shows the request beside the list */
+.side { display: none; }
+@media (min-width: 900px) {
+  ion-tab-bar { display: none; }
+  .side { display: flex; flex-direction: column; gap: 2px; width: 232px; padding: 22px 12px; background: var(--ground); border-right: 1px solid var(--border); }
+  .side ion-item { --background: transparent; --border-radius: 10px; --min-height: 40px; --inner-border-width: 0; font-size: 15px; }
+  .side ion-item.on { --background: var(--active); }
+  .side .foot { margin-top: auto; padding: 0 12px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .shell { display: flex; height: 100%; }
+  .shell > ion-tabs { flex: 1; position: relative; }
+  .split { display: grid; grid-template-columns: minmax(340px, 400px) 1fr; height: 100%; }
+  .split > .list { overflow: auto; }
+  .split > .detail { overflow: auto; background: var(--surface); border-left: 1px solid var(--border); }
+  .split > .detail .mail, .split > .detail ion-list.inset, .split > .detail .slot { background: var(--raised); --ion-item-background: var(--raised); }
+  .split > .detail .acts { max-width: 440px; }
+  ion-item.sel { --background: var(--active); }
+  .wide-col { max-width: 760px; }
+}

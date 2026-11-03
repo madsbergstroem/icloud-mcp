@@ -24,10 +24,10 @@ import base64
 import hashlib
 import hmac
 import html
-import importlib.metadata
 import json
 import logging
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -35,7 +35,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from starlette.requests import Request
@@ -211,7 +211,7 @@ class MailApprovals(ApprovalSource):
             notes.append("Waiting for: " + ", ".join(waiting))
         return {"title": d["subject"] or "(no subject)", "badge": "Email reply" if d.get("original") else "Email",
                 "rows": [(k, v) for k, v in rows if v], "text": body, "notes": notes, "warnings": warnings,
-                "needs_override": bool(flagged(d)), **({"blocked": "Add the file first", "files_link": f"/dashboard/attach/{q.id}"} if waiting else {})}
+                "needs_override": bool(flagged(d)), **({"blocked": "Add the file first", "files_link": f"/dashboard#/item/mail:{q.id}"} if waiting else {})}
 
     def release(self, q):
         r = self.mail.release(q.id)
@@ -226,7 +226,7 @@ _AGENT_HINT = "Run icloud_check_health to see which service is failing."
 
 def for_owner(message: str) -> str:
     """Service errors are written for agents. On the dashboard the owner has a button for the same check."""
-    return message.replace(_AGENT_HINT, "Check now on the Overview shows which service is failing.")
+    return message.replace(_AGENT_HINT, "Check now under Settings › Server shows which service is failing.")
 
 
 def event_when(start: str | None, end: str | None, tz_name: str) -> str:
@@ -345,7 +345,7 @@ class IMessageApprovals(ApprovalSource):
 # ---------------------------------------------------------------------------------------------------------------------
 _CSS = (_STATIC / "dashboard.css").read_text()
 _ASSETS = {     # served under /dashboard/ to anyone (the manifest and the worker are fetched without the session cookie)
-    "dashboard.css": "text/css", "dashboard.js": "text/javascript", "install-hint.js": "text/javascript", "attach.js": "text/javascript",
+    "dashboard.css": "text/css", "install-hint.js": "text/javascript",      # dashboard.css styles the connect page (/login)
     "manifest.webmanifest": "application/manifest+json", "sw.js": "text/javascript",
 }
 
@@ -389,54 +389,6 @@ _ICONS = {
 
 def _esc(v: Any) -> str:
     return html.escape("" if v is None else str(v))
-
-
-# -- components (each returns HTML; arguments named *_html are already escaped) ----------------------------------------
-def card(title: str = "", body_html: str = "", foot_html: str = "", chip_html: str = "", form: str = "", hidden_html: str = "",
-         link: tuple[str, str] | None = None, attrs: dict[str, str] | None = None) -> str:
-    """One card. form='/dashboard/x' wraps the whole card in a POST form, so its fields and its foot buttons belong together.
-    Buttons act and sit in the foot; link=(label, href) navigates and sits at the right of the head."""
-    aside = chip_html + (f'<a class="head-link" href="{_esc(link[1])}">{_esc(link[0])} <span aria-hidden="true">›</span></a>' if link else "")
-    head = f'<div class="card-head"><h2>{_esc(title)}</h2>{aside}</div>' if title else ""
-    inner = (head + (f'<div class="card-body">{body_html}</div>' if body_html else "")
-             + (f'<div class="card-foot">{foot_html}</div>' if foot_html else ""))
-    if form:
-        extra = "".join(f' {k}="{_esc(v)}"' for k, v in (attrs or {}).items())
-        return f'<form class="card"{extra} method="post" action="{_esc(form)}">{hidden_html}{inner}</form>'
-    return f'<section class="card">{inner}</section>'
-
-
-def chip(text: str, tone: str = "") -> str:
-    return f'<span class="chip {tone}">{_esc(text)}</span>'
-
-
-def row(label: str, value_html: str = "", sub: str = "") -> str:
-    main = f'<span class="row-main"><span>{_esc(label)}</span>' + (f'<span class="row-sub">{_esc(sub)}</span>' if sub else "") + "</span>"
-    return f'<div class="row">{main}{value_html}</div>'
-
-
-def value(text: str) -> str:
-    return f'<span class="row-value">{_esc(text)}</span>'
-
-
-def button(label: str, kind: str = "", **attrs: str) -> str:
-    extra = "".join(f' {k.replace("_", "-")}="{_esc(v)}"' for k, v in attrs.items())
-    if "type" not in attrs:
-        extra = ' type="submit"' + extra
-    return f'<button class="btn {kind}"{extra}>{label}</button>'
-
-
-def link_button(label: str, href: str, kind: str = "") -> str:
-    return f'<a class="btn {kind}" href="{_esc(href)}">{_esc(label)}</a>'
-
-
-def field(fid: str, label: str, input_attrs: str, hint: str = "") -> str:
-    return (f'<div class="field"><label for="{fid}">{_esc(label)}</label><input id="{fid}" {input_attrs}>'
-            + (f'<p class="hint">{_esc(hint)}</p>' if hint else "") + "</div>")
-
-
-def hint(text: str) -> str:
-    return f'<p class="hint">{_esc(text)}</p>'
 
 
 class Dashboard:
@@ -492,83 +444,6 @@ class Dashboard:
         return bool(ref) and ref.startswith(self.origin + "/")
 
     @staticmethod
-    def csrf_input(rec: dict[str, Any]) -> str:
-        return f'<input type="hidden" name="csrf" value="{_esc(rec["csrf"])}">'
-
-    def brand(self) -> str:
-        icon = '<img src="/icon-32.png" alt="">' if self.has_icon else ""
-        return (f'<div class="brand">{icon}<span class="brand-text"><span class="brand-name">iCloud connector</span>'
-                f'<span class="brand-host">{_esc(self.host)}</span></span></div>')
-
-    def state_chip(self) -> str:
-        return chip("Paused", "warn") if self.paused() else chip("Running", "ok")
-
-    def deskbar(self, rec: dict[str, Any]) -> str:
-        """The bar above the sheet on wide screens: this server, whether its tools answer, and who is signed in."""
-        state = '<span><span class="state-dot paused"></span>Paused</span>' if self.paused() else '<span><span class="state-dot"></span>Running</span>'
-        state += '<span class="live" data-live-status hidden></span>'          # dashboard.js: “Live · updated just now”
-        via = str(rec.get("via", ""))
-        via = "the owner password" if via == "password" else via         # otherwise: passkey “name”, Cloudflare Access (who)
-        who = f'<span class="who">Signed in with {_esc(via)}</span>' if via else '<span class="who"></span>'
-        return (f'<header class="deskbar"><span class="host">{_esc(self.host)}</span>{state}{who}'
-                f'<form method="post" action="/dashboard/logout">{self.csrf_input(rec)}{button("Sign out", "text")}</form></header>')
-
-    def page(self, title: str, active: str, inner: str, rec: dict[str, Any], status: int = 200, flash: str = "",
-             bad: bool = False, lede: str = "", wide: bool = False, actions: str = "", lede_html: str = "", live: str = "") -> Response:
-        """A signed-in page: top bar or the frame, the page head (title, one line of context, the page's one primary
-        action), a banner for the last action, then the cards. lede_html is an already escaped lede. live is the page's own
-        address: dashboard.js loads it again and swaps in the content when what is waiting changes (also after a form post,
-        whose address must not be requested again). Other pages only get their counts updated."""
-        n, v = self.fingerprint()
-        items = [("overview", "Overview", "/dashboard"), ("approvals", "Approvals", "/dashboard/approvals"),
-                 ("activity", "Activity", "/dashboard/activity"), *self.extra_nav, ("security", "Security", "/dashboard/security")]
-        tabs, side = "", ""
-        for key, label, href in items:
-            cur = ' aria-current="page"' if key == active else ""
-            icon = _SVG.format(_ICONS[key])
-            badge = f'<span class="count" aria-label="{n} waiting">{n}</span>' if key == "approvals" and n else ""
-            tabs += f'<a href="{href}"{cur}><span class="ico">{icon}{badge}</span><span>{label}</span></a>'
-            side += f'<a href="{href}"{cur}>{icon}<span>{label}</span>' + (f'<span class="num">{n}</span>' if key == "approvals" and n else "") + "</a>"
-        sidebar = f'<aside class="side">{self.brand()}<nav aria-label="Sections">{side}</nav></aside>'
-        topbar = f'<header class="topbar">{self.brand()}{self.state_chip()}</header>'
-        banner = f'<p class="banner{" bad" if bad else ""}" role="status">{_esc(flash)}</p>' if flash else ""
-        lede_html = lede_html or (_esc(lede) if lede else "")
-        head = (f'<div class="page-head"><div class="page-title"><h1>{_esc(title)}</h1>' + (f'<p class="lede">{lede_html}</p>' if lede_html else "") + "</div>"
-                + (f'<div class="page-actions">{actions}</div>' if actions else "") + "</div>")
-        main = "<main" + (' class="wide"' if wide else "") + (f' data-live="{_esc(live)}"' if live else "") + ">"
-        return self._doc(f"({n}) {title}" if n else title,
-                         f'<div class="wrap" data-v="{v}">{sidebar}<div class="frame">{topbar}{self.deskbar(rec)}<div class="sheet">{main}{head}'
-                         f'<div class="stack">{banner}{inner}</div></main></div></div></div><nav class="tabs" aria-label="Sections">{tabs}</nav>',
-                         status, app=True)
-
-    def auth_page(self, title: str, body_html: str, foot_html: str = "", status: int = 200) -> Response:
-        """Sign-in and confirm: one card in the middle of the screen, nothing outside it."""
-        inner = (f'<main class="auth"><section class="card"><div class="card-head">{self.brand()}</div>'
-                 f'<div class="card-body">{body_html}</div>' + (f'<div class="card-foot">{foot_html}</div>' if foot_html else "")
-                 + "</section></main>")
-        return self._doc(title, inner, status)
-
-    def _doc(self, title: str, body: str, status: int, app: bool = False, script: str = "") -> Response:
-        """app=True (signed-in pages) adds the script for live updates, actions without reloading and the install tip.
-        script: one more file from _ASSETS that this page needs (the attach page's upload)."""
-        v = _ASSET_VERSION
-        scripts = '<script src="/dashboard/passkey.js" defer></script>' + (f'<script src="/dashboard/{script}?v={v}" defer></script>' if script else "")
-        if app:
-            scripts += f'<script src="/dashboard/install-hint.js?v={v}" defer></script><script src="/dashboard/dashboard.js?v={v}" defer></script>'
-        doc = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-               f'<meta name="color-scheme" content="light dark"><meta name="theme-color" content="#eef2f6" media="(prefers-color-scheme: light)">'
-               f'<meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)"><title>{_esc(title)} · iCloud connector</title>'
-               f'<link rel="icon" href="{_FAVICON}"><link rel="apple-touch-icon" href="{_APPLE_ICON}">'
-               # use-credentials: the manifest request carries the proxy's cookie too, so a sign-in proxy lets it through
-               f'<link rel="manifest" href="/dashboard/manifest.webmanifest?v={v}" crossorigin="use-credentials">'
-               f'<link rel="stylesheet" href="/dashboard/dashboard.css?v={v}">'
-               f'</head><body>{body}{scripts}</body></html>')
-        return HTMLResponse(doc, status_code=status, headers=_HEADERS)
-
-    def message(self, rec: dict[str, Any], title: str, text: str, status: int) -> Response:
-        return self.page(title, "", card(body_html=f'<p>{_esc(text)}</p>', foot_html=link_button("Back to the overview", "/dashboard")), rec, status)
-
-    @staticmethod
     def time_left(q: Any) -> str:
         mins = max(1, round((q.expires_at - time.time()) / 60))
         if mins >= 90:
@@ -576,15 +451,6 @@ class Dashboard:
         if mins >= 60:
             return "1 hour"
         return "1 minute" if mins == 1 else f"{mins} minutes"
-
-    def ttl(self, q: Any, detail: bool = False) -> str:
-        """Time left before a waiting request is dropped, on a track as long as its whole waiting time."""
-        span = max(1.0, q.expires_at - q.created_at)
-        pct = max(1, min(100, round(100 * (q.expires_at - time.time()) / span)))
-        ends = (f'<span>Requested {self.fmt_time(q.created_at)}</span><span>Expires in <b>{self.time_left(q)}</b>, on '
-                f'{self.fmt_time(q.expires_at, with_day=True)}</span>') if detail else f'<span>Expires in</span><b>{self.time_left(q)}</b>'
-        return (f'<div class="ttl"><div class="ttl-ends">{ends}</div>'
-                f'<div class="track" role="img" aria-label="{pct}% of the waiting time left"><i style="width:{pct}%"></i></div></div>')
 
     def fmt_time(self, t: float | None, with_day: bool = False) -> str:
         if not t:
@@ -611,7 +477,6 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     if not d.secure and host not in ("localhost", "127.0.0.1", "::1") and not host.endswith(".localhost"):
         log.warning("MCP_PUBLIC_URL is plain http on %s: the dashboard cookie cannot be Secure or __Host-. Use https.", host)
     failures: dict[str, list[float]] = {}               # action -> [window start, recorded, not recorded]
-    flashes: dict[str, str] = {}      # one-shot result of an approval, keyed by session, so the result page is a plain GET
     window = 600
 
     def flush_failure_lines(now: float | None = None) -> None:
@@ -648,9 +513,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         token, rec = d.session(request)
         return (token, rec) if rec is not None else None
 
-    def to_signin(request: Request) -> Response:
-        nxt = request.url.path if request.url.path.startswith("/dashboard") else "/dashboard"
-        return RedirectResponse(f"/dashboard/signin?next={quote(nxt)}", status_code=303, headers=_HEADERS)
+    def to_signin(_: Request) -> Response:
+        return JSONResponse({"ok": False, "error": "signed out"}, status_code=401, headers=_HEADERS)
 
     async def checked_form(request: Request) -> tuple[str, dict[str, Any], Any] | Response:
         """A POST from a signed-in owner, from this origin, with the session's CSRF token."""
@@ -658,10 +522,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         if got is None:
             return to_signin(request)
         if not d.same_origin(request):
-            return d.message(got[1], "Not allowed", "This request did not come from this page. Nothing was changed.", 403)
+            return JSONResponse({"ok": False, "error": "This request did not come from this page. Nothing was changed."}, status_code=403, headers=_HEADERS)
         form = await request.form()
         if not hmac.compare_digest(str(form.get("csrf", "")).encode(), got[1]["csrf"].encode()):
-            return d.message(got[1], "Expired", "This form has expired. Go back, reload the page and try again.", 403)
+            return JSONResponse({"ok": False, "error": "This page has expired. Reload it and try again."}, status_code=403, headers=_HEADERS)
         return got[0], got[1], form
 
     def recent(rec: dict[str, Any]) -> bool:
@@ -670,32 +534,6 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     def set_cookie(resp: Response, token: str) -> Response:
         resp.set_cookie(d.cookie, token, max_age=_ABSOLUTE, httponly=True, secure=d.secure, samesite="strict", path="/")
         return resp
-
-    def safe_next(value: str) -> str:
-        return value if value.startswith("/dashboard") and "//" not in value and "\\" not in value else "/dashboard"
-
-    def sign_in_body(heading: str, lede: str, nxt: str, error: str, rec: dict[str, Any] | None) -> tuple[str, str]:
-        """The shared body of the sign-in and the confirm card: passkey first, then the password, then any error."""
-        pk = bool(d.passkeys.list()) and P.available()
-        pw = d.password_login()
-        parts = [f'<div style="display:flex;flex-direction:column;gap:4px"><h1>{_esc(heading)}</h1><p class="lede">{_esc(lede)}</p></div>']
-        if error:
-            parts.append(f'<p class="banner bad" role="alert">{_esc(error)}</p>')
-        if pk:
-            parts.append(button(_SVG.format(_ICONS["key"]) + "<span>Sign in with a passkey</span>" if rec is None else
-                                _SVG.format(_ICONS["key"]) + "<span>Confirm with your passkey</span>", "primary full",
-                                type="button", data_passkey="signin", data_next=nxt))
-        if pk and pw:
-            parts.append('<div class="or">or use the owner password</div>')
-        if pw:
-            hidden = (d.csrf_input(rec) if rec else "") + f'<input type="hidden" name="next" value="{_esc(nxt)}">'
-            parts.append(f'<form method="post" action="/dashboard/signin" style="display:flex;flex-direction:column;gap:12px">{hidden}'
-                         + field("pw", "Owner password", 'type="password" name="password" autocomplete="current-password" required'
-                                 + ("" if pk else " autofocus"))
-                         + button("Sign in with password" if rec is None else "Confirm with password", "full" if pk else "primary full")
-                         + "</form>")
-        parts.append('<p class="banner bad" data-passkey-error hidden></p>')
-        return "".join(parts), ""
 
     # -- static ----------------------------------------------------------------------------------------------------------
     @mcp.custom_route("/dashboard/passkey.js", methods=["GET"])
@@ -716,6 +554,57 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     for _name, _ctype in _ASSETS.items():
         _asset_route(_name, _ctype)
 
+    # -- the app (static/app) and the libraries it loads (static/vendor) -------------------------------------------------
+    app_dir, vendor_dir = _STATIC / "app", _STATIC / "vendor"
+    app_v = hashlib.sha256(b"".join(f.read_bytes() for f in sorted(app_dir.glob("*")) if f.is_file())).hexdigest()[:10] \
+        if app_dir.is_dir() else "0"
+    types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".html": "text/html"}
+    app_csp = _HEADERS["Content-Security-Policy"] + "; frame-src 'self'"
+
+    def static_file(base: Path, rel: str, cache: str) -> Response:
+        """A file under base, by a relative path that cannot leave it; anything else is a 404."""
+        try:
+            path = (base / rel).resolve()
+            path.relative_to(base.resolve())
+        except (ValueError, OSError):
+            return Response("Not found", status_code=404, headers=_HEADERS)
+        if not path.is_file() or path.suffix not in types or path.name.startswith("."):
+            return Response("Not found", status_code=404, headers=_HEADERS)
+        return Response(path.read_bytes(), media_type=types[path.suffix], headers={**_HEADERS, "Cache-Control": cache})
+
+    @mcp.custom_route("/dashboard/vendor/{rel:path}", methods=["GET"])
+    async def vendor_file(request: Request) -> Response:
+        # versioned paths (ionic/9.0.10/...), so a browser may keep them; the chunks Ionic loads lazily come from here too
+        return static_file(vendor_dir, request.path_params["rel"], "public, max-age=31536000, immutable")
+
+    @mcp.custom_route("/dashboard/app/{rel:path}", methods=["GET"])
+    async def app_file(request: Request) -> Response:
+        if request.path_params["rel"] == "index.html":
+            return Response("Not found", status_code=404, headers=_HEADERS)
+        return static_file(app_dir, request.path_params["rel"], "no-cache")   # modules import each other without a version
+
+    def app_shell() -> Response:
+        # The icons ride in the page: iOS fetches the home-screen icon without the session, and a sign-in proxy in front
+        # (tailscale serve, Cloudflare Access) would answer that with its own page
+        html_ = ((app_dir / "index.html").read_text().replace("{{v}}", app_v).replace("{{asset_v}}", _ASSET_VERSION)
+                 .replace("{{apple_icon}}", _APPLE_ICON).replace("{{favicon}}", _FAVICON))
+        return HTMLResponse(html_, headers={**_HEADERS, "Content-Security-Policy": app_csp})
+
+    @mcp.custom_route("/dashboard", methods=["GET"])
+    async def app_page(request: Request) -> Response:
+        """The app loads for anyone (it holds no data); it asks /dashboard/api/session who is signed in. Behind tailscale
+        serve the owner is signed in on the way, as on /dashboard/signin."""
+        if signed_in(request) is None and access is not None and (found := await access.owner(request)):
+            who, how = found
+            token, _ = d.sessions.create(f"{how} ({who})")
+            audit.record("signin.access", actor="owner", via=f"{how} ({who})", summary=f"Signed in through {how}")
+            return set_cookie(app_shell(), token)
+        return app_shell()
+
+    @mcp.custom_route("/dashboard/app", methods=["GET"])
+    async def app_old_address(_: Request) -> Response:
+        return RedirectResponse("/dashboard", status_code=303, headers=_HEADERS)
+
     @mcp.custom_route("/dashboard/state.json", methods=["GET"])
     async def live_state(request: Request) -> Response:
         """What the page asks every few seconds: how many requests wait, and a fingerprint that changes when any of them
@@ -725,72 +614,13 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
         return JSONResponse({"waiting": n, "v": fingerprint}, headers=_HEADERS)
 
-    # -- sign in and out -------------------------------------------------------------------------------------------------
-    def signin_page(error: str = "", nxt: str = "/dashboard", status: int = 200) -> Response:
-        body, _ = sign_in_body("Sign in", "Review what your agents want to send, see what they did, and manage this server.", nxt, error, None)
-        foot = ('<p class="hint">' + ("" if d.passkeys.list() else "After you sign in, you can add a passkey under Security. ")
-                + "Ten wrong passwords in 15 minutes lock password sign-in for everyone for a while.</p>")
-        return d.auth_page("Sign in", body, foot, status)
-
-    def confirm_page(rec: dict[str, Any], back: str,
-                     lede: str = "This step changes how your server is protected, so it asks you to sign in again.") -> Response:
-        body, _ = sign_in_body("Confirm it’s you", lede, back, "", rec)
-        return d.auth_page("Confirm", body, link_button("Cancel", back))
-
+    # -- sign in: the app asks /dashboard/api; behind tailscale serve or Access the identity signs in on the way ----------
     from . import access_sso
     access = access_sso.from_settings(s)        # fork: behind Cloudflare Access or tailscale serve the owner's identity signs the dashboard in
 
     @mcp.custom_route("/dashboard/signin", methods=["GET"])
-    async def signin_get(request: Request) -> Response:
-        nxt = safe_next(request.query_params.get("next", "/dashboard"))
-        if signed_in(request):
-            return RedirectResponse(nxt, status_code=303, headers=_HEADERS)
-        if access is not None and (found := await access.owner(request)):
-            who, how = found
-            token, _ = d.sessions.create(f"{how} ({who})")
-            audit.record("signin.access", actor="owner", via=f"{how} ({who})", summary=f"Signed in through {how}")
-            return set_cookie(RedirectResponse(nxt, status_code=303, headers=_HEADERS), token)
-        return signin_page(nxt=nxt)
-
-    @mcp.custom_route("/dashboard/signin", methods=["POST"])
-    async def signin_post(request: Request) -> Response:
-        if not d.same_origin(request):
-            return signin_page("This request did not come from this page.", status=403)
-        form = await request.form()
-        nxt = safe_next(str(form.get("next", "/dashboard")))
-        if not d.password_login():
-            return signin_page("Sign-in with the owner password is turned off. Use your passkey.", nxt, 403)
-        if not provider.login_allowed():
-            return signin_page("Too many wrong passwords. Try again in 15 minutes" + (", or use your passkey." if d.passkeys.list() else "."),
-                               nxt, 429)
-        if not hmac.compare_digest(str(form.get("password", "")).encode(), s.owner_password.encode()):
-            provider.record_failure()
-            log.warning("Failed owner-password attempt on the dashboard")
-            record_failure_line("signin.password", "Entered a wrong owner password",
-                                details={"from": request.client.host if request.client else ""})
-            return signin_page("Incorrect password.", nxt, 401)
-        token, rec = d.session(request)
-        if rec is not None:                                  # confirming an existing session
-            if not hmac.compare_digest(str(form.get("csrf", "")).encode(), rec["csrf"].encode()):
-                return signin_page("This form has expired. Reload the page and try again.", nxt, 403)
-            fresh = d.sessions.reauth(token, "password")
-            audit.record("signin.confirm", actor="owner", via="password", summary="Confirmed with the owner password")
-            resp = RedirectResponse(nxt, status_code=303, headers=_HEADERS)
-            return set_cookie(resp, fresh) if fresh else resp
-        token, rec = d.sessions.create("password")
-        audit.record("signin.password", actor="owner", via="password", summary="Signed in with the owner password")
-        return set_cookie(RedirectResponse(nxt, status_code=303, headers=_HEADERS), token)
-
-    @mcp.custom_route("/dashboard/logout", methods=["POST"])
-    async def logout(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        d.sessions.drop(got[0])
-        audit.record("signin.signout", actor="owner", via=got[1].get("via", ""), summary="Signed out of the dashboard")
-        resp = RedirectResponse("/dashboard/signin", status_code=303, headers=_HEADERS)
-        resp.delete_cookie(d.cookie, path="/", secure=d.secure, httponly=True, samesite="strict")
-        return resp
+    async def signin_get(_: Request) -> Response:
+        return RedirectResponse("/dashboard", status_code=303, headers=_HEADERS)
 
     # -- passkey JSON endpoints (passkey.js) ---------------------------------------------------------------------------
     async def json_body(request: Request) -> dict[str, Any]:
@@ -815,7 +645,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
                 if got is None or not hmac.compare_digest(request.headers.get("x-csrf", "").encode(), got[1]["csrf"].encode()):
                     return JSONResponse({"error": "Sign in first."}, status_code=401, headers=_HEADERS)
                 if not recent(got[1]):
-                    return JSONResponse({"error": "confirm", "confirm": "/dashboard/security/confirm"}, status_code=403, headers=_HEADERS)
+                    return JSONResponse({"error": "confirm", "confirm": True}, status_code=403, headers=_HEADERS)
                 return JSONResponse(d.passkeys.registration_options(), headers=_HEADERS)
         except P.PasskeyError as e:
             return JSONResponse({"error": str(e)}, status_code=400, headers=_HEADERS)
@@ -828,7 +658,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         data = await json_body(request)
         purpose, ticket = str(data.get("purpose", "")), str(data.get("ticket", ""))
         credential = data.get("credential") if isinstance(data.get("credential"), dict) else {}
-        nxt = safe_next(str(data.get("next", "/dashboard")))
+        nxt = "/dashboard"
         if purpose == "signin":
             try:
                 key = await asyncio.to_thread(d.passkeys.authenticate, ticket, credential)
@@ -854,263 +684,27 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             except P.PasskeyError as e:
                 return JSONResponse({"error": str(e)}, status_code=400, headers=_HEADERS)
             audit.record("passkey.added", actor="owner", via=got[1].get("via", ""), summary=f"Added passkey “{key.name}”")
-            return JSONResponse({"next": "/dashboard/security?m=passkey_added"}, headers=_HEADERS)
+            return JSONResponse({"next": "/dashboard#/settings"}, headers=_HEADERS)
         return JSONResponse({"error": "unknown purpose"}, status_code=400, headers=_HEADERS)
 
-    # -- overview ------------------------------------------------------------------------------------------------------
-    @mcp.custom_route("/dashboard", methods=["GET"])
-    async def overview(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        rec = got[1]
-        queued = []                     # (source, request), oldest deadline first; only the five shown are described
-        for src in d.sources.values():
-            queued += [(src, q) for q in await asyncio.to_thread(src.pending)]
-        queued.sort(key=lambda w: w[1].expires_at)
-        n = len(queued)
-        waiting = []                    # (source, request, description)
-        for src in d.sources.values():
-            shown = [q for s2, q in queued[:5] if s2 is src]
-            ctx = await asyncio.to_thread(src.contexts, shown, False) if shown else {}
-            waiting += [(src, q, await asyncio.to_thread(src.describe, q, ctx.get(q.id))) for q in shown]
-        waiting.sort(key=lambda w: w[1].expires_at)
-        try:
-            version = importlib.metadata.version("icloud-mcp-server")
-        except importlib.metadata.PackageNotFoundError:
-            version = "unknown"
-        paused = d.paused()
-        csrf = d.csrf_input(rec)
-        apps = provider.connected_apps()
-        today = datetime.now(d.tz).date()
-        done_today = sum(1 for e in audit.entries(limit=300) if datetime.fromtimestamp(e.get("t", 0), d.tz).date() == today)
-        if n:
-            lede = (f'<b>{n} {"request is" if n == 1 else "requests are"} waiting for you.</b> Nothing has left the server; '
-                    f'the {"oldest" if n > 1 else "request"} is dropped in {d.time_left(waiting[0][1])}.')
-        else:
-            lede = "Nothing is waiting for you."
-        kpis = ('<div class="kpis">' + f'<div class="lead"><span>Waiting for you</span><b>{n}</b></div>'
-                + f'<div><span>Recorded today</span><b>{done_today}</b></div>'
-                + f'<div><span>Connected apps</span><b>{len(apps)}</b></div>'
-                + f'<div><span>Tools offered</span><b>{len(mcp._tool_manager.list_tools())}</b></div></div>')
-        if waiting:
-            trs = []
-            for src, q, v in waiting[:5]:
-                to = next((val for k, val in v["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
-                who = f" · by {q.requested_by}" if getattr(q, "requested_by", None) else ""
-                sub = (f"To {to}" if to else "") + who + f" · {d.ago(q.created_at)}"
-                key = f"{src.kind}:{q.id}"
-                # The full request opens in place, so it can be approved here; one with a warning needs the Approvals page
-                preview = (f'<dl>{"".join(f"<dt>{_esc(k)}</dt><dd>{_esc(val)}</dd>" for k, val in v["rows"])}</dl>'
-                           + (f'<div class="message">{_esc(v["text"])}</div>' if v["text"] else "") + "".join(hint(x) for x in v["notes"]))
-                if v["needs_override"] or v["warnings"]:
-                    act = link_button("Review", f"/dashboard/approvals?item={key}")
-                else:
-                    act = (f'<form class="acts" method="post" action="/dashboard/approvals/act" data-title="{_esc(v["title"])}">{csrf}'
-                           f'<input type="hidden" name="kind" value="{_esc(src.kind)}"><input type="hidden" name="id" value="{_esc(q.id)}">'
-                           f'<input type="hidden" name="sha" value="{_esc(q.sha256)}"><input type="hidden" name="back" value="/dashboard">'
-                           + button("Discard", name="action", value="discard") + button(_esc(src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label), "primary", name="action", value="approve")
-                           + "</form>")
-                trs.append(f'<tr data-key="{_esc(key)}"><td><details><summary><b>{_esc(v["title"])}</b>'
-                           f'<span class="row-sub">{_esc(sub.lstrip(" ·"))}</span></summary><div class="preview">{preview}</div></details></td>'
-                           f'<td>{chip(v["badge"], "kind")}</td><td>{d.ttl(q)}</td><td>{act}</td></tr>')
-            more = hint(f"{n - 5} more on Approvals.") if n > 5 else ""
-            wait_body = ('<table class="waits"><thead><tr><th>Request</th><th>Kind</th><th>Time left</th><th></th></tr></thead>'
-                         f'<tbody>{"".join(trs)}</tbody></table>{more}')
-        else:
-            wait_body = hint("When an agent sends mail, invites someone or writes an iMessage, it waits here until you decide.")
-        left = [card("Waiting for your approval", wait_body, link=("Open Approvals", "/dashboard/approvals") if n else None)]
-        entries = audit.entries(limit=5)
-        acts = "".join(f'<li><time>{d.fmt_time(e.get("t"))}</time><span>{_entry_text(e)}</span></li>' for e in entries)
-        left.append(card("Recent activity", f'<ol class="log">{acts}</ol>' if acts else hint("Nothing recorded yet."),
-                         link=("All activity", "/dashboard/activity")))
-        if s.read_only:
-            sending = "Off (read-only)"
-        elif not s.allow_send:
-            sending = "Drafts only"
-        else:
-            sending = "After approval" if s.require_approval else "Directly"
-        invites = "After approval" if getattr(s, "invites_require_approval", False) else ("Allowed" if s.allow_calendar_invites else "Off")
-        prot = ('<div class="list">' + row("Sending email", value(sending)) + row("Invitations to others", value(invites))
-                + row("Emptying Trash", value("Allowed" if s.allow_permanent_delete else "Off"))
-                + row("Time zone", value(s.default_timezone)) + "</div>")
-        has_settings = any(k == "settings" for k, _, _ in d.extra_nav)
-        right = [card("Protection", prot, link=("All settings", "/dashboard/settings") if has_settings else None)]
-        health = d.last_health
-        if health is None:
-            services = row("Services", value("Not checked yet"))
-            state = ""
-        else:
-            services = "".join(
-                row(area.replace("_", " ").capitalize(),
-                    chip(f'OK · {r.get("ms", 0) / 1000:.1f} s', "ok") if r.get("ok") else chip("Failed", "err"),
-                    "" if r.get("ok") else (r.get("error") or "")[:120])
-                for area, r in (health.get("areas") or {}).items())
-            state = chip("All working", "ok") if health.get("ok") else chip("Problem", "err")
-        checked_at = hint(f'Checked {d.ago(health.get("_at"))}.') if health else ""
-        server_rows = (f'<div class="list">{services}' + row("Version", value(version)) + "</div>" + checked_at
-                       + hint("Pausing makes every tool answer that the server is paused. Nobody is signed out."))
-        foot = (f'<form method="post" action="/dashboard/check">{csrf}{button("Check now")}</form>'
-                f'<form method="post" action="/dashboard/pause">{csrf}<input type="hidden" name="paused" value="{"0" if paused else "1"}">'
-                f'{button("Resume tools" if paused else "Pause tools", "primary" if paused else "")}</form>')
-        right.append(card("Server", server_rows, foot, state or d.state_chip()))
-        grid = (f'<div data-install-hint data-app="iCloud connector" data-lang="en" hidden></div>{kpis}'
-                f'<div class="overview-grid"><div class="overview-col">{"".join(left)}</div>'
-                f'<div class="overview-col">{"".join(right)}</div></div>')
-        note = "" if request.headers.get(_LIVE) == "1" else flashes.pop(rec["csrf"], "")     # a background refresh takes no result
-        return d.page("Overview", "overview", grid, rec, flash=note or _flash(request), wide=True, lede_html=lede, live="/dashboard")
+    # -- the pages before the app: their addresses still lead to the same place ----------------------------------------
+    def to_app(fragment: str = "") -> Response:
+        return RedirectResponse("/dashboard" + fragment, status_code=303, headers=_HEADERS)
 
-    @mcp.custom_route("/dashboard/check", methods=["POST"])
-    async def check(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        fn = getattr(mcp, "_icloud_health", None)
-        if fn is not None:
-            try:
-                r = await asyncio.wait_for(asyncio.to_thread(fn), timeout=45)
-            except asyncio.TimeoutError:
-                r = {"ok": False, "areas": {"check": {"ok": False, "error": "took longer than 45 s"}}}
-            d.last_health = {**r, "_at": time.time()}
-        return RedirectResponse("/dashboard?m=checked", status_code=303, headers=_HEADERS)
-
-    @mcp.custom_route("/dashboard/pause", methods=["POST"])
-    async def pause(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        want = str(got[2].get("paused", "1")) == "1"
-        from .admin import _write_private
-        if want:
-            _write_private(d.pause_file, time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")
-        elif os.path.exists(d.pause_file):
-            os.unlink(d.pause_file)
-        log.warning("Owner %s the server from the dashboard", "paused" if want else "resumed")
-        audit.record("server.paused" if want else "server.resumed", actor="owner", via=got[1].get("via", ""),
-                     summary="Paused all tools" if want else "Resumed all tools")
-        return RedirectResponse("/dashboard?m=" + ("paused" if want else "resumed"), status_code=303, headers=_HEADERS)
-
-    # -- approvals -----------------------------------------------------------------------------------------------------
-    def approvals_page(rec: dict[str, Any], flash: str = "", bad: bool = False, status: int = 200, selected: str = "") -> Response:
-        """The waiting requests as a list, and the chosen one (or the one dropped soonest) exactly as it will be sent."""
-        waiting = []
-        for src in d.sources.values():
-            items = src.pending()
-            ctx = src.contexts(items)
-            waiting += [(src, q, src.describe(q, ctx.get(q.id))) for q in items]
-        waiting.sort(key=lambda w: w[1].expires_at)
-        total = len(waiting)
-        recent_n = sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)
-        cards = []
-        if recent_n > 2:
-            cards.append(f'<p class="alert">Agents asked for {recent_n} of these in the last hour. Approve only what you asked for.</p>')
-        if not total:
-            cards.append(card("Nothing is waiting", hint("When an agent sends mail or invites someone, it waits here until you decide.")))
-        else:
-            chosen = next((w for w in waiting if f"{w[0].kind}:{w[1].id}" == selected), None)
-            # A request picked from the list that has gone is not silently replaced by another one with a Send button in
-            # the same place (dashboard.js reloads this page while it is open)
-            src, q, v = (chosen or (None, None, None)) if selected else waiting[0]
-            links = []
-            for s2, q2, v2 in waiting:
-                to = next((val for k, val in v2["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
-                cur = ' aria-current="true"' if q2 is q else ""
-                links.append(f'<a href="/dashboard/approvals?item={_esc(s2.kind)}:{_esc(q2.id)}" data-key="{_esc(s2.kind)}:{_esc(q2.id)}"{cur}><span class="q1">{chip(v2["badge"], "kind")}'
-                             f'<b>{_esc(v2["title"])}</b><span class="left">expires in {d.time_left(q2)}</span></span>'
-                             + (f'<span class="q2">To {_esc(to)}</span>' if to else "") + "</a>")
-            queue = f'<nav class="card queue" aria-label="Waiting requests">{"".join(links)}</nav>'
-        if total and q is None:
-            cards.append(f'<div class="split">{queue}' + card("No longer waiting", hint(
-                "This request was sent, discarded or dropped, maybe in another window. Choose one from the list.")) + "</div>")
-        elif total:
-            body = [f'<dl>{"".join(f"<dt>{_esc(k)}</dt><dd>{_esc(val)}</dd>" for k, val in v["rows"])}</dl>']
-            if v["warnings"]:
-                body.append('<div class="alert" role="alert"><b>Check this first</b><ul>'
-                            + "".join(f"<li>{_esc(w)}</li>" for w in v["warnings"]) + "</ul></div>")
-            if v["text"]:
-                body.append(f'<div class="message">{_esc(v["text"])}</div>')
-            body += [hint(x) for x in v["notes"]]
-            body.append(d.ttl(q, detail=True))
-            who = f" by {q.requested_by}" if getattr(q, "requested_by", None) else ""
-            body.append(f'<p class="meta">Requested {d.ago(q.created_at)}{_esc(who)}. If you do nothing, it is dropped and never sent.</p>')
-            if v["needs_override"]:
-                body.append('<label class="check"><input type="checkbox" name="override" value="1">'
-                            '<span>I read the warning and still want this sent</span></label>')
-            hidden = (d.csrf_input(rec) + f'<input type="hidden" name="kind" value="{_esc(src.kind)}">'
-                      f'<input type="hidden" name="id" value="{_esc(q.id)}"><input type="hidden" name="sha" value="{_esc(q.sha256)}">')
-            label = src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
-            foot = button("Discard", name="action", value="discard") + button(_esc(label), "primary", name="action", value="approve")
-            if v.get("blocked"):
-                foot = (button("Discard", name="action", value="discard") + link_button("Add the file", v["files_link"])
-                        + button(_esc(v["blocked"]), "primary", type="button", disabled="disabled"))
-            detail = card(v["title"], "".join(body), foot, chip(v["badge"], "kind"), form="/dashboard/approvals/act", hidden_html=hidden,
-                          attrs={"data-key": f"{src.kind}:{q.id}", "data-title": v["title"]})
-            cards.append(f'<div class="split">{queue}{detail}</div>')
-        lede = f"{total} waiting. Nothing has left the server yet; what you see is exactly what will be sent." if total else ""
-        # the request shown, also when none was picked: a refresh never puts another one in its place unasked
-        shown = selected or (f"{src.kind}:{q.id}" if total and q is not None else "")
-        live = "/dashboard/approvals" + (f"?item={quote(shown)}" if shown else "")
-        return d.page("Approvals", "approvals", "".join(cards), rec, status, flash, bad, lede, wide=True, live=live)
-
-    def after_action(rec: dict[str, Any], note: str, back: str) -> Response:
-        while len(flashes) > 200:
-            flashes.pop(next(iter(flashes)))
-        flashes[rec["csrf"]] = note
-        return RedirectResponse(back, status_code=303, headers=_HEADERS)
+    def item_fragment(key: str) -> str:
+        return f"#/item/{key}" if re.fullmatch(r"[a-z]+:[A-Za-z0-9_-]+", key or "") else ""
 
     @mcp.custom_route("/dashboard/approvals", methods=["GET"])
     async def approvals_get(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        note = "" if request.headers.get(_LIVE) == "1" else flashes.pop(got[1]["csrf"], "")   # a background refresh takes no result
-        return await asyncio.to_thread(approvals_page, got[1], note, selected=request.query_params.get("item", ""))
+        return to_app(item_fragment(request.query_params.get("item", "")))
 
-    @mcp.custom_route("/dashboard/approvals/act", methods=["POST"])
-    async def approvals_act(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        # dashboard.js asks for JSON and updates the page itself; a plain form post gets a page, as before
-        as_json = "application/json" in request.headers.get("accept", "")
-        back = "/dashboard" if str(form.get("back", "")) == "/dashboard" else "/dashboard/approvals"
+    @mcp.custom_route("/dashboard/activity", methods=["GET"])
+    async def activity_get(_: Request) -> Response:
+        return to_app("#/activity")
 
-        async def failed(note: str, json_status: int, page_status: int = 200) -> Response:
-            if as_json:
-                return JSONResponse({"ok": False, "error": note}, status_code=json_status, headers=_HEADERS)
-            return await asyncio.to_thread(approvals_page, rec, note, True, page_status)
-
-        def done(note: str) -> Response:
-            if as_json:
-                return JSONResponse({"ok": True, "note": note}, headers=_HEADERS)
-            return after_action(rec, note, back)
-
-        src = d.sources.get(str(form.get("kind", "")))
-        action = str(form.get("action", ""))
-        q = next((x for x in src.pending() if x.id == str(form.get("id", ""))), None) if src else None
-        if q is None or action not in ("approve", "discard") or not hmac.compare_digest(str(form.get("sha", "")).encode(), q.sha256.encode()):
-            return await failed("That item is no longer waiting or has changed. Nothing was done.", 409, 409)
-        ctx = await asyncio.to_thread(src.contexts, [q], False)
-        v = await asyncio.to_thread(src.describe, q, ctx.get(q.id))
-        who = {"actor": "owner", "via": rec.get("via", "")}
-        if action == "discard":
-            await asyncio.to_thread(src.discard, q)
-            audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind)
-            return done("Discarded. Nothing was sent.")
-        if v["needs_override"] and str(form.get("override", "")) != "1":
-            return await failed("Not sent: tick the box under the warning if you still want it sent.", 422)
-        if action == "approve" and v.get("blocked"):
-            return await failed("Not sent: " + "; ".join(n for n in v["notes"] if n.startswith("Waiting for")) + ". Add the file first.", 409)
-        try:
-            note = await asyncio.to_thread(src.release, q)
-        except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
-            log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
-            audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind)
-            return await failed(f"Not sent (still waiting): {for_owner(str(e))}", 502)
-        audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
-                     recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
-        return done(note)
+    @mcp.custom_route("/dashboard/security", methods=["GET"])
+    async def security_get(_: Request) -> Response:
+        return to_app("#/settings")
 
     # -- files a waiting mail needs ------------------------------------------------------------------------------------
     # An agent can queue a mail with a file it cannot pass itself (mail.py: placeholders). The owner adds it on the attach
@@ -1118,71 +712,9 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     # is outside /dashboard so a sign-in proxy in front can let it through: the token is its only key.
     mail_src = d.sources.get("mail")
 
-    def _size(n: int) -> str:
-        return f"{max(1, round(n / 1024))} KB" if n < 1048576 else (f"{n // 1048576} MB" if n % 1048576 == 0 else f"{n / 1048576:.1f} MB")
-
-    def attach_page(rec: dict[str, Any], item_id: str, error: str = "", status: int = 200) -> Response:
-        q = next((x for x in mail_src.pending() if x.id == item_id), None) if mail_src else None
-        if q is None:
-            body = ('<div class="t-head"><h1>No longer waiting</h1><p class="t-sub">This mail was sent or discarded, or it has '
-                    'expired. Nothing more to do here.</p></div>')
-            return d.auth_page("No longer waiting", body, link_button("Back to the overview", "/dashboard"), 404)
-        ctx = mail_src.contexts([q], prune=False).get(q.id)
-        v = mail_src.describe(q, ctx)
-        dq = mail_src.mail.describe_queued(q, ctx)
-        waiting = dq["pending_files"]
-        limit = d.s.max_attachment_bytes
-        mb = _size(limit)
-        sub_wait, sub_ready = "Written by an agent. It goes out once you add the file and approve it.", "Written by an agent. Check it, then send it."
-        parts = [f'<div class="t-head"><h1>{_esc(v["title"])}</h1><p class="t-sub" data-sub data-ready="{_esc(sub_ready)}" data-wait="{_esc(sub_wait)}">'
-                 f'{_esc(sub_wait if waiting else sub_ready)}</p></div>']
-        parts.append(f'<p class="banner bad" role="alert" data-error{"" if error else " hidden"}>{_esc(error)}</p>')
-        if v["warnings"]:
-            parts.append('<div class="alert" role="alert"><b>Check this first</b><ul>' + "".join(f"<li>{_esc(w)}</li>" for w in v["warnings"]) + "</ul></div>")
-        meta = [(k, val) for k, val in v["rows"] if k in ("To", "Cc", "Bcc", "From")]
-        parts.append('<dl class="mail-meta">' + "".join(f"<div><dt>{_esc(k)}</dt><dd>{_esc(val)}</dd></div>" for k, val in meta) + "</dl>")
-        if v["text"]:
-            parts.append(f'<div class="mail-body" data-body>{_esc(v["text"])}</div><button class="more" type="button" data-more>Show the whole mail</button>')
-        added = {x["index"]: x["asked"] for x in dq["added_files"]}
-        for a in dq["attachments"]:
-            txt = (f'<span class="file-txt"><span class="file-name">{_esc(a["filename"])}</span><span class="file-sub">{_size(a["size"])}'
-                   + (f' · asked for {_esc(added[a["index"]])}</span></span><span class="chip warn">Other name</span>'
-                      if added.get(a["index"], a["filename"]) != a["filename"] else "</span></span>"))
-            if a["index"] not in added:          # the agent's own attachment: shown, not changed here
-                parts.append(f'<div class="file">{txt}</div>')
-                continue
-            # a file added for a placeholder: Replace picks another one, Remove puts the empty slot back
-            parts.append(f'<form class="file" data-file data-index="{a["index"]}" method="post" enctype="multipart/form-data" '
-                         f'action="/dashboard/attach/{_esc(q.id)}/file">{d.csrf_input(rec)}<input type="hidden" name="index" value="{a["index"]}">'
-                         f'{txt}<label class="btn text" data-replace>Replace<input type="file" name="file" hidden></label>'
-                         f'<button class="btn slot-go" type="submit">Upload</button>'
-                         f'<button class="btn text danger" type="submit" formaction="/dashboard/attach/{_esc(q.id)}/remove" '
-                         f'formnovalidate data-remove>Remove</button></form>')
-        for w in waiting:
-            parts.append(f'<form class="slot-drop" data-slot data-index="{w["index"]}" method="post" enctype="multipart/form-data" '
-                         f'action="/dashboard/attach/{_esc(q.id)}/file">{d.csrf_input(rec)}<input type="hidden" name="index" value="{w["index"]}">'
-                         f'<label class="slot-pick"><input type="file" name="file" required><span class="slot-txt">'
-                         f'<span class="slot-main">Drop {_esc(w["filename"])} here</span><span class="slot-sub">or tap to choose · up to {mb}</span></span></label>'
-                         f'<button class="btn slot-go" type="submit">Upload</button></form>')
-        parts.append(f'<p class="t-meta">The request expires in {d.time_left(q)}.</p>')
-        override = ('<label class="check"><input type="checkbox" name="override" value="1"><span>I read the warning and still want this sent</span></label>'
-                    if v["needs_override"] else "")
-        send = (button("Add the file first", "primary", name="action", value="approve", disabled="disabled", data_send="", data_label="Approve and send")
-                if waiting else button("Approve and send", "primary", name="action", value="approve", data_send="", data_label="Approve and send"))
-        foot = (f'<form class="card-foot" data-approve method="post" action="/dashboard/approvals/act">{d.csrf_input(rec)}'
-                f'<input type="hidden" name="kind" value="mail"><input type="hidden" name="id" value="{_esc(q.id)}">'
-                f'<input type="hidden" name="sha" value="{_esc(q.sha256)}"><input type="hidden" name="back" value="/dashboard">'
-                f'{override}{button("Discard", name="action", value="discard")}{send}</form>')
-        inner = (f'<main class="auth"><section class="card ticket" data-attach data-id="{_esc(q.id)}" data-csrf="{_esc(rec["csrf"])}" '
-                 f'data-limit="{limit}"><div class="card-head">{d.brand()}</div><div class="card-body">{"".join(parts)}</div>{foot}</section></main>')
-        return d._doc(v["title"], inner, status, script="attach.js")
-
     @mcp.custom_route("/dashboard/attach/{item_id}", methods=["GET"])
     async def attach_get(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        return await asyncio.to_thread(attach_page, got[1], request.path_params["item_id"])
+        return to_app(item_fragment("mail:" + request.path_params["item_id"]))
 
     @mcp.custom_route("/dashboard/attach/{item_id}/file", methods=["POST"])
     async def attach_post(request: Request) -> Response:
@@ -1191,13 +723,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             return got
         _, rec, form = got
         item_id = request.path_params["item_id"]
-        as_json = "application/json" in request.headers.get("accept", "")
         up = form.get("file")
 
         async def failed(note: str, code: int) -> Response:
-            if as_json:
-                return JSONResponse({"ok": False, "error": note}, status_code=code, headers=_HEADERS)
-            return await asyncio.to_thread(attach_page, rec, item_id, note, code)
+            return JSONResponse({"ok": False, "error": note}, status_code=code, headers=_HEADERS)
 
         if mail_src is None or not hasattr(up, "read"):
             return await failed("Choose a file first.", 400)
@@ -1209,11 +738,9 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             return await failed(str(e), 409)
         audit.record("approval.file_added", actor="owner", via=rec.get("via", ""), kind="mail",
                      summary=f"Added {info['filename']} to a waiting mail")
-        if as_json:
-            return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "filename": info["filename"], "size": info["size"], "asked": info["asked"],
-                                 "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]},
-                                headers=_HEADERS)
-        return RedirectResponse(f"/dashboard/attach/{quote(item_id)}", status_code=303, headers=_HEADERS)
+        return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "filename": info["filename"], "size": info["size"], "asked": info["asked"],
+                             "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]},
+                            headers=_HEADERS)
 
     @mcp.custom_route("/dashboard/attach/{item_id}/remove", methods=["POST"])
     async def attach_remove(request: Request) -> Response:
@@ -1222,21 +749,16 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             return got
         _, rec, form = got
         item_id = request.path_params["item_id"]
-        as_json = "application/json" in request.headers.get("accept", "")
         try:
             if mail_src is None:
                 raise MailError("Mail is off on this server.")
             q, info = await asyncio.to_thread(mail_src.mail.remove_file, item_id, int(str(form.get("index", "-1"))))
         except (MailError, ValueError) as e:
-            if as_json:
-                return JSONResponse({"ok": False, "error": str(e)}, status_code=409, headers=_HEADERS)
-            return await asyncio.to_thread(attach_page, rec, item_id, str(e), 409)
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=409, headers=_HEADERS)
         audit.record("approval.file_removed", actor="owner", via=rec.get("via", ""), kind="mail",
                      summary=f"Took the file for {info['asked']} out of a waiting mail")
-        if as_json:
-            return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "asked": info["asked"],
-                                 "waiting": [w["filename"] for w in info["waiting"]]}, headers=_HEADERS)
-        return RedirectResponse(f"/dashboard/attach/{quote(item_id)}", status_code=303, headers=_HEADERS)
+        return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "asked": info["asked"],
+                             "waiting": [w["filename"] for w in info["waiting"]]}, headers=_HEADERS)
 
     @mcp.custom_route("/files/{token}", methods=["PUT"])
     async def file_put(request: Request) -> Response:
@@ -1256,6 +778,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             gone = str(e).startswith("No file is waiting")
             return JSONResponse({"ok": False, "error": str(e)}, status_code=404 if gone else 400, headers=_HEADERS)
         audit.record("approval.file_added", actor="agent", kind="mail", summary=f"An upload added {info['filename']} to a waiting mail")
+        d.push.notify("file", f"mail:{q.id}")
         left = [w["filename"] for w in info["waiting"]]
         return JSONResponse({"ok": True, "filename": info["filename"], "size": info["size"], "still_waiting": left,
                              "next": ("Upload the other files too." if left else "The mail now waits for the owner's approval. It is not sent yet.")},
@@ -1264,40 +787,6 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     # -- activity ------------------------------------------------------------------------------------------------------
     _FILTERS = {"all": ("All", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agents", ("tool.",)),
                 "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
-
-    @mcp.custom_route("/dashboard/activity", methods=["GET"])
-    async def activity(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        which = request.query_params.get("filter", "all")
-        which = which if which in _FILTERS else "all"
-        entries = await asyncio.to_thread(audit.entries, 300, _FILTERS[which][1])
-        chain = await asyncio.to_thread(audit.verify)
-        seg = "".join(f'<a href="/dashboard/activity?filter={k}"{" aria-current=page" if k == which else ""}>{label}</a>'
-                      for k, (label, _) in _FILTERS.items())
-        cards = [f'<nav class="seg" aria-label="Filter">{seg}</nav>']
-        if not s.audit_log:
-            cards.append('<p class="alert">The activity log is turned off on this server (AUDIT_LOG=false).</p>')
-        days: dict[Any, list[dict[str, Any]]] = {}
-        today = datetime.now(d.tz).date()
-        for e in entries:
-            days.setdefault(datetime.fromtimestamp(e.get("t", 0), d.tz).date(), []).append(e)
-        for day, items in days.items():
-            label = "Today" if day == today else "Yesterday" if day == today - timedelta(days=1) else day.strftime("%a %d %b %Y")
-            lis = "".join(f'<li><time>{d.fmt_time(e.get("t"))}</time><span>{_entry_text(e, full=True)}</span></li>' for e in items)
-            cards.append(card(label, f'<ol class="log">{lis}</ol>'))
-        if not entries:
-            cards.append(card("Nothing recorded yet", hint("Writes by agents, your approvals and every sign-in appear here.")))
-        since = d.fmt_time(chain.get("since"), with_day=True) if chain.get("since") else ""
-        if chain["ok"]:
-            state, text = chip("Verified", "ok"), f'{chain["entries"]} entries, none changed since they were written' + (f" (oldest kept: {since})." if since else ".")
-        else:
-            state, text = chip("Changed", "err"), f'The log was changed after it was written, at entry {chain.get("broken_at")}. Entries from there on cannot be trusted.'
-        cards.append(card("About this log", f"<p>{_esc(text)}</p>" + hint(f"Kept for {s.audit_keep_days} days. Names, addresses and subjects; "
-                                                                          "no message bodies, passwords or tokens."),
-                          link_button("Download as JSON", "/dashboard/activity.json"), state))
-        return d.page("Activity", "activity", "".join(cards), got[1], lede="What changed on this server, newest first.")
 
     @mcp.custom_route("/dashboard/activity.json", methods=["GET"])
     async def activity_json(request: Request) -> Response:
@@ -1308,122 +797,15 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         return Response(json.dumps(list(reversed(entries)), ensure_ascii=False, indent=1), media_type="application/json",
                         headers={**_HEADERS, "Content-Disposition": 'attachment; filename="icloud-mcp-activity.json"'})
 
-    # -- security ------------------------------------------------------------------------------------------------------
-    def row_action(action: str, rec: dict[str, Any], hidden: dict[str, str], label: str, danger: bool = False) -> str:
-        fields = "".join(f'<input type="hidden" name="{k}" value="{_esc(v)}">' for k, v in hidden.items())
-        return f'<form method="post" action="{action}">{d.csrf_input(rec)}{fields}{button(_esc(label), "text danger" if danger else "text")}</form>'
-
-    def security_page(rec: dict[str, Any], flash: str = "", bad: bool = False, status: int = 200) -> Response:
-        keys = d.passkeys.list()
-        cards = []
-        key_list = ('<div class="list">' + "".join(
-            row(k.name, row_action("/dashboard/security/passkey/remove", rec, {"id": k.id}, "Remove", danger=True),
-                f"Added {d.fmt_time(k.created_at, True)} · last used {d.ago(k.last_used_at)}") for k in keys) + "</div>") if keys else \
-            hint("No passkey yet. A passkey signs you in with Face ID, Touch ID or a security key, and only on this address.")
-        if P.available():
-            body = key_list + field("pkname", "Name for a new passkey", 'type="text" maxlength="40" placeholder="For example: iPhone"') \
-                + '<p class="banner bad" data-passkey-error hidden></p>'
-            foot = button(_SVG.format(_ICONS["key"]) + "<span>Add a passkey</span>", "primary", type="button", data_passkey="register",
-                          data_csrf=rec["csrf"], data_name_from="pkname")
-        else:
-            body, foot = key_list + '<p class="alert">This server cannot use passkeys: the optional webauthn package is not installed.</p>', ""
-        cards.append(card("Passkeys", body, foot, chip(str(len(keys)), "info") if keys else ""))
-        apps = provider.connected_apps()
-        app_list = ('<div class="list">' + "".join(
-            row(a["name"], row_action("/dashboard/security/apps/sign-out", rec, {"id": a["id"]}, "Sign out"),
-                f'{a["host"]} · active {d.ago(a["last_used"])}' if a["host"] else f'active {d.ago(a["last_used"])}') for a in apps) + "</div>") \
-            if apps else hint("No app is signed in.")
-        foot = (f'<form method="post" action="/dashboard/security/apps/sign-out-all">{d.csrf_input(rec)}'
-                f'{button("Sign out all apps", "danger")}</form>') if apps else ""
-        cards.append(card("Connected apps", app_list + hint("A signed-out app has to connect again, and that needs you."),
-                          foot, chip(str(len(apps)), "info") if apps else ""))
-        pw_on = d.password_login()
-        cards.append(card("Owner password",
-                          '<div class="list">' + row("Sign-in with password", value("Allowed" if pw_on else "Off")) + "</div>"
-                          + field("np", "New owner password", 'type="password" name="password" autocomplete="new-password" minlength="12" required',
-                                  "At least 12 characters. It also approves new apps on the connect page and takes effect after the server restarts."),
-                          button("Change password"), form="/dashboard/security/password", hidden_html=d.csrf_input(rec)))
-        cards.append('<div class="phone-only">' + card("This browser", '<div class="list">' + row("Signed in", value(d.ago(rec.get("created"))), rec.get("via", "")) + "</div>"
-                          + hint("Removing a passkey, changing the password and signing out apps ask you to confirm when your sign-in is older than 5 minutes."),
-                          button("Sign out", "danger"), form="/dashboard/logout", hidden_html=d.csrf_input(rec)) + "</div>")
-        return d.page("Security", "security", "".join(cards), rec, status, flash, bad, "Who can sign in here, and which apps are connected.")
-
-    @mcp.custom_route("/dashboard/security", methods=["GET"])
-    async def security(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        return security_page(got[1], _flash(request))
-
-    @mcp.custom_route("/dashboard/security/confirm", methods=["GET"])
-    async def security_confirm(request: Request) -> Response:
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        return confirm_page(got[1], "/dashboard/security")
-
-    @mcp.custom_route("/dashboard/security/passkey/remove", methods=["POST"])
-    async def passkey_remove(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        if not recent(rec):
-            return confirm_page(rec, "/dashboard/security")
-        keys = d.passkeys.list()
-        if len(keys) == 1 and not s.owner_password_login:
-            return security_page(rec, "This is your only passkey and password sign-in is off. Add another passkey first.", True, 409)
-        key = d.passkeys.remove(str(form.get("id", "")))
-        if key:
-            audit.record("passkey.removed", actor="owner", via=rec.get("via", ""), summary=f"Removed passkey “{key.name}”")
-        return security_page(rec, f"Removed “{key.name}”." if key else "That passkey was already gone.")
-
-    @mcp.custom_route("/dashboard/security/apps/sign-out", methods=["POST"])
-    async def app_sign_out(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        if not recent(rec):
-            return confirm_page(rec, "/dashboard/security")
-        cid = str(form.get("id", ""))
-        name = next((a["name"] for a in provider.connected_apps() if a["id"] == cid), "an app")
-        ok = provider.sign_out(cid) if cid else False
-        if ok:
-            audit.record("app.signed_out", actor="owner", via=rec.get("via", ""), summary=f"Signed out {name}")
-        return security_page(rec, f"Signed out {name}." if ok else "That app was not signed in.", not ok)
-
-    @mcp.custom_route("/dashboard/security/apps/sign-out-all", methods=["POST"])
-    async def app_sign_out_all(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        rec = got[1]
-        if not recent(rec):
-            return confirm_page(rec, "/dashboard/security")
-        n = provider.sign_out_all()
-        audit.record("app.signed_out_all", actor="owner", via=rec.get("via", ""), summary=f"Signed out all apps ({n})")
-        return security_page(rec, f"Signed out {n} app{'s' if n != 1 else ''}.")
-
-    @mcp.custom_route("/dashboard/security/password", methods=["POST"])
-    async def change_password(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        if not recent(rec):
-            return confirm_page(rec, "/dashboard/security")
-        value_ = str(form.get("password", ""))
-        if problem := owner_password_problem(value_, s.bridge_token):
-            return security_page(rec, problem, True, 400)
-        from .admin import save_override
-        save_override(s.data_dir, "owner_password", value_)
-        log.warning("Owner password changed from the dashboard; it applies after a restart")
-        audit.record("owner_password.changed", actor="owner", via=rec.get("via", ""), summary="Changed the owner password")
-        return security_page(rec, "Saved. The new password applies after the server restarts.")
-
     # other parts (settings.py) build on the same guards
-    d.signed_in, d.to_signin, d.checked_form, d.recent, d.confirm = signed_in, to_signin, checked_form, recent, confirm_page
+    d.signed_in, d.recent = signed_in, recent
+    # Web Push: a note to the owner's devices when something new waits, or a waiting mail got its file (push.py)
+    from .push import PushStore
+    d.push = PushStore(s.data_dir, s.public_url)
+    for src in d.sources.values():
+        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
+        if box is not None:
+            box.on_new = (lambda q, kind=src.kind: d.push.notify(kind, f"{kind}:{q.id}"))
     from .dashboard_api import register_api
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
                  record_failure_line=record_failure_line, headers=_HEADERS, filters=_FILTERS, for_owner=for_owner,
@@ -1431,23 +813,3 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     return d
 
 
-_MESSAGES = {"checked": "Checked.", "paused": "Paused. Tools now answer that the server is paused.", "resumed": "Resumed.",
-             "passkey_added": "Passkey added. You can now sign in with it.",
-             "settings_saved": "Saved. The change applies when the server restarts."}
-
-
-def _flash(request: Request) -> str:
-    return _MESSAGES.get(request.query_params.get("m", ""), "")
-
-
-def _entry_text(e: dict[str, Any], full: bool = False) -> str:
-    """'<b>You</b> signed in with a passkey', '<b>Claude</b> moved messages (14) to Archive'. Summaries start with a verb."""
-    actor = e.get("actor") or "?"
-    who = "You" if actor == "owner" else ("Someone" if actor == "unknown" else actor)
-    text = str(e.get("summary") or e.get("action", ""))
-    out = f"<b>{_esc(who)}</b> {_esc(text[:1].lower() + text[1:])}"
-    if not e.get("ok", True):
-        out = f'<span style="color:var(--warn)">{out}</span>'
-    if full and (e.get("details") or {}).get("error"):
-        out += f'<br><span class="meta">{_esc(e["details"]["error"])}</span>'
-    return out

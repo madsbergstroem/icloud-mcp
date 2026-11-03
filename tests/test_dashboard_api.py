@@ -3,7 +3,7 @@ import email
 import time
 from email.message import EmailMessage
 
-from test_dashboard import BASE, PASSWORD, SAME, client, queue, signed_in, web  # noqa: F401  (web is a fixture)
+from test_dashboard import BASE, PASSWORD, SAME, client, queue, web  # noqa: F401  (web is a fixture)
 
 
 async def api_session(c):
@@ -13,7 +13,8 @@ async def api_session(c):
 
 
 async def signed(c):
-    await signed_in(c)
+    r = await c.post("/dashboard/api/signin", json={"password": PASSWORD}, headers=SAME)
+    assert r.status_code == 200, r.text
     s = await api_session(c)
     assert s["signed_in"]
     return {**SAME, "x-csrf": s["csrf"]}
@@ -149,3 +150,28 @@ async def test_settings_read_and_save_and_a_looser_change_needs_a_fresh_sign_in(
         monkeypatch.setattr(time, "time", lambda: real() + 400)
         r = await c.post("/dashboard/api/settings/mail", json={"values": {"ALLOW_PERMANENT_DELETE": True}}, headers=h)
         assert r.status_code == 403 and r.json()["confirm"] is True
+
+
+async def test_notifications_a_device_subscribes_gets_a_note_for_a_new_request_and_can_be_removed(web, monkeypatch):
+    import json as _json
+    from test_push import FakeService, decrypt, device
+    from icloud_mcp import push as P
+    app, mcp, *_ = web()
+    svc = FakeService()
+    monkeypatch.setattr(P.httpx, "post", svc)
+    monkeypatch.setattr(P.PushStore, "notify", lambda self, kind, key="": self.send(kind, key) if self._devices else None)   # at once, not in a thread
+    async with client(app) as c:
+        h = await signed(c)
+        st = (await c.get("/dashboard/api/push")).json()
+        assert len(P.unb64u(st["public_key"])) == 65 and st["devices"] == []
+        ua, auth, sub = device()
+        r = await c.post("/dashboard/api/push/subscribe", json={"subscription": sub, "label": "iPhone · Safari"}, headers=h)
+        assert r.status_code == 200
+        qid = queue(mcp, subject="Private subject", body="Private text")
+        note = _json.loads(decrypt(svc.calls[-1][1], ua, auth))
+        assert note == {"title": "Approval needed", "body": "An email is waiting for your approval.", "open": f"mail:{qid}"}
+        assert (await c.post("/dashboard/api/push/test", json={}, headers=h)).json()["ok"] == 1
+        dev = (await c.get("/dashboard/api/push")).json()["devices"][0]
+        assert dev["label"] == "iPhone · Safari" and dev["last_sent_at"]
+        r = await c.post(f"/dashboard/api/push/{dev['id']}/remove", headers=h)
+        assert r.status_code == 200 and (await c.get("/dashboard/api/push")).json()["devices"] == []

@@ -92,7 +92,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                            imessage: Any = None, imessage_outbox: Any = None, audit: Any = None) -> None:
     if settings.dashboard:
         async def to_dashboard(_: Request) -> Response:
-            return RedirectResponse("/dashboard/approvals", status_code=303, headers=_HEADERS)
+            return RedirectResponse("/dashboard", status_code=303, headers=_HEADERS)
         mcp.custom_route("/outbox", methods=["GET", "POST"])(to_dashboard)
         mcp.custom_route("/outbox/act", methods=["POST"])(to_dashboard)
         return

@@ -154,7 +154,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             items = [q for q in src.pending() if not only or f"{src.kind}:{q.id}" == only]
             if not items:
                 continue
-            ctx = src.contexts(items, prune=False)
+            ctx = src.contexts(items, prune=not only)       # the whole queue: drop what is kept for items that have gone
             out += [(src, q, src.describe(q, ctx.get(q.id))) for q in items]
         out.sort(key=lambda w: w[1].expires_at)
         return out
@@ -236,7 +236,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err("This kind of file is not shown here.", 415)
         data = part.get_payload(decode=True) or b""
         return Response(data, media_type=ctype, headers={**headers, "Content-Disposition": "inline",
-                                                         "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+                                                         "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
+                                                         "X-Frame-Options": "SAMEORIGIN",   # the app shows it in its own frame
                                                          "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
     @route("/items/{key}/{action}", ["POST"])
@@ -421,6 +422,53 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         audit.record("server.paused" if want else "server.resumed", actor="owner", via=rec.get("via", ""),
                      summary="Paused all tools" if want else "Resumed all tools")
         return ok({"paused": want, "note": "Paused. Tools now answer that the server is paused." if want else "Resumed."})
+
+    # -- notifications (push.py) ---------------------------------------------------------------------------------------
+    @route("/push", ["GET"])
+    async def push_state(request: Request) -> Response:
+        got = reader(request)
+        if isinstance(got, Response):
+            return got
+        return ok({"public_key": d.push.public_key, "devices": d.push.devices(), "https": s.public_url.startswith("https://")})
+
+    @route("/push/subscribe", ["POST"])
+    async def push_subscribe(request: Request) -> Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, body = got
+        sub = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
+        label = str(body.get("label", "") or "This device")
+        try:
+            added = await asyncio.to_thread(d.push.add, sub, label)
+        except ValueError as e:
+            return err(str(e), 400)
+        audit.record("push.added", actor="owner", via=rec.get("via", ""), summary=f"Turned on notifications for {label}")
+        return ok({**added, "note": "Notifications are on for this device."})
+
+    @route("/push/{device}/remove", ["POST"])
+    async def push_remove(request: Request) -> Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        rec = got[1]
+        label = next((x["label"] for x in d.push.devices() if x["id"] == request.path_params["device"]), "a device")
+        if not await asyncio.to_thread(d.push.remove, request.path_params["device"]):
+            return err("That device does not get notifications.", 404)
+        audit.record("push.removed", actor="owner", via=rec.get("via", ""), summary=f"Turned off notifications for {label}")
+        return ok({"note": f"No more notifications for {label}."})
+
+    @route("/push/test", ["POST"])
+    async def push_test(request: Request) -> Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        counts = await asyncio.to_thread(d.push.send, "test", "", str(got[2].get("device", "")))
+        if not any(counts.values()):
+            return err("No device gets notifications yet.", 404)
+        if counts["ok"]:
+            return ok({"note": "Sent. It should arrive in a few seconds.", **counts})
+        return err("The push service did not take it." + (" The device was removed; turn notifications on again." if counts["gone"] else ""), 502, **counts)
 
     d.api_writer, d.api_reader, d.api_ok, d.api_err, d.api_need_confirm = writer, reader, ok, err, need_confirm
     d.bridge_state = bridge_state

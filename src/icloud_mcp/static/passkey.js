@@ -1,5 +1,5 @@
-// Passkey sign-in and registration for the icloud-mcp dashboard. Served from the server itself (CSP script-src 'self').
-// Buttons carry data-passkey="signin" or "register"; everything else on the pages works without this file.
+// Passkey sign-in and registration for the icloud-mcp dashboard app (window.Passkey). Served from the server itself
+// (CSP script-src 'self').
 (function () {
   "use strict";
   var b64 = {
@@ -54,47 +54,30 @@
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
   }
 
-  function showError(btn, text) {
-    var box = btn.parentNode.querySelector("[data-passkey-error]") || document.querySelector("[data-passkey-error]");
-    if (box) { box.textContent = text; box.hidden = false; }
-  }
-
-  function run(btn) {
-    var purpose = btn.getAttribute("data-passkey"), csrf = btn.getAttribute("data-csrf") || "";
-    var next = btn.getAttribute("data-next") || "/dashboard";
-    var nameField = btn.getAttribute("data-name-from"), name = nameField ? (document.getElementById(nameField) || {}).value || "" : "";
-    btn.disabled = true;
-    post("/dashboard/passkey/options", { purpose: purpose }, csrf).then(function (opts) {
-      if (opts.error === "confirm" && opts.confirm) { window.location = opts.confirm; return null; }
+  // For the app (static/app): the same steps as promises. signin() also confirms an existing session; register() needs it recent.
+  function ceremony(purpose, csrf, extra) {
+    if (!window.PublicKeyCredential) return Promise.reject(new Error("This browser cannot use passkeys here. Use the owner password."));
+    return post("/dashboard/passkey/options", { purpose: purpose }, csrf).then(function (opts) {
+      if (opts.error === "confirm") { var e = new Error("confirm"); e.confirm = true; throw e; }
       if (opts.error) throw new Error(opts.error);
       var call = purpose === "register"
         ? navigator.credentials.create({ publicKey: creationOptions(opts.publicKey) })
         : navigator.credentials.get({ publicKey: requestOptions(opts.publicKey) });
       return call.then(function (cred) {
-        return post("/dashboard/passkey/verify", { purpose: purpose, ticket: opts.ticket, credential: credentialJSON(cred), next: next, name: name }, csrf);
+        return post("/dashboard/passkey/verify", Object.assign({ purpose: purpose, ticket: opts.ticket, credential: credentialJSON(cred) }, extra || {}), csrf);
       });
     }).then(function (res) {
-      if (!res) return;
       if (res.error) throw new Error(res.error);
-      window.location = res.next || "/dashboard";
-    }).catch(function (e) {
-      btn.disabled = false;
-      var msg = e && e.name === "NotAllowedError" ? "The passkey prompt was closed or timed out. Try again." : (e && e.message) || "That did not work.";
-      showError(btn, msg);
+      return res;
+    }, function (e) {
+      if (e && e.name === "NotAllowedError") throw new Error("The passkey prompt was closed or timed out. Try again.");
+      throw e;
     });
   }
+  window.Passkey = {
+    available: function () { return !!window.PublicKeyCredential; },
+    signin: function (csrf) { return ceremony("signin", csrf || "", { next: "/dashboard" }); },
+    register: function (name, csrf) { return ceremony("register", csrf, { name: name || "" }); }
+  };
 
-  document.addEventListener("DOMContentLoaded", function () {
-    var buttons = document.querySelectorAll("[data-passkey]");
-    if (!window.PublicKeyCredential) {
-      for (var i = 0; i < buttons.length; i++) {
-        buttons[i].disabled = true;
-        showError(buttons[i], "This browser cannot use passkeys here. Use the owner password.");
-      }
-      return;
-    }
-    for (var j = 0; j < buttons.length; j++) {
-      buttons[j].addEventListener("click", function (ev) { run(ev.currentTarget); });
-    }
-  });
 })();
