@@ -563,6 +563,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `FILE_TOKEN_PREFIX` | empty | Starts every upload link of a mail that waits for a file (`/files/<prefix>.<token>`). Set it when one proxy serves several of these servers on one address: it can then send each upload to the right one by its path alone |
 | `MCP_PUBLIC_URL`, `MCP_OWNER_PASSWORD` | required when hosted | Public https address; owner password (12+ characters) |
 | `OWNER_ACCESS_TEAM_DOMAIN`, `OWNER_ACCESS_AUD`, `OWNER_ACCESS_EMAILS` | empty (off) | Behind Cloudflare Access: `/outbox` accepts the verified Access identity of these emails instead of the owner password (signed token checked against the team keys; the password stays as fallback) |
+| `OWNER_TAILSCALE_LOGINS`, `TRUSTED_PROXY_IPS` | empty (off) | Behind `tailscale serve` (fork): the dashboard, `/outbox`, the connect page and `/setup` accept these Tailscale logins instead of the owner password; the `Tailscale-User-Login` header counts only on requests from `TRUSTED_PROXY_IPS` |
 | `MCP_HOST`, `MCP_PORT`, `MCP_EXTRA_ALLOWED_HOSTS` | 127.0.0.1 (0.0.0.0 in the Docker image), 8000, empty | Bind address and extra allowed `Host` headers |
 | `MCP_STATELESS` | true | No server-side MCP sessions, so a restart never breaks a connected client ("Missing session ID") |
 | `TOOL_TIMEOUT_SECONDS` | 60 | A tool call running longer is abandoned with an error that names the slow step (at most 90 while `MCP_JSON_RESPONSE` is on, below Cloudflare's 100 s limit) |

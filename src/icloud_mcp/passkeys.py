@@ -54,6 +54,7 @@ class Passkey:
     name: str
     created_at: float
     last_used_at: float | None = None
+    rp_id: str = ""         # the address it was made for; a passkey only works on that one (MCP_PUBLIC_URL's host)
 
 
 class PasskeyStore:
@@ -68,7 +69,8 @@ class PasskeyStore:
         self._ticket_key = secrets.token_bytes(32)                      # signs sign-in tickets; a restart voids open ones
         self._used: dict[str, float] = {}                               # sign-in tickets already used -> their expiry
         self._user_id = b""
-        self._keys: list[Passkey] = []
+        self._keys: list[Passkey] = []          # the passkeys for this address: listed, offered and checked
+        self._elsewhere: list[Passkey] = []     # made for another address (MCP_PUBLIC_URL changed): kept on disk, never offered
         self._load()
 
     # -- storage ---------------------------------------------------------------------------
@@ -78,20 +80,25 @@ class PasskeyStore:
         except (OSError, ValueError):
             data = {}
         self._user_id = base64url_to_bytes(data["user_id"]) if available() and data.get("user_id") else secrets.token_bytes(16)
-        self._keys = []
+        self._keys, self._elsewhere, stamped = [], [], False
         for k in data.get("keys", []) if isinstance(data, dict) else []:
             try:
-                self._keys.append(Passkey(**{f: k[f] for f in ("id", "public_key", "sign_count", "name", "created_at")},
-                                          last_used_at=k.get("last_used_at")))
+                key = Passkey(**{f: k[f] for f in ("id", "public_key", "sign_count", "name", "created_at")},
+                              last_used_at=k.get("last_used_at"), rp_id=str(k.get("rp_id") or ""))
             except (KeyError, TypeError):
                 continue
+            if not key.rp_id:               # stored before passkeys carried their address: they were made for this one
+                key.rp_id, stamped = self.rp_id, True
+            (self._keys if key.rp_id == self.rp_id else self._elsewhere).append(key)
+        if stamped:
+            self._save()
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".passkeys-", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump({"user_id": bytes_to_base64url(self._user_id), "keys": [asdict(k) for k in self._keys]}, f, indent=1)
+                json.dump({"user_id": bytes_to_base64url(self._user_id), "keys": [asdict(k) for k in self._keys + self._elsewhere]}, f, indent=1)
             os.chmod(tmp, 0o600)
             os.replace(tmp, self.path)
         finally:
@@ -173,7 +180,7 @@ class PasskeyStore:
                 raise PasskeyError("The browser's answer could not be verified. Nothing was saved.") from e
             key = Passkey(id=bytes_to_base64url(v.credential_id), public_key=bytes_to_base64url(v.credential_public_key),
                           sign_count=v.sign_count, name=(name.strip()[:40] or f"Passkey {len(self._keys) + 1}"),
-                          created_at=time.time())
+                          created_at=time.time(), rp_id=self.rp_id)
             if any(k.id == key.id for k in self._keys):
                 raise PasskeyError("This passkey is already registered.")
             self._keys.append(key)

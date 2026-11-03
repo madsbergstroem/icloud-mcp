@@ -505,7 +505,7 @@ def _page(provider: OwnerOAuthProvider, pid: str, error: str = "", status: int =
     redirect = urlsplit(str(pend["params"].redirect_uri)).hostname or "?"
     values = dict(client=html.escape(name), pid=html.escape(pid), redirect=html.escape(redirect),
                   cid=html.escape(OwnerOAuthProvider._cid(pend.get("client_id"))))
-    sso_fields = (f'<p class="hint">Signed in as <b>{html.escape(sso[0])}</b> through Cloudflare Access.</p>'
+    sso_fields = (f'<p class="hint">Signed in as <b>{html.escape(sso[0])}</b> through single sign-on.</p>'
                   f'<input type="hidden" name="sso" value="{html.escape(sso[1])}">') if sso else ""
     if styled:
         err = f'<p class="banner bad" role="alert">{html.escape(error)}</p>' if error else ""
@@ -529,7 +529,7 @@ def register_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Settings) 
     @mcp.custom_route("/login", methods=["GET"])
     async def login_get(request: Request) -> Response:
         pid = request.query_params.get("p", "")
-        if access is not None and (who := await access.owner_email(request.headers)):
+        if access is not None and (who := await access.owner_email(request)):
             return _page(provider, pid, sso=(who, _sso_tok(pid, who)))
         return _page(provider, pid)
 
@@ -545,12 +545,12 @@ def register_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Settings) 
                 provider.audit.record("app.denied", actor="owner", via="password", summary=f"Refused to connect {name}")
             return RedirectResponse(url, status_code=302, headers=_HEADERS) if url else _page(provider, pid)
         if access is not None and form.get("sso"):
-            who = await access.owner_email(request.headers)
+            who = await access.owner_email(request)
             if not who or not hmac.compare_digest(str(form.get("sso")).encode(), _sso_tok(pid, who).encode()):
-                log.warning("Rejected a Cloudflare Access approval on /login")
+                log.warning("Rejected a single sign-on approval on /login")
                 return _page(provider, pid, "Your sign-in could not be confirmed. Reload this page and try again.", 403)
             url = provider.approve(pid)
-            log.info("Owner approved a client through Cloudflare Access")
+            log.info("Owner approved a client through single sign-on")
             return RedirectResponse(url, status_code=302, headers=_HEADERS) if url else _page(provider, pid)
         if not provider.login_allowed():
             return _page(provider, pid, "Too many failed attempts. Try again in 15 minutes.", 429)

@@ -183,8 +183,8 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
 
     @mcp.custom_route("/outbox", methods=["GET"])
     async def outbox_get(request: Request) -> Response:
-        if access is not None and (who := await access.owner_email(request.headers)):
-            log.info("Owner signed in to /outbox through Cloudflare Access")
+        if access is not None and (who := await access.owner_email(request)):
+            log.info("Owner signed in to /outbox through single sign-on")
             return _queue_page(f'<p class="muted">Signed in as {html.escape(who)}.</p>')
         return login()
 

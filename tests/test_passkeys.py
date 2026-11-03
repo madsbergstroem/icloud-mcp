@@ -25,7 +25,7 @@ def test_register_then_sign_in(tmp_path):
     assert key.name == "Test phone" and [k.id for k in store.list()] == [key.id]
     assert oct(os.stat(tmp_path / "passkeys.json").st_mode & 0o777) == "0o600"
     saved = json.loads((tmp_path / "passkeys.json").read_text())
-    assert set(saved["keys"][0]) == {"id", "public_key", "sign_count", "name", "created_at", "last_used_at"}   # no private key
+    assert set(saved["keys"][0]) == {"id", "public_key", "sign_count", "name", "created_at", "last_used_at", "rp_id"}   # no private key
     opts = store.authentication_options()
     assert opts["publicKey"]["allowCredentials"][0]["id"] == key.id
     used = store.authenticate(opts["ticket"], dev.get(opts["publicKey"]))

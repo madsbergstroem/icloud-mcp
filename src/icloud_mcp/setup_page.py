@@ -420,10 +420,10 @@ Adresse und Passwort werden von diesem Server gelöscht.{extra}</p>
 
     # ------------------------------------------------------------ handlers
     async def _identity(request: Request) -> str | None:
-        return await access.owner_email(request.headers)
+        return await access.owner_email(request)
 
     def _refused() -> Response:
-        return _html('<p class="bad">Diese Seite ist nur nach der Anmeldung über Cloudflare Access erreichbar.</p>', 403)
+        return _html('<p class="bad">Diese Seite ist nur nach der Anmeldung über Cloudflare Access oder Tailscale erreichbar.</p>', 403)
 
     @mcp.custom_route("/setup", methods=["GET"])
     async def setup_get(request: Request) -> Response:

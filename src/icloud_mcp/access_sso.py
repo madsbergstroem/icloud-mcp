@@ -1,4 +1,4 @@
-"""Optional owner sign-in through Cloudflare Access for /outbox, the /login consent page and /setup.
+"""Optional owner sign-in through Cloudflare Access or Tailscale for /outbox, the /login consent page, /setup and the dashboard.
 
 When the server sits behind a Cloudflare Access application that already authenticates the owner (for example with an
 OIDC identity provider and a passkey), asking for the owner password again on /outbox is a second login for the same
@@ -10,12 +10,18 @@ is checked against the team's published keys, its audience must be this Access a
 it must be unexpired, and its email must be one of the configured owner identities. A request that reaches the origin
 without passing Access carries no valid token and falls back to the password form. The password keeps working.
 
+Tailscale (fork): behind `tailscale serve`, which removes any Tailscale-User-Login header a client sends and sets it to
+the visitor's login, OWNER_TAILSCALE_LOGINS names the logins that count as the owner. The header is believed only on a
+request that comes straight from one of TRUSTED_PROXY_IPS (the proxy in front, or 127.0.0.1); from anywhere else it is
+ignored, so a client that reaches the server another way cannot claim an identity by sending the header itself.
+
 The team keys come from `https://<team>/cdn-cgi/access/certs`. A host whose container may not reach the internet sets
 OWNER_ACCESS_CERTS_FILE instead: something outside the container refreshes that file, and it is re-read when it changes.
 """
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -85,8 +91,68 @@ class AccessOwnerVerifier:
         return await asyncio.to_thread(self._verify, token)
 
 
-def from_settings(settings: Any) -> AccessOwnerVerifier | None:
+TAILSCALE_HEADER = "tailscale-user-login"
+
+
+class TailscaleOwner:
+    """The login that `tailscale serve` puts on a request, believed only from the proxy's own address."""
+
+    def __init__(self, logins: tuple[str, ...], trusted: tuple[str, ...]) -> None:
+        self.logins = frozenset(x.lower() for x in logins)
+        self.trusted = tuple(ipaddress.ip_network(x, strict=False) for x in trusted)
+
+    def _from_proxy(self, host: str | None) -> bool:
+        try:
+            ip = ipaddress.ip_address(host or "")
+        except ValueError:
+            return False
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        return any(ip in net for net in self.trusted)
+
+    def owner(self, request: Any) -> str | None:
+        login = str(request.headers.get(TAILSCALE_HEADER, "")).strip().lower()
+        if not login:
+            return None
+        client = getattr(request, "client", None)
+        if not self._from_proxy(client.host if client else None):
+            log.warning("Ignored a Tailscale-User-Login header that did not come from a trusted proxy")
+            return None
+        if login not in self.logins:
+            log.warning("Tailscale identity is not an owner identity; showing the password form")
+            return None
+        return login
+
+
+class OwnerSSO:
+    """Who the owner is on this request, from Tailscale or from Cloudflare Access, whichever is set up and vouches."""
+
+    def __init__(self, access: AccessOwnerVerifier | None, tailscale: TailscaleOwner | None) -> None:
+        self.access, self.tailscale = access, tailscale
+
+    async def owner(self, request: Any) -> tuple[str, str] | None:
+        """(identity, how) or None. how is 'Tailscale' or 'Cloudflare Access', for the activity log and the dashboard."""
+        headers = getattr(request, "headers", request)        # a plain header mapping works for Access (no client address)
+        if self.tailscale is not None and hasattr(request, "headers") and (who := self.tailscale.owner(request)):
+            return who, "Tailscale"
+        if self.access is not None and (who := await self.access.owner_email(headers)):
+            return who, "Cloudflare Access"
+        return None
+
+    async def owner_email(self, request: Any) -> str | None:
+        found = await self.owner(request)
+        return found[0] if found else None
+
+
+def from_settings(settings: Any) -> OwnerSSO | None:
+    access = None
     if settings.owner_access_team and settings.owner_access_aud and settings.owner_access_emails:
         jwks = FileJWKS(settings.owner_access_certs_file) if settings.owner_access_certs_file else None
-        return AccessOwnerVerifier(settings.owner_access_team, settings.owner_access_aud, settings.owner_access_emails, jwks)
-    return None
+        access = AccessOwnerVerifier(settings.owner_access_team, settings.owner_access_aud, settings.owner_access_emails, jwks)
+    tailscale = None
+    logins, trusted = getattr(settings, "owner_tailscale_logins", ()), getattr(settings, "trusted_proxy_ips", ())
+    if logins and trusted:
+        tailscale = TailscaleOwner(logins, trusted)
+    elif logins:
+        log.warning("OWNER_TAILSCALE_LOGINS is set without TRUSTED_PROXY_IPS: Tailscale sign-in stays off")
+    return OwnerSSO(access, tailscale) if access is not None or tailscale is not None else None

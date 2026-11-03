@@ -238,6 +238,8 @@ class Settings:
     owner_access_aud: str = ""    # OWNER_ACCESS_AUD: AUD tag of the Access application in front of /outbox
     owner_access_emails: tuple[str, ...] = ()  # OWNER_ACCESS_EMAILS: Access identities that count as the owner (all three set = on)
     owner_access_certs_file: str = ""  # OWNER_ACCESS_CERTS_FILE: read the team keys from this JSON file instead of fetching them (egress-locked hosts)
+    owner_tailscale_logins: tuple[str, ...] = ()  # OWNER_TAILSCALE_LOGINS: Tailscale logins that count as the owner (with TRUSTED_PROXY_IPS)
+    trusted_proxy_ips: tuple[str, ...] = ()  # TRUSTED_PROXY_IPS: addresses or CIDR ranges of the proxy whose Tailscale-User-Login header is believed
     file_token_prefix: str = ""   # FILE_TOKEN_PREFIX: starts every upload token (/files/<prefix>.<token>), so a proxy in front of
                                   # several servers on one address can tell whose upload it is without reading the body
     overrides_active: tuple[str, ...] = ()  # which OVERRIDABLE settings come from DATA_DIR/overrides.json (names only)
@@ -368,6 +370,8 @@ class Settings:
             owner_access_aud=_str("OWNER_ACCESS_AUD"),
             owner_access_emails=tuple(x.strip().lower() for x in _list("OWNER_ACCESS_EMAILS") if x.strip()),
             owner_access_certs_file=_str("OWNER_ACCESS_CERTS_FILE"),
+            owner_tailscale_logins=tuple(x.strip().lower() for x in _list("OWNER_TAILSCALE_LOGINS") if x.strip()),
+            trusted_proxy_ips=tuple(x.strip() for x in _list("TRUSTED_PROXY_IPS") if x.strip()),
             safety_screen=_str("SAFETY_SCREEN"),
             owner_addresses=tuple(a.strip().lower() for a in _list("OWNER_ADDRESSES") if a.strip()),
             shortcuts_allow=tuple(n.strip() for n in _str("SHORTCUTS_ALLOW").split(";" if ";" in _str("SHORTCUTS_ALLOW") else ",") if n.strip()),
