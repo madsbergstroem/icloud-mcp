@@ -387,6 +387,22 @@ async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text
     assert [e["action"] for e in mcp._icloud_dashboard.audit.entries(20, ("approval.",))].count("approval.edited") == 2
 
 
+async def test_the_original_typed_back_by_hand_reads_as_not_edited_waiting_and_sent(web):
+    app, mcp, _p, sent = web()
+    q = queue(mcp, body="Original words")
+    mail = mcp._icloud_dashboard.sources["mail"]
+    async with client(app) as c:
+        h = api(await signed_in(c))
+        put = lambda sha, text: c.put(f"/dashboard/api/items/mail:{q}/text", json={"sha": sha, "text": text}, headers=h)  # noqa: E731
+        sha = (await put(mail.pending()[0].sha256, "Changed words")).json()["sha"]
+        assert (await call(mcp, {"id": q}))["edited"] is True
+        sha = (await put(sha, "Original words")).json()["sha"]                  # no "Bring it back": the same words typed in again
+        assert (await call(mcp, {"id": q})) | {"at": 0} == {"id": q, "kind": "mail", "status": "waiting", "edited": False, "at": 0}
+        assert (await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200 and sent
+    got = await call(mcp, {"id": q})
+    assert (got["status"], got["edited"]) == ("sent", False)                    # the waiting answer and the sent one agree
+
+
 async def test_the_tool_refuses_neither_and_both(web):
     _, mcp, *_ = web()
     for args in ({}, {"id": "a", "since": "now"}, {"id": "x" * 65}, {"id": "  "}):

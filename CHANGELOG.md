@@ -10,7 +10,8 @@ Update the Mac helper before the server whenever its version changes.
   still holds the text the agent asked for; one that has ended is edited when the newest of its `approval.edited` and
   `approval.edit_undone` log entries is the first, whether it was sent, discarded, expired or unclear. `unknown` stays false.
   The `since` list shows it the same way. Edit entries still end nothing and never move the cursor, and the answer holds
-  no text.
+  no text. Typing the agent's wording back by hand now counts as bringing it back (`approval.edit_undone` in the log, as
+  "Bring it back" already did), so a waiting and a sent answer agree.
 - **A new look, and edit before you send (fork).** The dashboard follows the system's light or dark with one accent and bold
   sans titles. Today is now Home, with the count waiting by kind and a pause button in the side list on wide screens, and
   Settings brings its own list there. A request shows the message as it goes out, a warning for a group conversation, and

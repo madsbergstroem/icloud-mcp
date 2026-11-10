@@ -191,6 +191,23 @@ async def test_the_log_records_that_a_text_was_edited_and_never_the_text(web):
     assert mcp._icloud_dashboard.audit.verify()["ok"] is True
 
 
+async def test_typing_the_original_back_by_hand_is_logged_as_bringing_it_back(web):
+    app, mcp, *_ = web()
+    qid = queue(mcp, subject="Plans", body="Original words")
+    src = mcp._icloud_dashboard.sources["mail"]
+    async with client(app) as c:
+        token = await signed_in(c)
+        sha = (await c.put(url(f"mail:{qid}"), json={"sha": src.pending()[0].sha256, "text": "Changed words"}, headers=api(token))).json()["sha"]
+        assert src.pending()[0].edited_from is not None
+        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "Original words"}, headers=api(token))
+        assert r.status_code == 200 and r.json()["changed"] is True
+        entries = (await c.get("/dashboard/api/activity?filter=approvals")).json()["days"][0]["entries"]
+        assert [e["what"] for e in entries] == ["brought back the original text of email “Plans”", "edited email “Plans” before sending"]
+    assert src.pending()[0].edited_from is None
+    edits = [json.loads(line)["action"] for line in audit_text(mcp).splitlines() if '"approval.edit' in line]
+    assert edits == ["approval.edited", "approval.edit_undone"]                          # the same entry "Bring it back" writes
+
+
 # -- iMessage ----------------------------------------------------------------------------------------------------------------------
 async def test_an_imessage_edit_changes_only_the_text_and_the_limit_is_the_one_for_queueing(web):
     app, mcp, *_ = web(**IMESSAGE_ENV)
