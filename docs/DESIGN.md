@@ -81,3 +81,9 @@ Ionic has nothing for these, so they are written here, each in one place in `app
 - `#/activity` and `#/settings` open those tabs.
 - Old addresses (`/dashboard/approvals?item=`, `/dashboard/attach/<id>`, `/dashboard/security`, `/dashboard/settings`)
   redirect to them.
+
+## Looking at a change
+
+`PYTHONPATH=src python dev/preview_dashboard.py` serves the dashboard with made-up data (a fake mailbox and Mac helper, a few
+waiting requests) and prints the address and a throwaway owner password. Check every screen at 390 and 1280 px, in light and
+dark, and click each button in each state it appears in.
