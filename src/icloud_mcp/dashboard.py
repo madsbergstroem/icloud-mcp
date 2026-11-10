@@ -42,6 +42,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from . import passkeys as P
+from .approval_status import Released
 from .approvals import flagged
 from .audit import AuditLog
 from .config import Settings, owner_password_problem
@@ -326,7 +327,7 @@ class IMessageApprovals(ApprovalSource):
     def release(self, q):
         r = self.imessage.release(self.box, q.id)
         word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)"}.get(r.get("status"), str(r.get("status")))
-        return f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip()
+        return Released(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), r.get("status"))
 
     def discard(self, q):
         self.box.claim(q.id)
