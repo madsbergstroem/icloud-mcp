@@ -22,6 +22,9 @@ from typing import Any, Callable
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from . import textedit as T
+from .dashboard_accounts import mail_account
+
 log = logging.getLogger(__name__)
 
 # What the preview shows inline. Everything else is offered by name and size only: the browser never runs or renders it.
@@ -74,12 +77,25 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         via = str(rec.get("via", ""))
         return "the owner password" if via == "password" else via
 
+    def entry_tag(e: dict[str, Any]) -> tuple[str, str]:
+        """A small tag and one line of explanation for the entries that need one: an edit, a send that is not certain."""
+        action, delivery = e.get("action"), (e.get("details") or {}).get("delivery")
+        if action == "approval.edited":
+            return "Edited", "The text changed. The log keeps no text."
+        if action == "approval.edit_undone":
+            return "Edited", "Back to what was asked for."
+        if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
+            return "Unclear", "Messages did not confirm it. Nothing is sent again."
+        return "", ""
+
     def entry(e: dict[str, Any]) -> dict[str, Any]:
         """'You' / 'Someone' / the app's name, and what it did, starting lower-case: 'signed in with a passkey'."""
         actor = e.get("actor") or "?"
-        text = str(e.get("summary") or e.get("action", ""))
+        text = re.sub(r"\bimessage\b", "iMessage", str(e.get("summary") or e.get("action", "")))      # older lines were written in lower case
+        tag, note = entry_tag(e)
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": "You" if actor == "owner" else ("Someone" if actor == "unknown" else actor),
-                "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", "")}
+                "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", ""),
+                "tag": tag, "note": note}
 
     # -- session -------------------------------------------------------------------------------------------------------
     @route("/session", ["GET"])
@@ -150,7 +166,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         m = re.match(r"Approved (.+?) “(.*)”$", text)
         rcpt = (e.get("details") or {}).get("recipients") or []
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else text,
-                "what": (m.group(1)[:1].upper() + m.group(1)[1:]) if m else "", "to": short_names(", ".join(map(str, rcpt[:1])))}
+                "what": ("iMessage" if m.group(1) == "imessage" else m.group(1)[:1].upper() + m.group(1)[1:]) if m else "", "to": short_names(", ".join(map(str, rcpt[:1]))),
+                "unclear": (e.get("details") or {}).get("delivery") in ("unconfirmed", "failed")}
 
     def label_of(src: Any, q: Any) -> str:
         return src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
@@ -159,9 +176,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return next((val for k, val in v["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
 
     def summary(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
-        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": short_names(to_of(v)) if src.kind != "calendar" else to_of(v),
+        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
-                "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked"))}
+                "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group"))}
 
     def described(only: str = "") -> list[tuple[Any, Any, dict[str, Any]]]:
         out = []
@@ -194,7 +211,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if isinstance(got, Response):
             return got
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
-        return ok({"waiting": n, "v": fingerprint, "paused": d.paused()})
+        kinds = await asyncio.to_thread(lambda: {k: len(src.pending()) for k, src in d.sources.items()})
+        mac = bridge_state()
+        return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "kinds": kinds,
+                   "mac": "off" if not mac.get("set_up") else ("online" if mac.get("online") else "offline")})
 
     def mail_parts(q: Any) -> Any:
         return email.message_from_bytes(q.raw, policy=policy.default)
@@ -211,7 +231,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src, q, v = found[0]
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
-               "approve_label": label_of(src, q), "files": [], "missing": [], "original": None}
+               "approve_label": label_of(src, q), "files": [], "missing": [], "original": None,
+               "edit": await asyncio.to_thread(T.edit_info, src, q),
+               "account": mail_account(s) if src.kind == "mail" else ""}
         if src.kind == "mail":
             dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
             added = {x["index"]: x["asked"] for x in dq["added_files"]}
@@ -289,7 +311,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      outbox_id=q.id, delivery=getattr(note, "delivery", None),
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
-        return ok({"note": note})
+        # "state" only when the send is not certain; nothing is sent again from here
+        return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})
 
     # -- activity ------------------------------------------------------------------------------------------------------
     @route("/activity", ["GET"])

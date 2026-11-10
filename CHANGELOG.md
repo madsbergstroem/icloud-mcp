@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **A new look, and edit before you send (fork).** The dashboard follows the system's light or dark with one accent and bold
+  sans titles. Today is now Home, with the count waiting by kind and a pause button in the side list on wide screens, and
+  Settings brings its own list there. A request shows the message as it goes out, a warning for a group conversation, and
+  how a send went: sending, sent, not sure (Messages did not confirm it; nothing is sent again) or not sent and still
+  waiting. "Edit text" changes only the words of a mail (without an HTML part), an iMessage or an event's description
+  (`PUT /dashboard/api/items/{key}/text`); the text the agent asked for stays under it, and "Bring it back" restores it.
+  The log records that a text was edited, never the text. Settings lists the connected accounts, read only, and links to
+  `/setup`.
 - **An agent can ask what became of a request it queued (fork).** `approval_status` takes the `outbox_id` from a
   `queued_for_owner_approval` result and answers `waiting`, `sent`, `discarded`, `expired`, `unclear` or `unknown`, with the kind
   and a time and never the text, subject, names or recipients. An agent that heard nothing no longer has to choose between

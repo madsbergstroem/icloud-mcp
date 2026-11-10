@@ -325,7 +325,7 @@ class IMessageService:
         to = d.get("to") or {}
         people = ", ".join(f"{p.get('name')} ({p.get('handle')})" if p.get("name") else p.get("handle", "") for p in to.get("participants", []))
         return {"to": (to.get("name") + ": " if to.get("name") else "") + people, "chat_id": d.get("chat_id") or d.get("handle"),
-                "group": to.get("group", False), "text": d.get("text", "")}
+                "group": to.get("group", False), "text": d.get("text", ""), "name": to.get("name") or "", "people": people}
 
     def release(self, outbox: Any, item_id: str) -> dict[str, Any]:
         """Send a queued iMessage. Called only from the password-protected approval page, never from a tool. Both lists are

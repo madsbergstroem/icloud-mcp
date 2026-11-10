@@ -45,6 +45,7 @@ from . import passkeys as P
 from .approval_status import Released
 from .approvals import flagged
 from .audit import AuditLog
+from . import textedit as T
 from .config import Settings, owner_password_problem
 from .mail import MailError
 
@@ -178,6 +179,23 @@ class ApprovalSource:
     def discard(self, q: Any) -> None:
         raise NotImplementedError
 
+    # Editing the text before approving (textedit.py). A source that has no text of its own keeps these answers.
+    text_limit = 10000
+
+    def text_block(self, q: Any) -> str:
+        """Why the text cannot be edited, or "" when it can."""
+        return "This kind of request has no text to edit."
+
+    def text_of(self, q: Any) -> str:
+        raise T.TextLocked(self.text_block(q))
+
+    def clean_text(self, text: Any) -> str:
+        return T.clean(text, allow_empty=False, limit=self.text_limit)
+
+    def with_text(self, q: Any, text: str) -> tuple[bytes, dict[str, Any] | None]:
+        """The stored message with this text, and the changed followup (None when it stays)."""
+        raise T.TextLocked(self.text_block(q))
+
 
 class MailApprovals(ApprovalSource):
     kind, badge, approve_label = "mail", "Email", "Send"
@@ -220,6 +238,19 @@ class MailApprovals(ApprovalSource):
 
     def discard(self, q):
         self.mail.outbox.claim(q.id)
+
+    @property
+    def text_limit(self) -> int:
+        return self.mail.s.max_body_chars
+
+    def text_block(self, q):
+        return T.mail_block(q.raw)
+
+    def text_of(self, q):
+        return T.mail_text(q.raw)
+
+    def with_text(self, q, text):
+        return T.mail_with_text(q.raw, text), None
 
 
 _AGENT_HINT = "Run icloud_check_health to see which service is failing."
@@ -307,6 +338,20 @@ class CalendarApprovals(ApprovalSource):
     def discard(self, q):
         self.cal.outbox.claim(q.id)
 
+    text_limit = T.CALENDAR_MAX_CHARS
+
+    def text_block(self, q):
+        return T.calendar_block(q.raw, q.followup)
+
+    def text_of(self, q):
+        return T.calendar_text(q.raw)
+
+    def clean_text(self, text):
+        return T.clean(text, allow_empty=True, limit=self.text_limit)      # an empty description is allowed
+
+    def with_text(self, q, text):
+        return T.calendar_with_text(q.raw, text), {**(q.followup or {}), "description": text[:4000]}
+
 
 class IMessageApprovals(ApprovalSource):
     kind, badge, approve_label = "imessage", "iMessage", "Send"
@@ -320,9 +365,10 @@ class IMessageApprovals(ApprovalSource):
     def describe(self, q, context=None):
         d = self.imessage.describe_queued(q)
         warnings = ["A group conversation: everyone in it receives this."] if d["group"] else []
-        return {"title": f"iMessage to {d['to'] or d['chat_id'] or ''}", "badge": "iMessage",
-                "rows": [("Conversation", d["chat_id"] or "")] if d["chat_id"] else [], "text": d["text"],
-                "notes": ["Sent from your Mac once you approve."], "warnings": warnings, "needs_override": False}
+        label = d["name"] or d["people"] or d["chat_id"] or ""      # a named chat by its name; the people stay in the card
+        rows = ([("Chat with", d["people"])] if d["people"] else []) + ([("Conversation", d["chat_id"])] if d["group"] and d["chat_id"] else [])
+        return {"title": f"iMessage to {label}", "label": label, "badge": "iMessage", "rows": rows, "text": d["text"],
+                "notes": ["Sent from your Mac once you approve."], "warnings": warnings, "needs_override": False, "group": bool(d["group"])}
 
     def release(self, q):
         r = self.imessage.release(self.box, q.id)
@@ -331,6 +377,20 @@ class IMessageApprovals(ApprovalSource):
 
     def discard(self, q):
         self.box.claim(q.id)
+
+    text_limit = T.IMESSAGE_MAX_CHARS
+
+    def text_block(self, q):
+        return ""
+
+    def text_of(self, q):
+        return T.imessage_text(q.raw)
+
+    def clean_text(self, text):
+        return T.clean(text, allow_empty=False, limit=self.text_limit, strip=True)    # as imessage_send_message does
+
+    def with_text(self, q, text):
+        return T.imessage_with_text(q.raw, text), None
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -811,6 +871,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
                  record_failure_line=record_failure_line, headers=_HEADERS, filters=_FILTERS, for_owner=for_owner,
                  owner_password_problem=owner_password_problem)
+    from .dashboard_accounts import register_accounts_api
+    from .textedit import register_text_api
+    register_text_api(mcp, d, audit)
+    register_accounts_api(mcp, d)
     return d
 
 

@@ -1,10 +1,13 @@
-// The dashboard app: sign-in, the three tabs (Today, Activity, Settings), the side navigation on wide screens, the live
-// state every 15 seconds while the page is visible, and links that open one request (#/item/<kind>:<id>).
+// The dashboard app: sign-in, the three tabs (Home, Activity, Settings), the side list on wide screens (with its own list for
+// Settings), the live state every 15 seconds while the page is visible, and links that open one request (#/item/<kind>:<id>).
 import { loadSession, get, post, session } from "./api.js";
-import { esc, icon, fail, root, titleBlock } from "./ui.js";
+import { esc, icon, fail, root, titleBlock, wide } from "./ui.js";
 import { app } from "./state.js";
 import "./today.js";
-import "./settings.js";
+import { SECTIONS } from "./settings.js";
+import "./accounts.js";
+
+const KIND_NAMES = { mail: "Mail", imessage: "iMessage", calendar: "Calendar" };
 
 const POLL = 15000;
 let lastV = null, timer = null;
@@ -37,28 +40,54 @@ function signin() {
 }
 
 function shell() {
-  const tabs = [["today", "Today", "file-tray-outline"], ["activity", "Activity", "time-outline"], ["settings", "Settings", "settings-outline"]];
+  const tabs = [["today", "Home", "file-tray-outline"], ["activity", "Activity", "time-outline"], ["settings", "Settings", "settings-outline"]];
   root().innerHTML = `<div class="shell">
-    <nav class="side" aria-label="Sections">${tabs.map(([t, l, i]) => `<ion-item button detail="false" data-side="${t}" lines="none">${icon(i)}
-      <ion-label style="margin-left:10px">${l}</ion-label>${t === "today" ? `<ion-note slot="end" class="num" data-count></ion-note>` : ""}</ion-item>`).join("")}
-      <div class="foot"><span data-live-dot>●</span> <span data-live-text>Live</span><br>${esc(session.data.host)}</div></nav>
+    <nav class="side" aria-label="Sections">
+      <div class="who"><span class="av">I</span>iCloud connector</div>
+      <ion-button class="neutral pause" expand="block" data-pause>Pause tools</ion-button>
+      ${tabs.map(([t, l, i]) => `<ion-item button detail="false" data-side="${t}" lines="none">${icon(i)}
+        <ion-label style="margin-left:10px">${l}</ion-label>${t === "today" ? `<ion-note slot="end" class="num" data-count></ion-note>` : ""}</ion-item>`).join("")}
+      <div class="lbl">Waiting by kind</div><div data-kinds></div>
+      <div class="foot" data-foot></div></nav>
+    <nav class="side setnav" aria-label="Settings sections">
+      <ion-item button detail="false" lines="none" data-back>${icon("chevron-back-outline")}<ion-label style="margin-left:10px">Back to app</ion-label></ion-item>
+      <div class="lbl">Settings</div>
+      ${SECTIONS.map(([id, label]) => `<ion-item button detail="false" lines="none" data-section="${id}"><ion-label>${esc(label)}</ion-label></ion-item>`).join("")}
+    </nav>
     <ion-tabs>
       ${tabs.map(([t]) => `<ion-tab tab="${t}"><ion-nav root="icm-${t}"></ion-nav></ion-tab>`).join("")}
       <ion-tab-bar slot="bottom">${tabs.map(([t, l, i]) => `<ion-tab-button tab="${t}">${icon(i)}<ion-label>${l}</ion-label>
         ${t === "today" ? `<ion-badge color="danger" data-badge hidden></ion-badge>` : ""}</ion-tab-button>`).join("")}</ion-tab-bar>
     </ion-tabs></div>`;
   const t = root().querySelector("ion-tabs");
-  const mark = (tab) => root().querySelectorAll("[data-side]").forEach((n) => n.classList.toggle("on", n.dataset.side === tab));
+  const shellEl = root().querySelector(".shell");
+  const mark = (tab) => {
+    root().querySelectorAll("[data-side]").forEach((n) => n.classList.toggle("on", n.dataset.side === tab));
+    shellEl.classList.toggle("in-settings", tab === "settings");     // on a wide screen Settings swaps the side list for its own
+  };
   t.addEventListener("ionTabsDidChange", (e) => mark(e.detail.tab));
   root().querySelectorAll("[data-side]").forEach((n) => n.addEventListener("click", async () => {
     const cur = await t.getSelected();
     if (cur === n.dataset.side) root().querySelector(`ion-tab[tab="${n.dataset.side}"] ion-nav`).popToRoot();
     t.select(n.dataset.side);
   }));
+  root().querySelector("[data-back]").addEventListener("click", () => t.select("today"));
+  const setNav = () => root().querySelector('ion-tab[tab="settings"] ion-nav');
+  const markSection = (id) => root().querySelectorAll("[data-section]").forEach((n) => n.classList.toggle("on", n.dataset.section === id));
+  root().querySelectorAll("[data-section]").forEach((n) => n.addEventListener("click", async () => {
+    const id = n.dataset.section;
+    await (id === "accounts" ? setNav().setRoot("icm-accounts", {}, { animated: false }) : setNav().setRoot("icm-settings", { section: id }, { animated: false }));
+    markSection(id);
+  }));
+  markSection(SECTIONS[0][0]);
+  root().querySelector("[data-pause]").addEventListener("click", async () => {
+    try { await post("/server/pause", { paused: !app.paused }); window.dispatchEvent(new Event("icm:changed")); } catch (e) { fail(e); }
+  });
   const item = itemFromHash();
   const tab = /^#\/(activity|settings)$/.exec(location.hash);
   if (tab) history.replaceState(null, "", location.pathname);
   t.select(tab ? tab[1] : "today").then(() => mark(tab ? tab[1] : "today"));
+  renderSide();
   if (item) openItem(item);
 }
 
@@ -73,29 +102,39 @@ function openItem(key) {
 function setCount(n) {
   n = Math.max(0, n - app.hidden.size);      // a discard that can still be undone no longer counts
   app.waiting = n;
-  const badge = root().querySelector("[data-badge]"), count = root().querySelector("[data-count]");
+  const badge = root().querySelector("[data-badge]");
   if (badge) { badge.textContent = String(n); badge.hidden = !n; }
-  if (count) count.textContent = n ? String(n) : "";
   document.title = n ? `(${n}) iCloud connector` : "iCloud connector";
+  renderSide();
 }
 
-function setLive() {
-  const dot = root().querySelector("[data-live-dot]"), text = root().querySelector("[data-live-text]");
-  if (dot) dot.style.color = app.online ? "var(--positive)" : "var(--note-ink)";
-  if (text) text.textContent = app.online ? "Live" : "Offline";
+// The side list's own bits: the count, the pause button, the waiting count by kind and the state card at the bottom
+function renderSide() {
+  const q = (s) => root().querySelector(s);
+  const count = q("[data-count]");
+  if (count) count.textContent = app.waiting ? String(app.waiting) : "";
+  const pause = q("[data-pause]");
+  if (pause) pause.textContent = app.paused ? "Resume tools" : "Pause tools";
+  const kinds = q("[data-kinds]");
+  if (kinds) kinds.innerHTML = Object.entries(app.kinds).map(([k, n]) => `<ion-item class="sub" lines="none"><ion-label>${esc(KIND_NAMES[k] || k)}</ion-label>
+    <ion-note slot="end" class="num">${n}</ion-note></ion-item>`).join("");
+  const foot = q("[data-foot]");
+  if (foot) foot.innerHTML = `<b>${app.online ? (app.paused ? "Live, tools paused" : "Live") : "Offline"}</b>${esc((session.data || {}).host || "")}`
+    + (app.mac === "off" ? "" : `<br>Mac helper ${app.mac === "online" ? "online" : "offline"}`);
 }
 
 async function poll() {
   try {
     const s = await get("/state", true);
     app.online = true; app.updated = Date.now() / 1000;
+    app.paused = s.paused; app.kinds = s.kinds || {}; app.mac = s.mac || "off";
     setCount(s.waiting);
     if (lastV !== null && s.v !== lastV) window.dispatchEvent(new Event("icm:changed"));
     lastV = s.v;
   } catch (e) {
     app.online = false;
   }
-  setLive();
+  renderSide();
 }
 
 function startPolling() {
