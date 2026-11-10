@@ -34,6 +34,19 @@ export function until(t) {
   return `on ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} at ${at}`;
 }
 
+// How long is left, in plain words: "41 min", "1 h 10 min", "2 days"
+export function left(t) {
+  const m = Math.max(1, Math.round((t - Date.now() / 1000) / 60));
+  if (m < 60) return `${m} min`;
+  if (m < 180) { const h = Math.floor(m / 60), r = m % 60; return r ? `${h} h ${r} min` : `${h} h`; }
+  if (m < 2880) return `${Math.round(m / 60)} h`;
+  return `${Math.round(m / 1440)} days`;
+}
+
+export function tag(text, cls = "") {
+  return `<span class="tag ${cls}">${esc(text)}</span>`;
+}
+
 export function size(n) {
   if (n < 1048576) return `${Math.max(1, Math.round(n / 1024))} KB`;
   return `${(n / 1048576).toFixed(n % 1048576 ? 1 : 0)} MB`;

@@ -33,18 +33,21 @@ class QueuedMessage:
     followup: dict[str, Any] | None   # e.g. {"folder": "INBOX", "uid": 7, "flag": "\\Answered"} applied after a successful send
     sha256: str
     key: str | None = None            # what the message was made from (e.g. one saved draft), so asking again finds this entry
+    edited_from: str | None = None    # the text the agent asked for, kept while the owner's edited text is what waits (textedit.py)
 
     def to_json(self) -> dict[str, Any]:
         return {"id": self.id, "created_at": self.created_at, "expires_at": self.expires_at,
                 "raw": base64.b64encode(self.raw).decode(), "recipients": self.recipients,
-                "followup": self.followup, "sha256": self.sha256, **({"key": self.key} if self.key else {})}
+                "followup": self.followup, "sha256": self.sha256, **({"key": self.key} if self.key else {}),
+                **({"edited_from": self.edited_from} if self.edited_from is not None else {})}
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "QueuedMessage":
         raw = base64.b64decode(d["raw"])
         if hashlib.sha256(raw).hexdigest() != d["sha256"]:
             raise ValueError("outbox entry failed its integrity check")
-        return cls(d["id"], d["created_at"], d["expires_at"], raw, list(d["recipients"]), d.get("followup"), d["sha256"], d.get("key"))
+        return cls(d["id"], d["created_at"], d["expires_at"], raw, list(d["recipients"]), d.get("followup"), d["sha256"], d.get("key"),
+                   d.get("edited_from"))
 
 
 class Outbox:
@@ -128,16 +131,16 @@ class Outbox:
                 self._save()
             return q
 
-    def replace(self, item_id: str, sha256: str, raw: bytes) -> QueuedMessage | None:
+    def replace(self, item_id: str, sha256: str, raw: bytes, **fields: Any) -> QueuedMessage | None:
         """Swap a waiting item's message for a new version of it (a file the owner or an upload added). Only when the item is
         still the version the caller read, so two uploads at once cannot both win; the new bytes get their own hash, which
-        the approval page then shows and checks."""
+        the approval page then shows and checks. fields: other parts of the entry that change with it (followup, edited_from)."""
         with self._lock:
             self._prune()
             q = self._items.get(item_id)
             if q is None or q.sha256 != sha256:
                 return None
-            q = replace(q, raw=raw, sha256=hashlib.sha256(raw).hexdigest())
+            q = replace(q, raw=raw, sha256=hashlib.sha256(raw).hexdigest(), **fields)
             self._items[item_id] = q
             self._save()
             return q

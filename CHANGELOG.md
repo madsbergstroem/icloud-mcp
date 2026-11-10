@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **A new look, and edit before you send (fork).** The dashboard follows the system's light or dark with one accent and bold
+  sans titles. Today is now Home, with the count waiting by kind and a pause button in the side list on wide screens, and
+  Settings brings its own list there. A request shows the message as it goes out, a warning for a group conversation, and
+  how a send went: sending, sent, not sure (Messages did not confirm it; nothing is sent again) or not sent and still
+  waiting. "Edit text" changes only the words of a mail (without an HTML part), an iMessage or an event's description
+  (`PUT /dashboard/api/items/{key}/text`); the text the agent asked for stays under it, and "Bring it back" restores it.
+  The log records that a text was edited, never the text. Settings lists the connected accounts, read only, and links to
+  `/setup`.
+
 - **The dashboard is an app (fork).** `/dashboard` is now an Ionic Core app with three tabs, Today, Activity and Settings,
   that talks to a JSON API under `/dashboard/api`. A request opens with its message, its attachments in a preview and,
   when a file is missing, the place to add it. Settings shows each area once, splits iCloud from the areas that work

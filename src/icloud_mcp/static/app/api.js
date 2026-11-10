@@ -56,6 +56,12 @@ export async function post(path, body, again) {
   }
 }
 
+export async function put(path, body) {
+  const r = await fetch("/dashboard/api" + path, { method: "PUT", credentials: "same-origin", cache: "no-store",
+    headers: { "content-type": "application/json", "x-csrf": csrf }, body: JSON.stringify(body || {}) });
+  return parse(r);
+}
+
 // The same POST, sent even while the page is being hidden or closed (an Undo that ran out as the owner left)
 export function postNow(path, body) {
   return fetch("/dashboard/api" + path, { method: "POST", credentials: "same-origin", keepalive: true,

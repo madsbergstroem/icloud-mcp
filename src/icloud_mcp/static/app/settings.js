@@ -1,8 +1,8 @@
 // Activity, Settings and the pages Settings opens: notifications, passkeys, apps, the password, one settings area, the server.
 import { get, post, session, loadSession, token, confirmNow } from "./api.js";
-import { esc, icon, ago, toast, fail, ask, section, titleBlock, row } from "./ui.js";
+import { esc, icon, ago, toast, fail, ask, section, titleBlock, row, tag, wide } from "./ui.js";
 
-function page(el, title, back, body) {
+export function page(el, title, back, body) {
   el.innerHTML = `<ion-header translucent><ion-toolbar>${back ? `<ion-buttons slot="start"><ion-back-button text="${esc(back)}"></ion-back-button></ion-buttons>` : ""}
     <ion-buttons slot="end" data-end></ion-buttons></ion-toolbar></ion-header><ion-content fullscreen>${body || '<div data-body></div>'}</ion-content>`;
   return el.querySelector("[data-body]");
@@ -26,15 +26,16 @@ class Activity extends HTMLElement {
     try { a = await get("/activity?filter=" + encodeURIComponent(this.filter)); } catch (e) { fail(e); return; }
     const days = a.days.map((d) => section(d.day) + `<ion-list class="inset">${d.entries.map((e) => `<ion-item>
       <ion-label class="ion-text-wrap" style="display:flex;gap:12px"><span class="num" style="color:var(--muted);min-width:44px">${esc(e.time)}</span>
-      <span${e.ok ? "" : ' style="color:var(--negative)"'}>${esc(e.who)} ${esc(e.what)}${e.error ? `<br><small style="color:var(--muted)">${esc(e.error)}</small>` : ""}</span>
-      </ion-label></ion-item>`).join("")}</ion-list>`).join("");
-    const chain = a.chain.ok ? `Unchanged since written (${a.chain.entries} entries).`
+      <span><span${e.ok ? "" : ' style="color:var(--negative)"'}>${esc(e.who)} ${esc(e.what)}</span>${e.error ? `<br><small style="color:var(--muted)">${esc(e.error)}</small>` : ""}
+      ${e.note ? `<br><small style="color:var(--muted)">${esc(e.note)}</small>` : ""}</span>
+      </ion-label>${e.tag ? tag(e.tag, e.tag === "Unclear" ? "warn end" : "end").replace('class="tag', 'slot="end" class="tag') : ""}</ion-item>`).join("")}</ion-list>`).join("");
+    const chain = a.chain.ok ? `The chain of entries is intact (${a.chain.entries} entries).`
       : `<span style="color:var(--negative)">The log was changed after it was written, at entry ${esc(a.chain.broken_at)}. Entries from there on cannot be trusted.</span>`;
-    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `What changed on this server in the last ${esc(a.keep_days)} days.`)
+    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `Everything that was sent, dropped or changed in the last ${esc(a.keep_days)} days.`)
       + (a.log_on ? "" : `<div class="notice pause"><span>The activity log is turned off on this server.</span></div>`)
       + `<div style="padding:10px 16px 0"><ion-segment value="${esc(a.filter)}" scrollable>${a.filters.map(([k, l]) =>
         `<ion-segment-button value="${esc(k)}"><ion-label>${esc(l)}</ion-label></ion-segment-button>`).join("")}</ion-segment></div>`
-      + (days || `<div class="empty">Nothing recorded${this.filter === "all" ? " yet" : " of this kind"}.</div>`)
+      + (days || `<div class="empty"><b>Nothing recorded${this.filter === "all" ? " yet" : " of this kind"}.</b>What your assistant does and what you change shows up here.</div>`)
       + `<p class="note">${chain} No message text, passwords or tokens. <a href="/dashboard/activity.json" download>Download</a></p>`;
     this.querySelector("ion-segment").addEventListener("ionChange", (e) => { this.filter = e.detail.value; this.load(); });
   }
@@ -72,18 +73,28 @@ async function saveKeys(st, values) {
   return note;
 }
 
+// The groups of the Settings list. On a wide screen the side list picks one; "accounts" opens its own page.
+export const SECTIONS = [["security", "Sign-in and security"], ["accounts", "Connected accounts"], ["icloud", "iCloud"], ["mac", "Your Mac"],
+  ["safety", "Safety"], ["server", "Account and server"]];
+
 class Settings extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<ion-content><div data-body></div></ion-content>`;
     this.load();
     window.addEventListener("icm:settings", (this.onChange = () => this.load()));
+    this.mq = window.matchMedia("(min-width: 900px)");
+    this.mq.addEventListener("change", (this.onWidth = () => this.load()));
   }
 
-  disconnectedCallback() { window.removeEventListener("icm:settings", this.onChange); }
+  disconnectedCallback() {
+    window.removeEventListener("icm:settings", this.onChange);
+    this.mq.removeEventListener("change", this.onWidth);
+  }
 
   async load() {
-    let st, sec;
+    let st, sec, accts = null;
     try { [st, sec] = await Promise.all([get("/settings"), get("/security")]); } catch (e) { fail(e); return; }
+    try { accts = (await get("/accounts")).accounts.length; } catch (e) { /* the row still opens the list */ }
     this.st = st;
     const v = st.values, mac = st.mac || {}, s = session.data, ed = st.editable ? "" : "disabled";
     const g = (slug) => st.groups.find((x) => x.slug === slug) || {};
@@ -95,37 +106,46 @@ class Settings extends HTMLElement {
       : row({ title: "Messages", sub: on(v.ENABLE_IMESSAGE) ? (on(v.IMESSAGE_ALLOW_SEND) ? "Reads chats, sends after your approval" : "Reads chats") : "", ...state(v.ENABLE_IMESSAGE), button: true, attrs: 'data-page="messages"' })
         + MAC_SWITCHES.map(([label, key]) => sw(key, label, on(v[key]) && !mac.online ? "Waits until your Mac is back" : "")).join("")
         + row({ title: "Shortcuts and timing", sub: v.SHORTCUTS_ALLOW ? esc(v.SHORTCUTS_ALLOW) : "No Shortcuts allowed", button: true, attrs: 'data-page="helper"' });
-    this.querySelector("[data-body]").innerHTML = titleBlock("Settings", esc(s.host))
-      + (st.restart_needed ? `<div class="notice pause"><span>Saved changes apply after a restart. Agents are disconnected for about half a minute.</span>
-          <ion-button size="small" data-restart>Restart now</ion-button></div>` : "")
-      + (st.editable ? "" : `<div class="notice pause"><span>Settings can only be viewed here.</span></div>`)
-      + section("Sign-in and security") + `<ion-list class="inset">
+    const only = wide() ? (SECTIONS.some(([id]) => id === this.section) ? this.section : SECTIONS[0][0]) : null;
+    const head = (title, aside) => (only && !aside ? `<div style="height:14px"></div>` : section(title, aside));   // the page title already says it
+    const groups = {
+      security: head("Sign-in and security") + `<ion-list class="inset">
         ${row({ title: "Notifications", button: true, attrs: 'data-nav="icm-notifications"' })}
         ${row({ title: "Passkeys", note: String(sec.passkeys.length), button: true, attrs: 'data-nav="icm-passkeys"' })}
         ${row({ title: "Connected apps", note: String(sec.apps.length), button: true, attrs: 'data-nav="icm-apps"' })}
         ${row({ title: "Owner password", ...state(sec.password_login), button: true, attrs: 'data-nav="icm-password"' })}
         ${row({ title: "This device", sub: `Signed in with ${esc(sec.via)}, ${esc(ago(sec.signed_in_at))}` })}
-        <ion-item button detail="false" data-signout><ion-label color="danger">Sign out</ion-label></ion-item></ion-list>`
-      + section("iCloud") + `<ion-list class="inset">
+        <ion-item button detail="false" data-signout><ion-label color="danger">Sign out</ion-label></ion-item></ion-list>`,
+      accounts: head("Connected accounts") + `<ion-list class="inset">
+        ${row({ title: "Connected accounts", sub: "Where mail, calendar and contacts come from", note: accts == null ? "" : String(accts), button: true, attrs: 'data-nav="icm-accounts"' })}</ion-list>`,
+      icloud: head("iCloud") + `<ion-list class="inset">
         ${row({ title: "Mail", ...state(v.ENABLE_MAIL), button: true, attrs: 'data-page="mail"' })}
         ${row({ title: "Calendar", ...state(v.ENABLE_CALENDAR), button: true, attrs: 'data-page="calendar"' })}
-        ${row({ title: "Contacts", ...state(v.ENABLE_CONTACTS), button: true, attrs: 'data-page="contacts"' })}</ion-list>`
-      + section("Your Mac", macAside) + `<ion-list class="inset">${macList}</ion-list>`
-      + section("Safety") + `<ion-list class="inset">
+        ${row({ title: "Contacts", ...state(v.ENABLE_CONTACTS), button: true, attrs: 'data-page="contacts"' })}</ion-list>`,
+      mac: head("Your Mac", macAside) + `<ion-list class="inset">${macList}</ion-list>`,
+      safety: head("Safety") + `<ion-list class="inset">
         ${sw("READ_ONLY", "Read-only server", "Nothing can be sent, moved or deleted")}
         ${sw("ALLOW_PERMANENT_DELETE", "Allow emptying Trash")}
-        ${row({ title: "Only these tools", note: v.TOOLS ? "Some" : "All", button: true, attrs: 'data-page="tools"' })}</ion-list>`
-      + section("Account and server") + `<ion-list class="inset">
+        ${row({ title: "Only these tools", note: v.TOOLS ? "Some" : "All", button: true, attrs: 'data-page="tools"' })}</ion-list>`,
+      server: head("Account and server") + `<ion-list class="inset">
         ${row({ title: "Account", sub: esc(g("accounts").summary || ""), button: true, attrs: 'data-page="accounts"' })}
         ${row({ title: "Activity log", button: true, attrs: 'data-page="log"' })}
-        ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}</ion-list>`;
+        ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}</ion-list>`,
+    };
+    // a phone shows every group in one list; a wide screen shows the one chosen in its own side list
+    const heading = only ? SECTIONS.find(([id]) => id === only)[1] : "Settings";
+    this.querySelector("[data-body]").innerHTML = titleBlock(heading, esc(s.host))
+      + (st.restart_needed ? `<div class="notice pause"><span>Saved changes apply after a restart. Agents are disconnected for about half a minute.</span>
+          <ion-button size="small" data-restart>Restart now</ion-button></div>` : "")
+      + (st.editable ? "" : `<div class="notice pause"><span>Settings can only be viewed here.</span></div>`)
+      + SECTIONS.filter(([id]) => !only || id === only).map(([id]) => groups[id]).join("");
     this.wire();
   }
 
   wire() {
     this.querySelectorAll("[data-nav]").forEach((n) => n.addEventListener("click", () => push(this, n.dataset.nav)));
     this.querySelectorAll("[data-page]").forEach((n) => n.addEventListener("click", () => push(this, "icm-group", { page: n.dataset.page })));
-    this.querySelector("[data-signout]").addEventListener("click", async () => {
+    this.querySelector("[data-signout]")?.addEventListener("click", async () => {
       if (!(await ask("Sign out?", "You need your passkey or the password to come back.", "Sign out", { danger: true }))) return;
       try { await post("/signout"); } catch (e) { /* signed out anyway */ }
       location.reload();
@@ -241,7 +261,7 @@ class Group extends HTMLElement {
   }
 }
 customElements.define("icm-group", Group);
-const SEND_NOTES = { drafts: "Agents save drafts; you send them in Mail.", approval: "Agents queue mail; you send it from Today.",
+const SEND_NOTES = { drafts: "Agents save drafts; you send them in Mail.", approval: "Agents queue mail; you send it from Home.",
   direct: "Mail leaves at once. Your client's own prompt is the only check." };
 
 // -- passkeys -----------------------------------------------------------------------------------------------------------
