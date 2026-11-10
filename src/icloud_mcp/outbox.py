@@ -57,6 +57,8 @@ class Outbox:
         self._lock = threading.RLock()
         self._items: dict[str, QueuedMessage] = {}
         self.on_new: Any = None            # called with each newly queued item (the dashboard's push note), never on a repeat
+        self._on_expired: Any = None       # called once with each item that timed out unanswered (see on_expiry)
+        self._lapsed: list[QueuedMessage] = []   # timed out before anything listened: reported when something does
         self._load()
 
     # -- persistence ---------------------------------------------------------
@@ -89,7 +91,32 @@ class Outbox:
 
     def _prune(self) -> None:
         now = time.time()
+        gone = [v for v in self._items.values() if v.expires_at <= now]
+        if not gone:
+            return
         self._items = {k: v for k, v in self._items.items() if v.expires_at > now}
+        try:
+            self._save()                   # written out, so a restart does not find the same entries and report them twice
+        except OSError:
+            pass
+        self._lapsed.extend(gone)
+        self._report_lapsed()
+
+    def on_expiry(self, callback: Any) -> None:
+        """Call back with each item that times out unanswered, once. Items that timed out before this was set (while the server
+        was down, or before it started listening) are reported now."""
+        self._on_expired = callback
+        self._report_lapsed()
+
+    def _report_lapsed(self) -> None:
+        if self._on_expired is None:
+            return
+        lapsed, self._lapsed = self._lapsed, []
+        for q in lapsed:
+            try:
+                self._on_expired(q)
+            except Exception:  # noqa: BLE001  -- a failed log line must never break the queue
+                pass
 
     # -- operations ------------------------------------------------------------
     def add(self, raw: bytes, recipients: list[str], followup: dict[str, Any] | None = None, key: str | None = None,

@@ -296,7 +296,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         who = {"actor": "owner", "via": rec.get("via", "")}
         if action == "discard":
             await asyncio.to_thread(src.discard, q)
-            audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind)
+            audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id)
             return ok({"note": "Discarded. Nothing was sent."})
         if v["needs_override"] and body.get("override") is not True:
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
@@ -306,7 +306,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             note = await asyncio.to_thread(src.release, q)
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
             log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
-            audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind)
+            audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id)
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      outbox_id=q.id, delivery=getattr(note, "delivery", None),

@@ -320,3 +320,33 @@ async def test_the_setup_link_is_there_only_where_the_setup_assistant_is(web):
     async with client(app) as c:
         await signed_in(c)
         assert (await c.get("/dashboard/api/accounts")).json()["setup_url"] == "/setup"
+
+
+# -- approval_status reads through an edit --------------------------------------------------------------------------------------
+async def test_approval_status_is_not_disturbed_by_edit_entries_in_the_log(web):
+    app, mcp, *_ = web()
+    first, second = queue(mcp, subject="One", body="Asked for one"), queue(mcp, subject="Two", body="Asked for two")
+    mail = mcp._icloud_dashboard.sources["mail"]
+
+    async def ask(**args):
+        return json.loads((await mcp.call_tool("approval_status", args)).content[0].text)
+
+    cursor = (await ask(since="now"))["cursor"]
+    async with client(app) as c:
+        token = await signed_in(c)
+        for qid, word in ((first, "one"), (second, "two")):
+            sha = next(q for q in mail.pending() if q.id == qid).sha256
+            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": f"Edited {word}"}, headers=api(token))).json()["sha"]
+            assert (await ask(id=qid))["status"] == "waiting"                              # an edit leaves it waiting
+            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))).json()["sha"]
+            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": f"Edited again {word}"}, headers=api(token))).json()["sha"]
+            assert (await ask(id=qid))["status"] == "waiting"
+            await c.post(f"/dashboard/api/items/mail:{qid}/{'approve' if word == 'one' else 'discard'}", json={"sha": sha}, headers=api(token))
+    got = await ask(id=first)
+    assert (got["status"], got["kind"]) == ("sent", "mail") and got["id"] == first
+    assert (await ask(id=second))["status"] == "discarded"
+    listed = await ask(since=cursor)
+    assert [(i["id"], i["status"]) for i in listed["items"]] == [(first, "sent"), (second, "discarded")]   # each once, the edits are not outcomes
+    log = [json.loads(line) for line in audit_text(mcp).splitlines()]
+    assert [e["action"] for e in log if e["action"].startswith("approval.edit")].count("approval.edited") == 4
+    assert mcp._icloud_dashboard.audit.verify()["ok"] is True

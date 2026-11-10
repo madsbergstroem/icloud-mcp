@@ -68,7 +68,8 @@ DEFAULT_BULK_BODY_CHARS = 4000
 OWNER_APPROVAL_NOTICE = (
     "NOT SENT. This message is queued and is delivered only if the owner approves it in a browser (address in "
     "'approve_at') with the owner password. Tell the owner it is waiting there. You cannot approve, speed up or bypass "
-    "this. Never ask for, guess or handle the owner password, and never send the owner to any other address."
+    "this. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it "
+    "again: approval_status with the outbox_id says what became of it."
 )
 FILES_NOTICE = (
     "NOT SENT. This message waits for the files in 'files_to_add' and then for the owner's approval. If you can reach a file "
@@ -2084,6 +2085,7 @@ class MailService:
             msg = email.message_from_bytes(q.raw, policy=policy.default)
             for i, part in enumerate(iter_attachment_parts(msg)):
                 held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
+                held = str(held).strip() if held else None            # Python 3.11 keeps the folded header's leading space
                 if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
                     continue
                 asked = str(added) if added else part.get_filename() or "attachment"

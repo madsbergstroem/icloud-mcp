@@ -156,9 +156,10 @@ _TOOL_MAP: list[tuple[str, list[str]]] = [
     ("Health", ["health_get_summary (per day, and sleeps)", "health_get_day (one day in detail)", "health_get_status (how fresh)",
                 "health_refresh_data"]),
     ("Shortcuts", ["shortcuts_list_shortcuts, then shortcuts_run_shortcut"]),
+    ("Queued for the owner", ["approval_status (what became of a request you queued; never send it again)"]),
     ("Something fails", ["icloud_check_health", "icloud_get_helper_status (the owner's Mac)"]),
 ]
-_TOOL_NAME = re.compile(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud)_[a-z_]+")
+_TOOL_NAME = re.compile(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud|approval)_[a-z_]+")
 
 
 def _tool_map(ok) -> str:

@@ -42,6 +42,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from . import passkeys as P
+from .approval_status import Released
 from .approvals import flagged
 from .audit import AuditLog
 from . import textedit as T
@@ -352,16 +353,6 @@ class CalendarApprovals(ApprovalSource):
         return T.calendar_with_text(q.raw, text), {**(q.followup or {}), "description": text[:4000]}
 
 
-class Delivered(str):
-    """The one-line result of an iMessage release, with what Messages reported (`sent`, `unconfirmed`, `failed`)."""
-    delivery: str | None
-
-    def __new__(cls, text: str, delivery: str | None = None):
-        obj = super().__new__(cls, text)
-        obj.delivery = delivery
-        return obj
-
-
 class IMessageApprovals(ApprovalSource):
     kind, badge, approve_label = "imessage", "iMessage", "Send"
 
@@ -382,7 +373,7 @@ class IMessageApprovals(ApprovalSource):
     def release(self, q):
         r = self.imessage.release(self.box, q.id)
         word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)"}.get(r.get("status"), str(r.get("status")))
-        return Delivered(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), r.get("status"))
+        return Released(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), r.get("status"))
 
     def discard(self, q):
         self.box.claim(q.id)
