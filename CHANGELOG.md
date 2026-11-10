@@ -5,6 +5,18 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **An agent can ask what became of a request it queued (fork).** `approval_status` takes the `outbox_id` from a
+  `queued_for_owner_approval` result and answers `waiting`, `sent`, `discarded`, `expired`, `unclear` or `unknown`, with the kind
+  and a time and never the text, subject, names or recipients. An agent that heard nothing no longer has to choose between
+  waiting and sending a second copy. With `since` it lists what was decided after a cursor, which is the hash of an entry in the
+  activity log (`now` starts one). `unclear` means it may have gone out: Messages did not confirm an iMessage, or the release
+  failed after the entry had left the queue. `unknown` means the id is neither waiting nor in the log (too old, never queued
+  here, or `AUDIT_LOG=false`). The tool stays with the `TOOLS` presets and answers while the server is paused, and the tools
+  that queue point to it. Its name is the one exception to `area_verb_noun`. Three changes to the activity log carry it:
+  approval entries (`approval.sent`, `approval.discarded`, `approval.failed`, from the dashboard and from `/outbox`) now hold the
+  `outbox_id`; an entry that runs out of time unanswered writes `approval.expired` instead of vanishing, also when it ran out
+  while the server was down; and an iMessage that Messages did not confirm or reported as not delivered is marked with
+  `delivery` on its `approval.sent` entry. `/outbox` now also logs a failed release as `approval.failed`.
 - **The dashboard is an app (fork).** `/dashboard` is now an Ionic Core app with three tabs, Today, Activity and Settings,
   that talks to a JSON API under `/dashboard/api`. A request opens with its message, its attachments in a preview and,
   when a file is missing, the place to add it. Settings shows each area once, splits iCloud from the areas that work

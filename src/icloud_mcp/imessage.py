@@ -315,7 +315,7 @@ class IMessageService:
                 raise IMessageError(str(e)) from e
             return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "to": to,
                     "approve_at": self.s.approval_link("imessage", q.id), "notice": "Queued, NOT sent: it goes out only when the owner approves it on "
-                                                                   "the approval page (approve_at). Say so; do not send it again."}
+                                                                   "the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it."}
         got = self.bridge.call("imessage_send", {k: v for k, v in {"chat_id": t["chat_id"], "handle": t["handle"], "text": text}.items() if v})
         return {**got, "to": to}
 

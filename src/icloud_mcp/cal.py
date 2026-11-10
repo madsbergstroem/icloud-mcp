@@ -1704,7 +1704,8 @@ class CalendarService:
         return {"status": "queued_for_owner_approval", "written": False, "outbox_id": q.id,
                 "approve_at": self.s.approval_link("calendar", q.id), "would_email": who,
                 "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
-                          "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call."}
+                          "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call: approval_status with the outbox_id "
+                          "says what became of it."}
 
     def release(self, q: Any) -> str:
         """The owner approved a held change: write exactly what was stored, conditional on the version it was based on."""

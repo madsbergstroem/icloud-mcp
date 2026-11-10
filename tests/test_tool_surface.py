@@ -10,8 +10,9 @@ from icloud_mcp.config import Settings
 from icloud_mcp.server import create_server, slim_schema
 
 SCHEMA_BUDGET = 52000       # raised for 0.9.0 and 0.10.0 (about 21 new tools), see docs/PERFORMANCE.md
-LIST_BUDGET = 180000        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
-                            # returns, errors) for agents and registry scoring, 80,000 before; see docs/PERFORMANCE.md
+LIST_BUDGET = 182500        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
+                            # returns, errors) for agents and registry scoring, 80,000 before; see docs/PERFORMANCE.md.
+                            # 182,500 for approval_status, the one tool that answers how a queued request ended (about 2,000 characters)
 
 
 @pytest.fixture
@@ -118,9 +119,14 @@ VERBS = {"append", "check", "complete", "create", "delete", "extract", "find", "
          "refresh", "reply", "respond", "run", "search", "send", "trash", "undo", "unsubscribe", "update", "write"}
 
 
+NAMED_AFTER_WHAT_THEY_ANSWER = {"approval_status"}      # not an area of iCloud: the answer to a queued_for_owner_approval result
+
+
 def test_every_tool_name_is_prefix_verb_noun(mcp):
     """<area>_<verb>_<noun> for every tool (0.12.0): a verb alone (mail_send, contacts_get) is not a name."""
     for name in listed(mcp):
+        if name in NAMED_AFTER_WHAT_THEY_ANSWER:
+            continue
         prefix, _, rest = name.partition("_")
         verb, _, noun = rest.partition("_")
         assert prefix in PREFIXES and verb in VERBS and noun, name

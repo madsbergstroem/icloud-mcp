@@ -225,7 +225,9 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
             await asyncio.to_thread(claim_all)
             log.info("Owner discarded all %d queued %s messages", len(shown), kind)
             if audit is not None:
-                audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded {len(shown)} queued {kind} messages", kind=kind)
+                for n in range(0, len(shown), 25):          # an entry holds at most 25 ids
+                    audit.record("approval.discarded", actor="owner", via="password (/outbox)", kind=kind, outbox_ids=[x.id for x in shown[n:n + 25]],
+                                 summary=f"Discarded {len(shown)} queued {kind} messages" if n == 0 else f"Discarded more of those {len(shown)} {kind} messages")
             return await asyncio.to_thread(_queue_page, f'<p class="ok-note">Discarded {len(shown)}.</p>')
         q = next((x for x in box.pending() if x.id == item_id), None) if box is not None else None
         if action not in ("approve", "discard") or exp < time.time() or q is None:
@@ -239,7 +241,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
             await asyncio.to_thread(box.claim, q.id)
             log.info("Owner discarded queued message %s", q.id)
             if audit is not None:
-                audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded a queued {kind} message", kind=kind)
+                audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded a queued {kind} message", kind=kind, outbox_id=q.id)
             return await asyncio.to_thread(_queue_page, '<p class="ok-note">Discarded.</p>')
         if kind == "mail" and str(form.get("override", "")) != "1":
             d = await asyncio.to_thread(mail.describe_queued, q)          # the page's own source: the memo, else a fresh read
@@ -252,10 +254,13 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                       else await asyncio.to_thread(mail.release, q.id))
         except Exception as e:  # noqa: BLE001  -- release() re-queues on any failure, so the owner can retry or discard
             log.warning("Release of %s failed: %s", q.id, e)
+            if audit is not None:
+                audit.record("approval.failed", actor="owner", via="password (/outbox)", ok=False, summary=f"Could not send a queued {kind} message", kind=kind, outbox_id=q.id)
             return await asyncio.to_thread(_queue_page, f'<p class="err">Not sent (still queued): {html.escape(str(e))}</p>')
         log.info("Owner approved queued %s %s", kind, q.id)
         if audit is not None:
             audit.record("approval.sent", actor="owner", via="password (/outbox)", summary=f"Approved a queued {kind} message", kind=kind,
+                         outbox_id=q.id, delivery=result.get("status") if kind == "imessage" and isinstance(result, dict) else None,
                          recipients=list(result.get("recipients") or [result.get("to")] if isinstance(result, dict) else []))
         if kind == "imessage":
             status = result.get("status")
