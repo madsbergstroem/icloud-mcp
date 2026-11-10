@@ -5,6 +5,18 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Approvals can carry more kinds of action (fork, preparation only).** `actions.py` holds a registry of action types: how a
+  request looks on the card, its parameters as a JSON Schema (checked with `jsonschema`, which `mcp` already requires and is now
+  listed as a dependency), which parameter is the text the owner may edit, whom it reaches, and an executor that does the work.
+  `external.py` turns the registered types into one more approval source, `external`, with its own queue file
+  (`external-outbox.json`). The dashboard, editing, discarding, expiry, `approval_status` and `approval_withdraw` handle it with the
+  code they already have; `approval_status` records of these requests add `action_type`, and the log lines carry it too. A
+  request is only handed on when the owner approves: `sent` is done, `failed` (the other side never got it) puts it back in the
+  queue, `unclear` (or an executor that raises) is never repeated and reads `unclear`. Whom a request may reach is the owner's
+  list, checked when it is queued and again when it is approved. Nothing registers a type yet and nothing outside the tests
+  calls `queue_external`, so a server without a registered type is unchanged: same tools, routes, pages, queue files and log
+  lines, which `tests/test_hub_golden.py` pins for mail, calendar and iMessage. Not in this change: an HTTP input, a tool for
+  agents, webhooks, `account` on a request, a reason or `changes_requested` on the card. `docs/DESIGN.md` has a Hub section.
 - **The accounts file can hold several accounts per area (fork, preparation only).** `accounts.json` is now version 2: every
   account has a random id and a sign-in kind (`auth`, `app_password`; `oauth` is reserved and does nothing), and `defaults` names
   the account each area runs with. A file from before is read as version 2 in memory and rewritten only when you save on /setup;

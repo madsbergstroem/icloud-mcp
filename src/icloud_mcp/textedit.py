@@ -164,7 +164,7 @@ def edit_info(src: Any, q: Any) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001  -- an unreadable message is not edited, and the page still opens
         log.warning("Could not read the text of %s %s for editing: %s", src.kind, q.id, e)
         reason, text = "The text of this request could not be read, so it cannot be edited here.", ""
-    return {"allowed": not reason, "reason": reason, "text": text, "limit": src.text_limit,
+    return {"allowed": not reason, "reason": reason, "text": text, "limit": src.text_limit_of(q),
             "edited": q.edited_from is not None, "original": q.edited_from}
 
 
@@ -223,6 +223,6 @@ def register_text_api(mcp: Any, d: Any, audit: Any) -> None:
             undone = new.edited_from is None          # "Bring it back", or the original typed in again by hand: either way it is the agent's text again
             audit.record("approval.edit_undone" if undone else "approval.edited", actor="owner", via=rec.get("via", ""),
                          summary=f"Brought back the original text of {what}" if undone else f"Edited {what} before sending",
-                         kind=src.kind, outbox_id=q.id)
+                         kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None))
         return d.api_ok({"sha": new.sha256, "changed": changed,
                          "note": ("Brought back what was asked for." if restore else "Saved. It goes out exactly as shown.") if changed else "No change."})

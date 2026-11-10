@@ -90,7 +90,7 @@ class Withdrawals:
         badge, title = describe(kind, claimed)
         self.ledger.audit.record("approval.withdrawn", actor="assistant", via=client,
                                  summary=f"Withdrew {badge} “{title}”" if title else f"Withdrew a queued {kind} request",
-                                 kind=kind, outbox_id=item_id, reason=reason)
+                                 kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None))
         return {"id": item_id, "withdrawn": True, "status": "withdrawn"}
 
 

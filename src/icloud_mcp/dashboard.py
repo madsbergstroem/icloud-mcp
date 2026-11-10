@@ -182,6 +182,10 @@ class ApprovalSource:
     # Editing the text before approving (textedit.py). A source that has no text of its own keeps these answers.
     text_limit = 10000
 
+    def text_limit_of(self, q: Any) -> int:
+        """The most characters this request's text may have; a source whose requests differ in it says so here."""
+        return self.text_limit
+
     def text_block(self, q: Any) -> str:
         """Why the text cannot be edited, or "" when it can."""
         return "This kind of request has no text to edit."

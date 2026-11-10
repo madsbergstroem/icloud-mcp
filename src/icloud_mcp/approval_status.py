@@ -15,8 +15,9 @@ and an ended request has been edited when the newest of its `approval.edited` an
 Neither says what the text was.
 
 A record is {id, kind, status, edited, at} and nothing else: never the text, subject, names or recipients, which the log does
-not hold either. `kind` is whatever the entry says (mail, imessage, calendar today) and is never checked against a list here,
-so a new kind of approval needs no change in this file. The cursor that lists "what happened since" is the hash of an entry in
+not hold either. `kind` is whatever the entry says (mail, imessage, calendar, external today) and is never checked against a
+list here, so a new kind of approval needs no change in this file. The one addition is `action_type` (the registered kind of
+action, such as test.echo), which a record has only when its entry says it: external requests do, the others never do. The cursor that lists "what happened since" is the hash of an entry in
 the log's chain, so the log needs no sequence number of its own.
 """
 from __future__ import annotations
@@ -82,8 +83,11 @@ def _outcome(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def _record(item_id: str, kind: str | None, status: str, t: Any, edited: bool = False) -> dict[str, Any]:
-    return {"id": item_id, "kind": kind, "status": status, "edited": edited, "at": _iso(t) if t is not None else None}
+def _record(item_id: str, kind: str | None, status: str, t: Any, edited: bool = False, action_type: str | None = None) -> dict[str, Any]:
+    out = {"id": item_id, "kind": kind, "status": status, "edited": edited, "at": _iso(t) if t is not None else None}
+    if action_type:                      # only a kind that has several registered types of action (external) says which
+        out["action_type"] = action_type
+    return out
 
 
 class ApprovalLedger:
@@ -97,7 +101,7 @@ class ApprovalLedger:
 
     def _log_expiry(self, kind: str, q: Any) -> None:
         self.audit.record("approval.expired", actor="server", summary=f"A queued {kind} message expired without an answer",
-                          kind=kind, outbox_id=q.id, expired_at=round(q.expires_at, 3))
+                          kind=kind, outbox_id=q.id, expired_at=round(q.expires_at, 3), action_type=getattr(q, "action_type", None))
 
     # -- reading ---------------------------------------------------------------------------------------------------------
     def _waiting(self) -> dict[str, tuple[str, Any]]:
@@ -130,14 +134,15 @@ class ApprovalLedger:
                 edited: dict[str, bool]) -> dict[str, Any]:
         if item_id in waiting:                      # still in the queue wins: a release that failed puts the entry back
             kind, q = waiting[item_id]
-            return _record(item_id, kind, "waiting", q.created_at, getattr(q, "edited_from", None) is not None)
+            return _record(item_id, kind, "waiting", q.created_at, getattr(q, "edited_from", None) is not None, getattr(q, "action_type", None))
         e = latest.get(item_id)
         if e is None:
             return _record(item_id, None, "unknown", None)
         d = e.get("details") or {}
         kind = d.get("kind") if isinstance(d.get("kind"), str) else None
         when = d.get("expired_at") if e.get("action") == "approval.expired" and d.get("expired_at") else e.get("t")
-        return _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False))
+        kind_of = d.get("action_type") if isinstance(d.get("action_type"), str) else None
+        return _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False), kind_of)
 
     def _note(self, out: dict[str, Any]) -> dict[str, Any]:
         if not getattr(self.audit, "enabled", True):
