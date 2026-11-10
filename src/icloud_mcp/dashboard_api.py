@@ -23,12 +23,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import textedit as T
+from .approval_withdraw import REASON_WORDS
 from .dashboard_accounts import mail_account
 
 log = logging.getLogger(__name__)
 
 # What the preview shows inline. Everything else is offered by name and size only: the browser never runs or renders it.
 _PREVIEW_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "application/pdf", "text/plain")
+_WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assistant took back for this long, then it is only in Activity
 
 
 def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_in: Callable, recent: Callable,
@@ -84,6 +86,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return "Edited", "The text changed. The log keeps no text."
         if action == "approval.edit_undone":
             return "Edited", "Back to what was asked for."
+        if action == "approval.withdrawn":
+            why = REASON_WORDS.get(str((e.get("details") or {}).get("reason")), "")
+            return "Withdrawn", "Withdrawn by your assistant" + (f": {why}." if why else ".") + " Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
             return "Unclear", "Messages did not confirm it. Nothing is sent again."
         return "", ""
@@ -93,7 +98,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         actor = e.get("actor") or "?"
         text = re.sub(r"\bimessage\b", "iMessage", str(e.get("summary") or e.get("action", "")))      # older lines were written in lower case
         tag, note = entry_tag(e)
-        return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": "You" if actor == "owner" else ("Someone" if actor == "unknown" else actor),
+        who = "Your assistant" if e.get("action") == "approval.withdrawn" else "You" if actor == "owner" else ("Someone" if actor == "unknown" else actor)
+        return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": who,
                 "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", ""),
                 "tag": tag, "note": note}
 
@@ -201,7 +207,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         sent = [e for e in await asyncio.to_thread(audit.entries, 300, ("approval.sent",))
                 if datetime.fromtimestamp(e.get("t", 0), d.tz).date() == day]
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
+        taken_back = [e.get("t", 0) for e in await asyncio.to_thread(audit.entries, 100, ("approval.withdrawn",))
+                      if time.time() - e.get("t", 0) < _WITHDRAWN_NOTICE_SECONDS]
         return ok({"waiting": [summary(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
+                   "withdrawn": taken_back,           # when each request the assistant took back in the last 24 hours was: Home counts them, and lets go of each on time
                    "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 

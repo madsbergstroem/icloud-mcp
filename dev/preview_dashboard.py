@@ -1,5 +1,6 @@
 """Run the dashboard locally with made-up data, to look at a change: a fake mailbox, a fake Mac helper and a few waiting requests
-(mail, iMessage, a group chat, a calendar invitation). Nothing here reaches a real account.
+(mail, iMessage, a group chat, a calendar invitation) and one request the assistant took back (Home says so for a day, Activity
+keeps it). Nothing here reaches a real account.
 
     PYTHONPATH=src python dev/preview_dashboard.py [--port 8765] [--data DIR] [--arrive SECONDS]
 
@@ -7,6 +8,7 @@ Open http://localhost:8765/dashboard and sign in with the owner password printed
 [unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
 seconds, to watch a new request show up without a reload. Needs the test extras (pip install -e '.[test]')."""
 import argparse
+import asyncio
 import contextlib
 import datetime
 import json
@@ -129,6 +131,9 @@ cal.outbox.add(c.to_ical(), ["jana@example.org", "tom@example.net"],
                 "description": "Table for four at 19:00. Bring the wine list.", "organizer": None, "href": None, "etag": None})
 
 d.audit.record("signin.password", actor="owner", via="password", summary="Signed in with the owner password")
+# One request the assistant queued and then took back, through the real tool, so Home and Activity show what a withdrawal leaves.
+taken_back = mail.send(to=["jordan.lee@example.org"], subject="Offer for the delivery van", body="Hi Jordan, we can offer 18,400 EUR for the van.")["outbox_id"]
+asyncio.run(mcp.call_tool("approval_withdraw", {"id": taken_back, "reason": "mistake"}))
 if args.arrive:
     threading.Timer(args.arrive, lambda: imsg("Live arrival test: this appeared without a reload.", chat="live@example.org",
                                               people=[{"handle": "live@example.org", "name": "Lena Fischer"}])).start()

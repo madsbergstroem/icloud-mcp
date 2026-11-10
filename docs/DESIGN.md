@@ -48,11 +48,11 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 
 | Screen | Element | Content |
 | --- | --- | --- |
-| Home | `icm-today` | Greeting by time of day, one sentence on what waits and when the oldest is dropped, the live line, notices (result, paused, burst, install tip), Waiting (kind tag, group tag, time left), Sent today |
+| Home | `icm-today` | Greeting by time of day, one sentence on what waits and when the oldest is dropped, the live line, notices (result, paused, burst, a request your assistant withdrew in the last 24 hours, install tip), Waiting (kind tag, group tag, time left), Sent today |
 | One request | `icm-item` | Title, one line on who asked and when (and "Edited by you"), the warning, the mail it answers, missing files first, the message as it goes out with "Edit text", the text the agent asked for with "Bring it back" when it was edited, attachments (tap for preview), and Discard plus the approve button. When there is a warning, Discard is the main button and "Send anyway…" asks first |
 | After Approve | `icm-item` | Sending (the buttons are off), sent (back to Home with the result), unclear (Messages did not confirm it: nothing is sent again, the page stays until Done), not sent (the request still waits: Try again or Discard) |
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
-| Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear), chain check and download |
+| Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear, Withdrawn), chain check and download |
 | Settings | `icm-settings` | One group per section: sign-in and security, connected accounts, iCloud, your Mac (live state of the helper), safety switches, account and server. On a wide screen a list of the sections replaces the side list, with "Back to app" |
 | Connected accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup` |
 | One area | `icm-group` | The area's fields as Ionic controls, Save in the toolbar, reset per field |

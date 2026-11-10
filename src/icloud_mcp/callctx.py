@@ -29,6 +29,13 @@ def current() -> dict[str, Any] | None:
     return getattr(_call, "holder", None)
 
 
+def client() -> str:
+    """The name the connected client gave itself on the call running on this thread ('' when it gave none, or no call runs).
+    It is what the client says about itself and proves nothing: a label that tells two clients apart, never a credential."""
+    holder = getattr(_call, "holder", None)
+    return str((holder or {}).get("client") or "")
+
+
 def stage(text: str) -> None:
     holder = getattr(_call, "holder", None)
     if holder is not None:

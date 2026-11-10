@@ -156,7 +156,8 @@ _TOOL_MAP: list[tuple[str, list[str]]] = [
     ("Health", ["health_get_summary (per day, and sleeps)", "health_get_day (one day in detail)", "health_get_status (how fresh)",
                 "health_refresh_data"]),
     ("Shortcuts", ["shortcuts_list_shortcuts, then shortcuts_run_shortcut"]),
-    ("Queued for the owner", ["approval_status (what became of a request you queued; never send it again)"]),
+    ("Queued for the owner", ["approval_status (what became of a request you queued; never send it again)",
+                              "approval_withdraw (take back a request you queued)"]),
     ("Something fails", ["icloud_check_health", "icloud_get_helper_status (the owner's Mac)"]),
 ]
 _TOOL_NAME = re.compile(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud|approval)_[a-z_]+")
@@ -180,13 +181,15 @@ _LOOKUP_MAIL = "mail_find_correspondent (people the owner has emailed; tolerates
 
 _SEND_DIRECT = ("SENDING: {SENDERS} deliver immediately and cannot be recalled. Send only when the "
                 "owner asks in this conversation; if recipients, wording or intent are unclear, ask or use draft=true.")
-_SEND_APPROVAL = ("SENDING: you cannot send mail on your own. {SENDERS} only QUEUE a message; it is "
-                  "delivered only if the owner approves it in a browser with a password you never see. Status "
+_SEND_APPROVAL = ("SENDING: you cannot send mail on your own. {SENDERS} only QUEUE a message; only the owner can approve or "
+                  "discard it, on the dashboard (their own sign-in; the owner password is only a fallback). Status "
                   "\"queued_for_owner_approval\" means NOT SENT: tell the owner it is waiting at approve_at. Never ask for, guess "
                   "or relay the owner password.")
 _SEND_LOCAL_DRAFTS = ("SENDING: you cannot send mail on your own. {SENDERS} save the message to Drafts; "
                       "the owner reviews it and presses Send. Status \"saved_to_drafts_for_owner_approval\" means NOT sent: tell "
                       "the owner it is waiting in Drafts.")
+_WITHDRAW = ("TAKING A REQUEST BACK: if you queued something wrong, withdraw it with approval_withdraw while it waits, then ask the "
+             "owner before you queue a corrected version or the same text again (they can also use Edit text on the dashboard).")
 _INVITES_ON = ("INVITING PEOPLE: addresses go in attendees; iCloud sends the invitation itself, so no separate email. Read "
                "'delivery' and 'delivery_warning': never say someone was invited when they say otherwise. A tel: attendee is not "
                "invited. Editing or deleting an event with attendees emails them. Invite only people the owner named.")
@@ -290,6 +293,8 @@ def build_instructions(s: Settings, tools: set[str] | frozenset[str] | None = No
         out.append("\n" + _INVITES_ON)
         if s.invites_require_approval:
             out.append(_INVITES_APPROVAL)
+    if have is not None and "approval_withdraw" in have:
+        out.append("\n" + _WITHDRAW)
     sources = []
     if s.enable_contacts and ok(("contacts_search_contacts",)):
         sources.append("contacts_search_contacts returns 'similar' / 'did_you_mean'")

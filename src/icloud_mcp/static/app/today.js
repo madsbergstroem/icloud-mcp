@@ -5,6 +5,7 @@ import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
 const KINDS = { mail: "Mail", calendar: "Calendar", imessage: "iMessage" };
+const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
   const h = new Date().getHours();
@@ -43,6 +44,20 @@ class Today extends HTMLElement {
     window.removeEventListener("icm:changed", this.onChange);
     window.removeEventListener("icm:open", this.onOpen);
     this.mq.removeEventListener("change", this.onWidth);
+    clearTimeout(this.letGoTimer);
+  }
+
+  // Requests the assistant took back in the last 24 hours. Each time is the server's; the count is worked out here at every draw,
+  // and a draw is timed for the moment the oldest one passes the day, so the line goes away by itself even on an open tab.
+  withdrawn() {
+    const now = Date.now() / 1000;
+    return (this.data.withdrawn || []).filter((t) => now - t < DAY);
+  }
+
+  letGo() {
+    clearTimeout(this.letGoTimer);
+    const live = this.withdrawn();
+    if (live.length) this.letGoTimer = setTimeout(() => this.render(), Math.max(1000, (Math.min(...live) + DAY - Date.now() / 1000) * 1000 + 500));
   }
 
   async load() {
@@ -59,6 +74,8 @@ class Today extends HTMLElement {
       <ion-button size="small" fill="clear" data-resume>Resume</ion-button></div>`);
     if (this.data.recent_burst > 2) out.push(`<div class="notice pause"><span>Agents asked for ${this.data.recent_burst} of these in the
       last hour. Approve only what you asked for.</span></div>`);
+    const taken = this.withdrawn().length;
+    if (taken) out.push(`<div class="notice"><span>${taken === 1 ? "1 request was" : `${taken} requests were`} withdrawn by your assistant.</span></div>`);
     const hint = window.InstallHint && window.InstallHint.state ? window.InstallHint.state() : "none";
     if (hint !== "none" && !app.hintClosed) out.push(`<div class="notice"><span>Add this app to your
       Home Screen to get notifications${hint.startsWith("ios") ? ": in Safari tap Share, then Add to Home Screen" : ""}.</span>
@@ -113,6 +130,7 @@ class Today extends HTMLElement {
       this.split = null;
       body.innerHTML = this.list();
     }
+    this.letGo();
     body.querySelectorAll("[data-key]").forEach((n) => n.addEventListener("click", () => this.open(n.dataset.key)));
     body.querySelector("[data-resume]")?.addEventListener("click", async () => {
       try { await post("/server/pause", { paused: false }); app.note = "Resumed."; app.noteUntil = Date.now() + 10000; window.dispatchEvent(new Event("icm:changed")); } catch (e) { fail(e); }
