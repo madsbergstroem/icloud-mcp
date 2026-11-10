@@ -14,10 +14,14 @@ class Accounts extends HTMLElement {
   async load() {
     let r;
     try { r = await get("/accounts"); } catch (e) { fail(e); return; }
+    // Which account is the default matters only where an area has more than one account; with one each, a tag on every row says nothing
+    const held = {};
+    r.accounts.forEach((a) => a.areas.forEach((x) => { held[x] = (held[x] || 0) + 1; }));
+    const defaultTag = (a) => { const shared = (a.default_for || []).filter((x) => held[x] > 1); return shared.length ? tag("Default for " + shared.join(", ")) : ""; };
     const rows = r.accounts.map((a) => `<ion-item>
       <span class="av" slot="start">${esc((a.label || "?")[0].toUpperCase())}</span>
       <ion-label class="ion-text-wrap"><h2>${esc(a.label)}</h2><p style="overflow-wrap:anywhere">${esc(a.address)}</p>
-        <div class="chips">${a.read_only ? tag("Read only", "warn") : ""}${tag(a.sign_in)}${a.areas.map((x) => tag(x)).join("")}${a.from_environment ? tag("Set in the server's environment") : ""}</div>
+        <div class="chips">${defaultTag(a)}${a.read_only ? tag("Read only", "warn") : ""}${tag(a.sign_in)}${a.areas.map((x) => tag(x)).join("")}${a.from_environment ? tag("Set in the server's environment") : ""}</div>
       </ion-label></ion-item>`).join("");
     this.body.innerHTML = titleBlock("Connected accounts", "Everything your assistant reads from or writes through. Sending always waits for your approval.")
       + (rows ? section("Connected", `<span class="num">${r.accounts.length}</span>`) + `<ion-list class="inset">${rows}</ion-list>`
