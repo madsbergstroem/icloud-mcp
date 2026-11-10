@@ -104,6 +104,56 @@ read from one mailbox and is kept per account id, never merged. Error scrubbing 
 accounts it must take the secrets of every stored account, not only the defaults'. `calendars_visible` is one list for the whole
 file and would become a field of the account.
 
+## Hub
+
+The approval outbox is meant to grow into one place where the owner approves actions of any kind. The rule stays as it is:
+an agent or an outside system can only ask, only the owner approves, and the server carries it out. So far the core and the
+registry exist; nothing connects to them yet.
+
+| Layer | What it is | Where |
+| --- | --- | --- |
+| Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `outbox.py`, `dashboard*.py`, `approval_*.py`, `textedit.py`, `audit.py` |
+| Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `actions.py`, `external.py` |
+| Inputs | How a request arrives. Today only `queue_external`, which nothing in the server calls; code in a connector or an input would | later |
+| Outputs | What leaves after a decision: the executor's call and, later, a message about a status change | later |
+
+What every layer keeps:
+
+- One instance per person, with its own `DATA_DIR`. Nothing is shared between owners.
+- An entry is the canonical JSON of `{action_type, params}`; its hash is taken over exactly those bytes, so an edit changes the
+  hash and the old version can no longer be approved, and bringing the agent's text back gives the first hash again.
+- The status names are `waiting`, `sent`, `discarded`, `withdrawn`, `expired`, `unclear` and `unknown`, and a record is
+  `{id, kind, status, edited, at}` (external requests add `action_type`). An executor answers `sent`, `failed` or `unclear`:
+  `failed` means the other side provably never got the request and is the only answer that puts the entry back; `unclear` is
+  never repeated, and an executor that raises counts as `unclear`. A new input maps its own words onto these names and this
+  shape; it does not add its own. A status a caller does not know reads as "not sent".
+- Log, audit, push and any message to an outside address carry the kind, the id, the outcome and the time, never parameters or
+  text. The titles on the card come from the type, not from a parameter. The list of people a type may reach belongs to the
+  owner; an empty list allows nobody, and it is checked again when the owner approves.
+- A key makes queueing idempotent: the same key with the same request returns the entry that already waits (the text may
+  differ, because the owner can have edited it), and the same key with another request is refused.
+
+How a connector for the gateway (`mcp`) would attach: one action type per tool, with the tool's input schema as its parameter
+schema. The executor calls the tool through the gateway with the parameters as the owner approved them. It answers `failed` only
+when the gateway says the call was never made (refused before it was dispatched); once the call has left, a timeout or an answer
+it cannot read is `unclear`. The gateway holds the credentials; the server holds the address and the owner's list of whom a
+type may reach.
+
+How `webhook` would attach, in two places. As an input, a signed request from outside becomes one `queue_external` call: the
+signature and the sender's rate are checked first, the delivery id is the key (so a repeated delivery is the same entry), and the
+answer is the entry's id. As an output, a status change of an entry is sent to an address the owner configured, with the kind,
+the id, the status and the time, in the shape of an `approval_status` record. A webhook can also be an executor (a request to
+the other side), with the same rule: `failed` only when no connection was made, `unclear` once the body has left.
+
+Where the seam is not general yet:
+
+- The kind tables in `static/app` have no entry for `external`, so a card's tag shows the raw kind, and the "not sure it
+  arrived" notice talks about a conversation.
+- `approval_withdraw` words its log line from a switch on the kind, so a withdrawn external request is logged without a title.
+- A source's outbox is found by probing for `mail`, `cal` or `box` on it (in `dashboard.py` and `textedit.py`).
+- `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
+  as calendar changes do.
+
 ## Looking at a change
 
 `PYTHONPATH=src python dev/preview_dashboard.py` serves the dashboard with made-up data (a fake mailbox and Mac helper, a few

@@ -2926,9 +2926,16 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         - safety_warnings_since_start counts how often third-party text looked hostile."""
         return health_report()
 
+    external = None                  # requests of the action types registered in actions.py; nothing registers one yet, so this stays off
+    if s.dashboard and provider is not None and _audit is not None:
+        from . import actions
+        if actions.REGISTRY.types():
+            from .external import ExternalApprovals
+            external = ExternalApprovals(Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="external-outbox.json"), actions.REGISTRY)
     mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
                             "imessage": approval["imessage_outbox"],
-                            "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None}                       # counts for the admin API
+                            "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,
+                            **({"external": external.box} if external is not None else {})}                       # counts for the admin API
     if provider is not None and _audit is not None and any(mcp._icloud_outboxes.values()):
         ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
         register_approval_status(tool, _guard, ledger)
@@ -2940,7 +2947,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         from .dashboard import CalendarApprovals
         sources = ([MailApprovals(approval["mail"])] if approval["mail"] is not None else []) + \
                   ([CalendarApprovals(approval["calendar"])] if approval.get("calendar") is not None else []) + \
-                  ([IMessageApprovals(approval["imessage"], approval["imessage_outbox"])] if approval["imessage_outbox"] is not None else [])
+                  ([IMessageApprovals(approval["imessage"], approval["imessage_outbox"])] if approval["imessage_outbox"] is not None else []) + \
+                  ([external] if external is not None else [])
         mcp._icloud_dashboard = register_dashboard(mcp, provider, s, _audit, sources)
         if s.dashboard_settings != "off":
             from .settings import register_settings

@@ -1,0 +1,1246 @@
+{
+ "activity": {
+  "body": {
+   "chain": {
+    "broken_at": null,
+    "entries": 19,
+    "ok": true
+   },
+   "days": [
+    {
+     "day": "Today",
+     "entries": [
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "a queued calendar message expired without an answer",
+       "who": "server"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "a queued iMessage message expired without an answer",
+       "who": "server"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "a queued mail message expired without an answer",
+       "who": "server"
+      },
+      {
+       "error": "",
+       "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Withdrawn",
+       "time": "<volatile>",
+       "what": "withdrew invitation “Autumn fair”",
+       "who": "Your assistant"
+      },
+      {
+       "error": "",
+       "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Withdrawn",
+       "time": "<volatile>",
+       "what": "withdrew iMessage “iMessage to Hiking crew”",
+       "who": "Your assistant"
+      },
+      {
+       "error": "",
+       "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Withdrawn",
+       "time": "<volatile>",
+       "what": "withdrew email “Take me back”",
+       "who": "Your assistant"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "discarded invitation “Autumn fair”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "discarded iMessage “iMessage to Hiking crew”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "discarded email “Discard me”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "approved iMessage “iMessage to Hiking crew”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "approved invitation “Autumn fair”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "Messages did not confirm it. Nothing is sent again.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Unclear",
+       "time": "<volatile>",
+       "what": "approved iMessage “iMessage to Hiking crew”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "approved email “Lunch”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "",
+       "ok": false,
+       "t": "<volatile>",
+       "tag": "",
+       "time": "<volatile>",
+       "what": "could not send email “Lunch”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "Back to what was asked for.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Edited",
+       "time": "<volatile>",
+       "what": "brought back the original text of email “Lunch”",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "The text changed. The log keeps no text.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Edited",
+       "time": "<volatile>",
+       "what": "edited invitation “Autumn fair” before sending",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "The text changed. The log keeps no text.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Edited",
+       "time": "<volatile>",
+       "what": "edited iMessage “iMessage to Hiking crew” before sending",
+       "who": "You"
+      },
+      {
+       "error": "",
+       "note": "The text changed. The log keeps no text.",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "Edited",
+       "time": "<volatile>",
+       "what": "edited email “Lunch” before sending",
+       "who": "You"
+      }
+     ]
+    }
+   ],
+   "filter": "approvals",
+   "filters": [
+    [
+     "all",
+     "All"
+    ],
+    [
+     "approvals",
+     "Approvals"
+    ],
+    [
+     "agents",
+     "Agents"
+    ],
+    [
+     "signins",
+     "Sign-ins"
+    ]
+   ],
+   "keep_days": 90,
+   "log_on": true,
+   "ok": true
+  },
+  "status": 200
+ },
+ "approve": {
+  "calendar": {
+   "body": {
+    "note": "Added “Autumn fair”. iCloud now emails jana@example.org.",
+    "ok": true
+   },
+   "status": 200
+  },
+  "imessage": {
+   "body": {
+    "note": "Handed to Messages (not yet confirmed): iMessage to Hiking crew.",
+    "ok": true,
+    "state": "unclear"
+   },
+   "status": 200
+  },
+  "mail": {
+   "body": {
+    "note": "Sent to bob@example.org.",
+    "ok": true
+   },
+   "status": 200
+  }
+ },
+ "approve_failed": {
+  "body": {
+   "error": "Not sent (still waiting): The mail server is not answering",
+   "ok": false
+  },
+  "status": 502
+ },
+ "approve_sent_imessage": {
+  "body": {
+   "note": "Sent: iMessage to Hiking crew.",
+   "ok": true
+  },
+  "status": 200
+ },
+ "approve_stale": {
+  "body": {
+   "error": "That item is no longer waiting or has changed. Nothing was done.",
+   "ok": false
+  },
+  "status": 409
+ },
+ "audit": [
+  {
+   "action": "approval.edited",
+   "actor": "owner",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-1>"
+   },
+   "ok": true,
+   "summary": "Edited email “Lunch” before sending",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.edited",
+   "actor": "owner",
+   "details": {
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-1>"
+   },
+   "ok": true,
+   "summary": "Edited imessage “iMessage to Hiking crew” before sending",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.edited",
+   "actor": "owner",
+   "details": {
+    "kind": "calendar",
+    "outbox_id": "<id:calendar-1>"
+   },
+   "ok": true,
+   "summary": "Edited invitation “Autumn fair” before sending",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.edit_undone",
+   "actor": "owner",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-1>"
+   },
+   "ok": true,
+   "summary": "Brought back the original text of email “Lunch”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.failed",
+   "actor": "owner",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-1>"
+   },
+   "ok": false,
+   "summary": "Could not send email “Lunch”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.sent",
+   "actor": "owner",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-1>",
+    "recipients": [
+     "bob@example.org",
+     "bob@example.org"
+    ]
+   },
+   "ok": true,
+   "summary": "Approved email “Lunch”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.sent",
+   "actor": "owner",
+   "details": {
+    "delivery": "unconfirmed",
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-1>"
+   },
+   "ok": true,
+   "summary": "Approved imessage “iMessage to Hiking crew”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.sent",
+   "actor": "owner",
+   "details": {
+    "kind": "calendar",
+    "outbox_id": "<id:calendar-1>",
+    "recipients": [
+     "jana@example.org"
+    ]
+   },
+   "ok": true,
+   "summary": "Approved invitation “Autumn fair”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.sent",
+   "actor": "owner",
+   "details": {
+    "delivery": "sent",
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-2>"
+   },
+   "ok": true,
+   "summary": "Approved imessage “iMessage to Hiking crew”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.discarded",
+   "actor": "owner",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-2>"
+   },
+   "ok": true,
+   "summary": "Discarded email “Discard me”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.discarded",
+   "actor": "owner",
+   "details": {
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-3>"
+   },
+   "ok": true,
+   "summary": "Discarded imessage “iMessage to Hiking crew”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.discarded",
+   "actor": "owner",
+   "details": {
+    "kind": "calendar",
+    "outbox_id": "<id:calendar-2>"
+   },
+   "ok": true,
+   "summary": "Discarded invitation “Autumn fair”",
+   "t": "<volatile>",
+   "via": "password"
+  },
+  {
+   "action": "approval.withdrawn",
+   "actor": "assistant",
+   "details": {
+    "kind": "mail",
+    "outbox_id": "<id:mail-3>",
+    "reason": "mistake"
+   },
+   "ok": true,
+   "summary": "Withdrew email “Take me back”",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.withdrawn",
+   "actor": "assistant",
+   "details": {
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-4>",
+    "reason": "mistake"
+   },
+   "ok": true,
+   "summary": "Withdrew imessage “iMessage to Hiking crew”",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.withdrawn",
+   "actor": "assistant",
+   "details": {
+    "kind": "calendar",
+    "outbox_id": "<id:calendar-3>",
+    "reason": "mistake"
+   },
+   "ok": true,
+   "summary": "Withdrew invitation “Autumn fair”",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.expired",
+   "actor": "server",
+   "details": {
+    "expired_at": "<volatile>",
+    "kind": "mail",
+    "outbox_id": "<id:mail-4>"
+   },
+   "ok": true,
+   "summary": "A queued mail message expired without an answer",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.expired",
+   "actor": "server",
+   "details": {
+    "expired_at": "<volatile>",
+    "kind": "imessage",
+    "outbox_id": "<id:imessage-5>"
+   },
+   "ok": true,
+   "summary": "A queued imessage message expired without an answer",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.expired",
+   "actor": "server",
+   "details": {
+    "expired_at": "<volatile>",
+    "kind": "calendar",
+    "outbox_id": "<id:calendar-4>"
+   },
+   "ok": true,
+   "summary": "A queued calendar message expired without an answer",
+   "t": "<volatile>"
+  }
+ ],
+ "discard": {
+  "calendar": {
+   "body": {
+    "note": "Discarded. Nothing was sent.",
+    "ok": true
+   },
+   "status": 200
+  },
+  "imessage": {
+   "body": {
+    "note": "Discarded. Nothing was sent.",
+    "ok": true
+   },
+   "status": 200
+  },
+  "mail": {
+   "body": {
+    "note": "Discarded. Nothing was sent.",
+    "ok": true
+   },
+   "status": 200
+  }
+ },
+ "edit": {
+  "calendar": {
+   "body": {
+    "changed": true,
+    "note": "Saved. It goes out exactly as shown.",
+    "ok": true,
+    "sha": "<sha>"
+   },
+   "status": 200
+  },
+  "imessage": {
+   "body": {
+    "changed": true,
+    "note": "Saved. It goes out exactly as shown.",
+    "ok": true,
+    "sha": "<sha>"
+   },
+   "status": 200
+  },
+  "mail": {
+   "body": {
+    "changed": true,
+    "note": "Saved. It goes out exactly as shown.",
+    "ok": true,
+    "sha": "<sha>"
+   },
+   "status": 200
+  }
+ },
+ "edit_bad": {
+  "body": {
+   "error": "The text is empty. Nothing was changed.",
+   "ok": false
+  },
+  "status": 422
+ },
+ "edit_stale": {
+  "body": {
+   "error": "That item is no longer waiting or has changed. Nothing was done.",
+   "ok": false
+  },
+  "status": 409
+ },
+ "items": {
+  "calendar": {
+   "body": {
+    "account": "",
+    "approve_label": "Add and invite",
+    "badge": "Invitation",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": false,
+     "limit": 10000,
+     "original": null,
+     "reason": "",
+     "text": "Bring ideas"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": false,
+    "key": "calendar:<id:calendar-1>",
+    "kind": "calendar",
+    "missing": [],
+    "needs_override": false,
+    "notes": [
+     "Approving adds the event to your calendar, and iCloud emails an invitation to 1 people.",
+     "Nothing is in your calendar yet."
+    ],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "When",
+      "Thu 22 Oct 2026, 18:00"
+     ],
+     [
+      "Calendar",
+      "Club"
+     ],
+     [
+      "Guests",
+      "jana@example.org"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "Bring ideas",
+    "title": "Autumn fair",
+    "to": "jana@example.org",
+    "warning": false,
+    "warnings": []
+   },
+   "status": 200
+  },
+  "imessage": {
+   "body": {
+    "account": "",
+    "approve_label": "Send",
+    "badge": "iMessage",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": false,
+     "limit": 10000,
+     "original": null,
+     "reason": "",
+     "text": "Running late, start without me"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": true,
+    "key": "imessage:<id:imessage-1>",
+    "kind": "imessage",
+    "missing": [],
+    "needs_override": false,
+    "notes": [
+     "Sent from your Mac once you approve."
+    ],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "Chat with",
+      "Anna (anna@example.org)"
+     ],
+     [
+      "Conversation",
+      "chat900"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "Running late, start without me",
+    "title": "iMessage to Hiking crew",
+    "to": "Hiking crew",
+    "warning": true,
+    "warnings": [
+     "A group conversation: everyone in it receives this."
+    ]
+   },
+   "status": 200
+  },
+  "mail": {
+   "body": {
+    "account": "iCloud",
+    "approve_label": "Send",
+    "badge": "Email",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": false,
+     "limit": 30000,
+     "original": null,
+     "reason": "",
+     "text": "See you at noon\r\n"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": false,
+    "key": "mail:<id:mail-1>",
+    "kind": "mail",
+    "max_bytes": 5242880,
+    "missing": [],
+    "needs_override": false,
+    "notes": [],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "From",
+      "me@icloud.com"
+     ],
+     [
+      "To",
+      "bob@example.org"
+     ],
+     [
+      "Will be delivered to",
+      "bob@example.org"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "See you at noon\r\n",
+    "title": "Lunch",
+    "to": "bob@example.org",
+    "warning": false,
+    "warnings": []
+   },
+   "status": 200
+  }
+ },
+ "items_edited": {
+  "calendar": {
+   "body": {
+    "account": "",
+    "approve_label": "Add and invite",
+    "badge": "Invitation",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": true,
+     "limit": 10000,
+     "original": "Bring ideas",
+     "reason": "",
+     "text": "calendar edited, ÜBER-café"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": false,
+    "key": "calendar:<id:calendar-1>",
+    "kind": "calendar",
+    "missing": [],
+    "needs_override": false,
+    "notes": [
+     "Approving adds the event to your calendar, and iCloud emails an invitation to 1 people.",
+     "Nothing is in your calendar yet."
+    ],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "When",
+      "Thu 22 Oct 2026, 18:00"
+     ],
+     [
+      "Calendar",
+      "Club"
+     ],
+     [
+      "Guests",
+      "jana@example.org"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "calendar edited, ÜBER-café",
+    "title": "Autumn fair",
+    "to": "jana@example.org",
+    "warning": false,
+    "warnings": []
+   },
+   "status": 200
+  },
+  "imessage": {
+   "body": {
+    "account": "",
+    "approve_label": "Send",
+    "badge": "iMessage",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": true,
+     "limit": 10000,
+     "original": "Running late, start without me",
+     "reason": "",
+     "text": "imessage edited, ÜBER-café"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": true,
+    "key": "imessage:<id:imessage-1>",
+    "kind": "imessage",
+    "missing": [],
+    "needs_override": false,
+    "notes": [
+     "Sent from your Mac once you approve."
+    ],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "Chat with",
+      "Anna (anna@example.org)"
+     ],
+     [
+      "Conversation",
+      "chat900"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "imessage edited, ÜBER-café",
+    "title": "iMessage to Hiking crew",
+    "to": "Hiking crew",
+    "warning": true,
+    "warnings": [
+     "A group conversation: everyone in it receives this."
+    ]
+   },
+   "status": 200
+  },
+  "mail": {
+   "body": {
+    "account": "iCloud",
+    "approve_label": "Send",
+    "badge": "Email",
+    "blocked": false,
+    "by": "",
+    "created_at": "<volatile>",
+    "edit": {
+     "allowed": true,
+     "edited": true,
+     "limit": 30000,
+     "original": "See you at noon\r\n",
+     "reason": "",
+     "text": "mail edited, ÜBER-café\r\n"
+    },
+    "expires_at": "<volatile>",
+    "files": [],
+    "group": false,
+    "key": "mail:<id:mail-1>",
+    "kind": "mail",
+    "max_bytes": 5242880,
+    "missing": [],
+    "needs_override": false,
+    "notes": [],
+    "ok": true,
+    "original": null,
+    "rows": [
+     [
+      "From",
+      "me@icloud.com"
+     ],
+     [
+      "To",
+      "bob@example.org"
+     ],
+     [
+      "Will be delivered to",
+      "bob@example.org"
+     ]
+    ],
+    "sha": "<sha>",
+    "text": "mail edited, ÜBER-café\r\n",
+    "title": "Lunch",
+    "to": "bob@example.org",
+    "warning": false,
+    "warnings": []
+   },
+   "status": 200
+  }
+ },
+ "push_texts": {
+  "calendar": [
+   "Approval needed",
+   "A calendar change is waiting for your approval."
+  ],
+  "imessage": [
+   "Approval needed",
+   "An iMessage is waiting for your approval."
+  ],
+  "mail": [
+   "Approval needed",
+   "An email is waiting for your approval."
+  ]
+ },
+ "restore": {
+  "body": {
+   "changed": true,
+   "note": "Brought back what was asked for.",
+   "ok": true,
+   "sha": "<sha>"
+  },
+  "status": 200
+ },
+ "sent_mail": [
+  [
+   "bob@example.org",
+   "Lunch"
+  ]
+ ],
+ "since_start": {
+  "cursor": "<volatile>",
+  "items": [
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:mail-1>",
+    "kind": "mail",
+    "status": "sent"
+   },
+   {
+    "at": "<volatile>",
+    "edited": true,
+    "id": "<id:imessage-1>",
+    "kind": "imessage",
+    "status": "unclear"
+   },
+   {
+    "at": "<volatile>",
+    "edited": true,
+    "id": "<id:calendar-1>",
+    "kind": "calendar",
+    "status": "sent"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:imessage-2>",
+    "kind": "imessage",
+    "status": "sent"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:mail-2>",
+    "kind": "mail",
+    "status": "discarded"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:imessage-3>",
+    "kind": "imessage",
+    "status": "discarded"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:calendar-2>",
+    "kind": "calendar",
+    "status": "discarded"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:mail-3>",
+    "kind": "mail",
+    "status": "withdrawn"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:imessage-4>",
+    "kind": "imessage",
+    "status": "withdrawn"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:calendar-3>",
+    "kind": "calendar",
+    "status": "withdrawn"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:mail-4>",
+    "kind": "mail",
+    "status": "expired"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:imessage-5>",
+    "kind": "imessage",
+    "status": "expired"
+   },
+   {
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:calendar-4>",
+    "kind": "calendar",
+    "status": "expired"
+   }
+  ],
+  "more": false
+ },
+ "state": {
+  "body": {
+   "kinds": {
+    "calendar": 1,
+    "imessage": 1,
+    "mail": 1
+   },
+   "mac": "offline",
+   "ok": true,
+   "paused": false,
+   "v": "<volatile>",
+   "waiting": 3
+  },
+  "status": 200
+ },
+ "state_end": {
+  "body": {
+   "kinds": {
+    "calendar": 0,
+    "imessage": 0,
+    "mail": 0
+   },
+   "mac": "offline",
+   "ok": true,
+   "paused": false,
+   "v": "<volatile>",
+   "waiting": 0
+  },
+  "status": 200
+ },
+ "status_after_failed": {
+  "at": "<volatile>",
+  "edited": false,
+  "id": "<id:mail-1>",
+  "kind": "mail",
+  "status": "waiting"
+ },
+ "status_discarded": {
+  "calendar": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:calendar-2>",
+   "kind": "calendar",
+   "status": "discarded"
+  },
+  "imessage": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:imessage-3>",
+   "kind": "imessage",
+   "status": "discarded"
+  },
+  "mail": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:mail-2>",
+   "kind": "mail",
+   "status": "discarded"
+  }
+ },
+ "status_edited": {
+  "calendar": {
+   "at": "<volatile>",
+   "edited": true,
+   "id": "<id:calendar-1>",
+   "kind": "calendar",
+   "status": "waiting"
+  },
+  "imessage": {
+   "at": "<volatile>",
+   "edited": true,
+   "id": "<id:imessage-1>",
+   "kind": "imessage",
+   "status": "waiting"
+  },
+  "mail": {
+   "at": "<volatile>",
+   "edited": true,
+   "id": "<id:mail-1>",
+   "kind": "mail",
+   "status": "waiting"
+  }
+ },
+ "status_ended": {
+  "calendar": {
+   "at": "<volatile>",
+   "edited": true,
+   "id": "<id:calendar-1>",
+   "kind": "calendar",
+   "status": "sent"
+  },
+  "imessage": {
+   "at": "<volatile>",
+   "edited": true,
+   "id": "<id:imessage-1>",
+   "kind": "imessage",
+   "status": "unclear"
+  },
+  "mail": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:mail-1>",
+   "kind": "mail",
+   "status": "sent"
+  }
+ },
+ "status_expired": {
+  "calendar": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:calendar-4>",
+   "kind": "calendar",
+   "status": "expired"
+  },
+  "imessage": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:imessage-5>",
+   "kind": "imessage",
+   "status": "expired"
+  },
+  "mail": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:mail-4>",
+   "kind": "mail",
+   "status": "expired"
+  }
+ },
+ "status_unknown": {
+  "at": "<volatile>",
+  "edited": false,
+  "id": "never-queued",
+  "kind": null,
+  "status": "unknown"
+ },
+ "today": {
+  "body": {
+   "ok": true,
+   "paused": false,
+   "recent_burst": 3,
+   "sent_today": [],
+   "v": "<volatile>",
+   "waiting": [
+    {
+     "badge": "Email",
+     "blocked": false,
+     "by": "",
+     "created_at": "<volatile>",
+     "expires_at": "<volatile>",
+     "group": false,
+     "key": "mail:<id:mail-1>",
+     "kind": "mail",
+     "title": "Lunch",
+     "to": "bob@example.org",
+     "warning": false
+    },
+    {
+     "badge": "iMessage",
+     "blocked": false,
+     "by": "",
+     "created_at": "<volatile>",
+     "expires_at": "<volatile>",
+     "group": true,
+     "key": "imessage:<id:imessage-1>",
+     "kind": "imessage",
+     "title": "iMessage to Hiking crew",
+     "to": "Hiking crew",
+     "warning": true
+    },
+    {
+     "badge": "Invitation",
+     "blocked": false,
+     "by": "",
+     "created_at": "<volatile>",
+     "expires_at": "<volatile>",
+     "group": false,
+     "key": "calendar:<id:calendar-1>",
+     "kind": "calendar",
+     "title": "Autumn fair",
+     "to": "jana@example.org",
+     "warning": false
+    }
+   ],
+   "withdrawn": "<volatile>"
+  },
+  "status": 200
+ },
+ "today_end": {
+  "body": {
+   "ok": true,
+   "paused": false,
+   "recent_burst": 0,
+   "sent_today": [
+    {
+     "t": "<volatile>",
+     "time": "<volatile>",
+     "title": "iMessage to Hiking crew",
+     "to": "",
+     "unclear": false,
+     "what": "iMessage"
+    },
+    {
+     "t": "<volatile>",
+     "time": "<volatile>",
+     "title": "Autumn fair",
+     "to": "jana@example.org",
+     "unclear": false,
+     "what": "Invitation"
+    },
+    {
+     "t": "<volatile>",
+     "time": "<volatile>",
+     "title": "iMessage to Hiking crew",
+     "to": "",
+     "unclear": true,
+     "what": "iMessage"
+    },
+    {
+     "t": "<volatile>",
+     "time": "<volatile>",
+     "title": "Lunch",
+     "to": "bob@example.org",
+     "unclear": false,
+     "what": "Email"
+    }
+   ],
+   "v": "<volatile>",
+   "waiting": [],
+   "withdrawn": "<volatile>"
+  },
+  "status": 200
+ },
+ "withdraw": {
+  "calendar": {
+   "id": "<id:calendar-3>",
+   "status": "withdrawn",
+   "withdrawn": "<volatile>"
+  },
+  "imessage": {
+   "id": "<id:imessage-4>",
+   "status": "withdrawn",
+   "withdrawn": "<volatile>"
+  },
+  "mail": {
+   "id": "<id:mail-3>",
+   "status": "withdrawn",
+   "withdrawn": "<volatile>"
+  }
+ },
+ "withdraw_again": {
+  "id": "<id:mail-3>",
+  "status": "withdrawn",
+  "withdrawn": "<volatile>"
+ }
+}

@@ -90,6 +90,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             why = REASON_WORDS.get(str((e.get("details") or {}).get("reason")), "")
             return "Withdrawn", "Withdrawn by your assistant" + (f": {why}." if why else ".") + " Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
+            if (e.get("details") or {}).get("kind") == "external":
+                return "Unclear", "It may or may not have gone through. Nothing is sent again."
             return "Unclear", "Messages did not confirm it. Nothing is sent again."
         return "", ""
 
@@ -184,7 +186,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
     def summary(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
         return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
-                "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group"))}
+                "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
+                **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
     def described(only: str = "") -> list[tuple[Any, Any, dict[str, Any]]]:
         out = []
@@ -305,7 +308,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         who = {"actor": "owner", "via": rec.get("via", "")}
         if action == "discard":
             await asyncio.to_thread(src.discard, q)
-            audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id)
+            audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
+                         action_type=getattr(q, "action_type", None))
             return ok({"note": "Discarded. Nothing was sent."})
         if v["needs_override"] and body.get("override") is not True:
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
@@ -315,10 +319,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             note = await asyncio.to_thread(src.release, q)
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
             log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
-            audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id)
+            audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
+                         action_type=getattr(q, "action_type", None))
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
-                     outbox_id=q.id, delivery=getattr(note, "delivery", None),
+                     outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None),
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         # "state" only when the send is not certain; nothing is sent again from here
         return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})

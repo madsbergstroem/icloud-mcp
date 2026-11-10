@@ -42,6 +42,7 @@ TEXTS = {
     "mail": ("Approval needed", "An email is waiting for your approval."),
     "calendar": ("Approval needed", "A calendar change is waiting for your approval."),
     "imessage": ("Approval needed", "An iMessage is waiting for your approval."),
+    "external": ("Approval needed", "An action is waiting for your approval."),
     "file": ("File arrived", "A waiting email got its file."),
     "test": ("Notifications are on", "This is how a note from your server looks."),
 }
