@@ -198,6 +198,133 @@ def test_an_entry_that_names_several_ids_covers_each_of_them(parts):
     assert [ledger.status(i)["status"] for i in ids] == ["discarded"] * 3
 
 
+# ------------------------------------------------------------------------------------------------ edited
+def edit(audit, box, q, original="what the agent asked"):
+    """What the dashboard does when the owner changes the text: swap the entry (it now keeps the agent's text) and log it."""
+    new = box.replace(q.id, q.sha256, b"the owner's words", edited_from=original)
+    end(audit, "approval.edited", q.id)
+    return new
+
+
+def bring_back(audit, box, q):
+    """What the dashboard does when the owner brings the agent's text back."""
+    new = box.replace(q.id, q.sha256, b"the agent's words", edited_from=None)
+    end(audit, "approval.edit_undone", q.id)
+    return new
+
+
+def test_a_waiting_request_is_edited_when_its_entry_keeps_the_agents_text(parts):
+    audit, mail, _, ledger = parts
+    plain, changed = mail.add(b"raw one", ["bob@example.org"]), mail.add(b"raw two", ["bob@example.org"])
+    edit(audit, mail, changed)
+    assert [ledger.status(q.id)["edited"] for q in (plain, changed)] == [False, True]
+    assert ledger.status(changed.id)["status"] == "waiting" and ledger.status(changed.id)["at"] == mod._iso(changed.created_at)
+    bring_back(audit, mail, mail.pending()[1])
+    assert ledger.status(changed.id)["edited"] is False                  # the owner brought the agent's text back
+
+
+def test_a_waiting_request_follows_its_entry_and_not_the_log(parts):
+    audit, mail, _, ledger = parts
+    q = mail.add(b"raw", ["bob@example.org"])
+    mail.replace(q.id, q.sha256, b"edited raw", edited_from="asked")     # the entry says edited, the log does not yet
+    assert ledger.status(q.id)["edited"] is True
+    other = mail.add(b"raw two", ["bob@example.org"])
+    end(audit, "approval.edited", other.id)                              # the log says edited, the entry does not
+    assert ledger.status(other.id)["edited"] is False
+
+
+@pytest.mark.parametrize("action, details, status", [
+    ("approval.sent", {}, "sent"),
+    ("approval.discarded", {}, "discarded"),
+    ("approval.failed", {"ok": False}, "unclear"),
+    ("approval.sent", {"delivery": "unconfirmed", "kind": "imessage"}, "unclear"),
+])
+def test_an_edit_is_remembered_however_the_request_ends(parts, action, details, status):
+    audit, mail, _, ledger = parts
+    edited, untouched = mail.add(b"raw one", ["bob@example.org"]), mail.add(b"raw two", ["bob@example.org"])
+    edit(audit, mail, edited)
+    for q in (edited, untouched):
+        mail.claim(q.id)
+        end(audit, action, q.id, **details)
+    got = ledger.status(edited.id), ledger.status(untouched.id)
+    assert [(r["status"], r["edited"]) for r in got] == [(status, True), (status, False)]
+    assert all(set(r) == KEYS for r in got)
+
+
+def test_an_edited_request_that_expires_reads_expired_and_edited(parts):
+    audit, mail, _, ledger = parts
+    q = edit(audit, mail, mail.add(b"raw", ["bob@example.org"]))
+    ran_out = lapse(mail, q)
+    got = ledger.status(q.id)
+    assert (got["status"], got["edited"], got["at"]) == ("expired", True, mod._iso(ran_out))
+
+
+def test_an_edit_that_was_brought_back_does_not_count(parts):
+    audit, mail, _, ledger = parts
+    q = mail.add(b"raw", ["bob@example.org"])
+    q = bring_back(audit, mail, edit(audit, mail, q))
+    mail.claim(q.id)
+    end(audit, "approval.sent", q.id)
+    assert ledger.status(q.id)["edited"] is False                        # the newest of the two entries is the one that undid it
+
+
+def test_an_edit_after_one_was_brought_back_counts_again(parts):
+    audit, mail, _, ledger = parts
+    q = mail.add(b"raw", ["bob@example.org"])
+    q = edit(audit, mail, bring_back(audit, mail, edit(audit, mail, q)))
+    mail.claim(q.id)
+    end(audit, "approval.sent", q.id)
+    assert ledger.status(q.id)["edited"] is True
+
+
+def test_edit_entries_of_other_requests_do_not_leak_into_an_answer(parts):
+    audit, mail, _, ledger = parts
+    one, two = mail.add(b"raw one", ["bob@example.org"]), mail.add(b"raw two", ["bob@example.org"])
+    edit(audit, mail, one)
+    bring_back(audit, mail, mail.pending()[0])
+    two = edit(audit, mail, two)
+    for q in (one, two):
+        mail.claim(q.id)
+        end(audit, "approval.sent", q.id)
+    assert (ledger.status(one.id)["edited"], ledger.status(two.id)["edited"]) == (False, True)
+
+
+def test_an_unknown_id_is_not_edited_even_when_the_log_mentions_it(parts):
+    audit, _, _, ledger = parts
+    end(audit, "approval.edited", "gone")                                # an edit entry alone ends nothing
+    assert ledger.status("gone") == {"id": "gone", "kind": None, "status": "unknown", "edited": False, "at": None}
+
+
+def test_the_list_since_a_cursor_shows_edited_for_each_item(parts):
+    audit, mail, msg, ledger = parts
+    start = ledger.since("now")["cursor"]
+    a, b, c, d = (mail.add(f"m{n}".encode(), ["bob@example.org"]) for n in range(4))
+    e = msg.add(b"waiting", ["anna@example.org"])
+    edit(audit, mail, a)
+    edit(audit, mail, b)
+    bring_back(audit, mail, mail.pending()[1])                           # b: edited, then brought back
+    edit(audit, mail, d)
+    for q, action in ((a, "approval.sent"), (b, "approval.sent"), (c, "approval.sent"), (d, "approval.discarded")):
+        mail.claim(q.id)
+        end(audit, action, q.id)
+    end(audit, "approval.failed", e.id, kind="imessage", ok=False)       # e: failed once and is back, edited meanwhile
+    edit(audit, msg, e)
+    got = ledger.since(start)
+    assert [(i["id"], i["status"], i["edited"]) for i in got["items"]] == [
+        (a.id, "sent", True), (b.id, "sent", False), (c.id, "sent", False), (d.id, "discarded", True), (e.id, "waiting", True)]
+    assert all(set(i) == KEYS for i in got["items"]) and got["more"] is False
+
+
+def test_edit_entries_alone_change_neither_the_list_nor_its_cursor(parts):
+    audit, mail, _, ledger = parts
+    start = ledger.since("now")["cursor"]
+    q = mail.add(b"raw", ["bob@example.org"])
+    edit(audit, mail, q)
+    bring_back(audit, mail, mail.pending()[0])
+    got = ledger.since(start)
+    assert got["items"] == [] and got["more"] is False and got["cursor"] == audit.entries()[0]["h"]
+
+
 # ------------------------------------------------------------------------------------------------ the tool
 async def call(mcp, args):
     return json.loads((await mcp.call_tool("approval_status", args)).content[0].text)
@@ -224,6 +351,56 @@ async def test_the_tool_follows_a_mail_from_queue_to_approval_and_never_shows_it
         assert secret not in text
     log = mcp._icloud_dashboard.audit.entries(10, ("approval.",))
     assert {e["action"]: e["details"]["outbox_id"] for e in log} == {"approval.discarded": q2, "approval.sent": q1}
+
+
+async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text(web):
+    app, mcp, _p, sent = web()
+    q = queue(mcp, subject="Plans for Friday", body="Asked-for-words")
+    mail = mcp._icloud_dashboard.sources["mail"]
+    cursor = (await call(mcp, {"since": "now"}))["cursor"]
+    seen = []
+
+    async def ask():
+        seen.append(await call(mcp, {"id": q}))
+        return seen[-1]["edited"]
+    assert await ask() is False
+    async with client(app) as c:
+        h = api(await signed_in(c))
+        sha = mail.pending()[0].sha256
+        put = lambda body: c.put(f"/dashboard/api/items/mail:{q}/text", json=body, headers=h)  # noqa: E731
+        sha = (await put({"sha": sha, "text": "Owner-written-words"})).json()["sha"]
+        assert await ask() is True and seen[-1]["status"] == "waiting"
+        sha = (await put({"sha": sha, "restore": True})).json()["sha"]
+        assert await ask() is False
+        sha = (await put({"sha": sha, "text": "Owner-rewrote-it"})).json()["sha"]
+        assert await ask() is True
+        r = await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)
+        assert r.status_code == 200 and sent
+    assert await ask() is True and seen[-1]["status"] == "sent"
+    listed = await call(mcp, {"since": cursor})
+    assert [(i["id"], i["status"], i["edited"]) for i in listed["items"]] == [(q, "sent", True)]
+    text = json.dumps([*seen, listed])
+    for secret in ("Plans for Friday", "Asked-for-words", "Owner-written-words", "Owner-rewrote-it", "bob@example.org"):
+        assert secret not in text
+    assert all(set(r) == KEYS for r in seen) and set(listed["items"][0]) == KEYS
+    assert "edited_from" not in text and "original" not in text
+    assert [e["action"] for e in mcp._icloud_dashboard.audit.entries(20, ("approval.",))].count("approval.edited") == 2
+
+
+async def test_the_original_typed_back_by_hand_reads_as_not_edited_waiting_and_sent(web):
+    app, mcp, _p, sent = web()
+    q = queue(mcp, body="Original words")
+    mail = mcp._icloud_dashboard.sources["mail"]
+    async with client(app) as c:
+        h = api(await signed_in(c))
+        put = lambda sha, text: c.put(f"/dashboard/api/items/mail:{q}/text", json={"sha": sha, "text": text}, headers=h)  # noqa: E731
+        sha = (await put(mail.pending()[0].sha256, "Changed words")).json()["sha"]
+        assert (await call(mcp, {"id": q}))["edited"] is True
+        sha = (await put(sha, "Original words")).json()["sha"]                  # no "Bring it back": the same words typed in again
+        assert (await call(mcp, {"id": q})) | {"at": 0} == {"id": q, "kind": "mail", "status": "waiting", "edited": False, "at": 0}
+        assert (await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200 and sent
+    got = await call(mcp, {"id": q})
+    assert (got["status"], got["edited"]) == ("sent", False)                    # the waiting answer and the sent one agree
 
 
 async def test_the_tool_refuses_neither_and_both(web):
@@ -346,6 +523,7 @@ async def test_the_description_keeps_kind_open_and_reserves_a_status_for_later(w
     tool = next(t for t in await mcp.list_tools() if t.name == "approval_status")
     text = tool.description
     assert "kind is an open string" in text and "changes_requested" in text and "treat any status you do not know as not sent" in text
+    assert "always false" not in text and "edited is true when the owner changed the text you queued" in text
     for status in mod.STATUSES:
         assert f"- {status}:" in text
     assert tool.annotations.read_only_hint is True and tool.annotations.open_world_hint is False
