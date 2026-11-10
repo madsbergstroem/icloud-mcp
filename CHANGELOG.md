@@ -5,6 +5,12 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **`approval_status` says whether the owner edited the text (fork).** `edited` was always false; it is now true when the owner
+  changed the text of a request and has not brought the agent's text back. A waiting request is edited when its queue entry
+  still holds the text the agent asked for; one that has ended is edited when the newest of its `approval.edited` and
+  `approval.edit_undone` log entries is the first, whether it was sent, discarded, expired or unclear. `unknown` stays false.
+  The `since` list shows it the same way. Edit entries still end nothing and never move the cursor, and the answer holds
+  no text.
 - **A new look, and edit before you send (fork).** The dashboard follows the system's light or dark with one accent and bold
   sans titles. Today is now Home, with the count waiting by kind and a pause button in the side list on wide screens, and
   Settings brings its own list there. A request shows the message as it goes out, a warning for a group conversation, and

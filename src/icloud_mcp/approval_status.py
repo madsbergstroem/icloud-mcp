@@ -10,6 +10,10 @@ This module answers from two places that already exist and keeps no copy of anyt
 - the activity log, for how it ended: an `approval.sent`, `approval.discarded`, `approval.failed` or `approval.expired` entry
   that carries the same `outbox_id`.
 
+`edited` comes from the same two places: a waiting entry that holds the text the agent asked for (`edited_from`) has been edited,
+and an ended request has been edited when the newest of its `approval.edited` and `approval.edit_undone` entries is the first.
+Neither says what the text was.
+
 A record is {id, kind, status, edited, at} and nothing else: never the text, subject, names or recipients, which the log does
 not hold either. `kind` is whatever the entry says (mail, imessage, calendar today) and is never checked against a list here,
 so a new kind of approval needs no change in this file. The cursor that lists "what happened since" is the hash of an entry in
@@ -30,6 +34,7 @@ from pydantic import Field
 STATUSES = ("waiting", "sent", "discarded", "expired", "unclear", "unknown")
 
 _GENESIS = "0" * 64                  # what the first entry of a log names as its predecessor
+_EDITS = ("approval.edited", "approval.edit_undone")   # the owner changed the text / brought back the agent's; neither ends a request
 _LOG_LIMIT = 1_000_000               # the log keeps AUDIT_KEEP_DAYS days; this is only "all of it"
 _PAGE = 50                           # records per `since` answer
 _MAX_ID = 64                         # outbox ids are 16 characters; anything longer is not one
@@ -75,9 +80,8 @@ def _outcome(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def _record(item_id: str, kind: str | None, status: str, t: Any) -> dict[str, Any]:
-    # edited: the owner may change the text before approving it; no source offers that yet, so it is always false for now
-    return {"id": item_id, "kind": kind, "status": status, "edited": False, "at": _iso(t) if t is not None else None}
+def _record(item_id: str, kind: str | None, status: str, t: Any, edited: bool = False) -> dict[str, Any]:
+    return {"id": item_id, "kind": kind, "status": status, "edited": edited, "at": _iso(t) if t is not None else None}
 
 
 class ApprovalLedger:
@@ -110,17 +114,28 @@ class ApprovalLedger:
                     latest[item_id] = e
         return latest
 
-    def _answer(self, item_id: str, waiting: dict[str, tuple[str, Any]], latest: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    @staticmethod
+    def _edited(log: list[dict[str, Any]]) -> dict[str, bool]:
+        """id -> whether its newest edit entry is `approval.edited` (an edit that was brought back again reads False)."""
+        edited: dict[str, bool] = {}
+        for e in log:
+            if e.get("action") in _EDITS:
+                for item_id in _ids(e):
+                    edited[item_id] = e["action"] == "approval.edited"
+        return edited
+
+    def _answer(self, item_id: str, waiting: dict[str, tuple[str, Any]], latest: dict[str, dict[str, Any]],
+                edited: dict[str, bool]) -> dict[str, Any]:
         if item_id in waiting:                      # still in the queue wins: a release that failed puts the entry back
             kind, q = waiting[item_id]
-            return _record(item_id, kind, "waiting", q.created_at)
+            return _record(item_id, kind, "waiting", q.created_at, getattr(q, "edited_from", None) is not None)
         e = latest.get(item_id)
         if e is None:
             return _record(item_id, None, "unknown", None)
         d = e.get("details") or {}
         kind = d.get("kind") if isinstance(d.get("kind"), str) else None
         when = d.get("expired_at") if e.get("action") == "approval.expired" and d.get("expired_at") else e.get("t")
-        return _record(item_id, kind, _outcome(e) or "unknown", when)
+        return _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False))
 
     def _note(self, out: dict[str, Any]) -> dict[str, Any]:
         if not getattr(self.audit, "enabled", True):
@@ -131,7 +146,8 @@ class ApprovalLedger:
     # -- the two questions -----------------------------------------------------------------------------------------------
     def status(self, item_id: str) -> dict[str, Any]:
         waiting = self._waiting()
-        return self._note(self._answer(item_id, waiting, self._latest(self._log())))
+        log = self._log()
+        return self._note(self._answer(item_id, waiting, self._latest(log), self._edited(log)))
 
     def since(self, cursor: str) -> dict[str, Any]:
         """What ended after the entry whose hash is `cursor` ('now' starts one at the end of the log), oldest first, _PAGE at a time."""
@@ -154,8 +170,8 @@ class ApprovalLedger:
                     last_at[item_id] = i
         ordered = sorted(last_at, key=last_at.__getitem__)
         shown, more = ordered[:_PAGE], len(ordered) > _PAGE
-        latest = self._latest(log)
-        out = {"items": [self._answer(i, waiting, latest) for i in shown],
+        latest, edited = self._latest(log), self._edited(log)
+        out = {"items": [self._answer(i, waiting, latest, edited) for i in shown],
                "cursor": log[last_at[shown[-1]]].get("h", _GENESIS) if more else head, "more": more}
         return self._note(out)
 
@@ -184,7 +200,7 @@ def register(tool: Any, guard: Any, ledger: ApprovalLedger) -> None:
         - expired: nobody approved in time and nothing was sent. Queue it again only if it is still wanted.
         - unclear: it may or may not have gone out (Messages did not confirm, or the release failed). Do not send again: check the chat or Sent folder and tell the owner.
         - unknown: not waiting and not in the activity log (too old, never queued here, or the log is off). Do not send again blindly: check, or ask the owner.
-        edited is true once the owner changed the text before approving it; it is always false for now. More statuses may follow, for example changes_requested with a note from the owner: treat any status you do not know as not sent, and ask the owner before sending again.
+        edited is true when the owner changed the text you queued and has not brought your original back. On a waiting request their wording is what would go out; on sent or unclear it is what went out, so it may differ from what you asked; on discarded or expired nothing was sent. It is false for unknown. More statuses may follow, for example changes_requested with a note from the owner: treat any status you do not know as not sent, and ask the owner before sending again.
         With since, pass the returned cursor next time; more=true means call again; cursor_unknown=true means it is older than the log (90 days by default) or was never issued, so ask by id. Errors: neither or both of id and since."""
         if (id is None) == (since is None):
             raise ToolError("Give exactly one of id (one outbox_id) or since (a cursor, or 'now' for the first).")
