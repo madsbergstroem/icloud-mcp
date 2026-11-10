@@ -2085,6 +2085,7 @@ class MailService:
             msg = email.message_from_bytes(q.raw, policy=policy.default)
             for i, part in enumerate(iter_attachment_parts(msg)):
                 held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
+                held = str(held).strip() if held else None            # Python 3.11 keeps the folded header's leading space
                 if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
                     continue
                 asked = str(added) if added else part.get_filename() or "attachment"
