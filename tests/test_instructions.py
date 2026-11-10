@@ -12,7 +12,7 @@ from icloud_mcp import instructions as instr_mod
 from icloud_mcp.config import Settings
 from icloud_mcp.server import apply_tool_filter, create_server
 
-CAP = 10500   # 0.12.1: the WHICH TOOL map (about 2,600 characters with every area on) is worth its context
+CAP = 10800   # 10,500 before approval_withdraw: its map line and its one rule take about 315 characters. 0.12.1: the WHICH TOOL map (about 2,600 characters with every area on) is worth its context
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_the_rules_follow_the_settings(s):
     assert "read-only" in ro and "mail_reply_to_message" not in ro and "SENDING" not in ro and "mail_reply_to_message" not in tools
     only_mail, tools = served(dataclasses.replace(s, tools=("mail",)))
     assert "calendar_create_event" not in only_mail and "icloud_check_health" in tools
-    assert all(t.startswith("mail_") or t in ("icloud_check_health", "icloud_get_helper_status", "approval_status") for t in tools)
+    assert all(t.startswith("mail_") or t in ("icloud_check_health", "icloud_get_helper_status", "approval_status", "approval_withdraw") for t in tools)
 
 
 def test_owner_notes_are_appended_capped_cleaned_and_served_as_a_resource(s, tmp_path, caplog):

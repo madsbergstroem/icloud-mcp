@@ -7,8 +7,8 @@ heard nothing had no safe choice between waiting and sending again.
 This module answers from two places that already exist and keeps no copy of anything:
 
 - the outboxes, for what is still waiting (an entry leaves the outbox when it is released, discarded or times out), and
-- the activity log, for how it ended: an `approval.sent`, `approval.discarded`, `approval.failed` or `approval.expired` entry
-  that carries the same `outbox_id`.
+- the activity log, for how it ended: an `approval.sent`, `approval.discarded`, `approval.failed`, `approval.expired` or
+  `approval.withdrawn` (the agent took it back, approval_withdraw.py) entry that carries the same `outbox_id`.
 
 `edited` comes from the same two places: a waiting entry that holds the text the agent asked for (`edited_from`) has been edited,
 and an ended request has been edited when the newest of its `approval.edited` and `approval.edit_undone` entries is the first.
@@ -31,7 +31,7 @@ from pydantic import Field
 # What a record's status can be. `unknown` is the answer for an id that is not waiting and not in the log (too old, never queued
 # here, or the log is off). More values may follow (changes_requested, with a note from the owner); a caller treats any value it
 # does not know as "not sent".
-STATUSES = ("waiting", "sent", "discarded", "expired", "unclear", "unknown")
+STATUSES = ("waiting", "sent", "discarded", "withdrawn", "expired", "unclear", "unknown")
 
 _GENESIS = "0" * 64                  # what the first entry of a log names as its predecessor
 _EDITS = ("approval.edited", "approval.edit_undone")   # the owner changed the text / brought back the agent's; neither ends a request
@@ -73,6 +73,8 @@ def _outcome(entry: dict[str, Any]) -> str | None:
         return "unclear" if d.get("delivery") in ("unconfirmed", "failed") else "sent"
     if action == "approval.discarded":
         return "discarded"
+    if action == "approval.withdrawn":
+        return "withdrawn"         # the agent that queued it took it back while it waited
     if action == "approval.expired":
         return "expired"
     if action == "approval.failed":
@@ -190,13 +192,14 @@ def register(tool: Any, guard: Any, ledger: ApprovalLedger) -> None:
     ) -> dict[str, Any]:
         """Ask what became of a message, calendar change or other action you queued for the owner's approval.
 
-        Use when: a result said queued_for_owner_approval and you need its outcome before you tell the owner, retry or move on. Not for approving (only the owner can) or for reading mail.
+        Use when: a result said queued_for_owner_approval and you need its outcome before you tell the owner, retry or move on. Not for approving (only the owner can), for taking a request back (approval_withdraw) or for reading mail.
         Parameters: id is the outbox_id from the queued result; since is a cursor ('now' starts one) and lists what was decided after it. Give exactly one.
         Behavior: read-only. It shows only kind, status and time, never text, names or recipients. Never send again because it is still waiting: that queues a second copy.
         Returns: {id, kind, status, edited, at}; with since, {items, cursor, more} and items shaped the same. kind is an open string (mail, imessage, calendar so far). status is one of:
         - waiting: undecided. Do not send again.
         - sent: approved and carried out.
         - discarded: the owner said no. Do not send again unless asked.
+        - withdrawn: you took it back with approval_withdraw. Nothing was sent. Ask the owner before queueing it again.
         - expired: nobody approved in time and nothing was sent. Queue it again only if it is still wanted.
         - unclear: it may or may not have gone out (Messages did not confirm, or the release failed). Do not send again: check the chat or Sent folder and tell the owner.
         - unknown: not waiting and not in the activity log (too old, never queued here, or the log is off). Do not send again blindly: check, or ask the owner.

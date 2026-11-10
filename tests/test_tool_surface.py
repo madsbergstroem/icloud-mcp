@@ -10,9 +10,10 @@ from icloud_mcp.config import Settings
 from icloud_mcp.server import create_server, slim_schema
 
 SCHEMA_BUDGET = 52000       # raised for 0.9.0 and 0.10.0 (about 21 new tools), see docs/PERFORMANCE.md
-LIST_BUDGET = 182500        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
+LIST_BUDGET = 185300        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
                             # returns, errors) for agents and registry scoring, 80,000 before; see docs/PERFORMANCE.md.
-                            # 182,500 for approval_status, the one tool that answers how a queued request ended (about 2,000 characters)
+                            # 182,500 for approval_status, the one tool that answers how a queued request ended (about 2,000 characters);
+                            # 185,300 for approval_withdraw, the one tool that takes a waiting request back (about 2,500 bytes with its schema)
 
 
 @pytest.fixture
@@ -119,7 +120,7 @@ VERBS = {"append", "check", "complete", "create", "delete", "extract", "find", "
          "refresh", "reply", "respond", "run", "search", "send", "trash", "undo", "unsubscribe", "update", "write"}
 
 
-NAMED_AFTER_WHAT_THEY_ANSWER = {"approval_status"}      # not an area of iCloud: the answer to a queued_for_owner_approval result
+NAMED_AFTER_WHAT_THEY_ANSWER = {"approval_status", "approval_withdraw"}      # not an area of iCloud: they answer or act on a queued_for_owner_approval result
 
 
 def test_every_tool_name_is_prefix_verb_noun(mcp):

@@ -1,8 +1,9 @@
 """Outbox: outgoing messages wait here until the owner releases them on the dashboard (or /outbox without it).
 
 The MCP token cannot tell the owner from an injected instruction, so sending is split in two: an agent can only
-*queue* a message; releasing it needs the owner password, typed in a browser. Queued items are stored as the exact
-raw message that will be sent, expire on their own, and can be released at most once.
+*queue* a message; releasing it is the owner's step, in a browser (the dashboard, or /outbox). Queued items are stored as the
+exact raw message that will be sent, expire on their own, and can be released at most once. The agent that queued one can take
+it back while it waits (approval_withdraw.py), which claims it the same way a release does.
 """
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
+from . import callctx
 
 
 class OutboxFull(Exception):
@@ -34,12 +37,14 @@ class QueuedMessage:
     sha256: str
     key: str | None = None            # what the message was made from (e.g. one saved draft), so asking again finds this entry
     edited_from: str | None = None    # the text the agent asked for, kept while the owner's edited text is what waits (textedit.py)
+    requested_by: str | None = None   # the name the queueing client gave itself (a label against mix-ups, not a credential)
 
     def to_json(self) -> dict[str, Any]:
         return {"id": self.id, "created_at": self.created_at, "expires_at": self.expires_at,
                 "raw": base64.b64encode(self.raw).decode(), "recipients": self.recipients,
                 "followup": self.followup, "sha256": self.sha256, **({"key": self.key} if self.key else {}),
-                **({"edited_from": self.edited_from} if self.edited_from is not None else {})}
+                **({"edited_from": self.edited_from} if self.edited_from is not None else {}),
+                **({"requested_by": self.requested_by} if self.requested_by else {})}
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "QueuedMessage":
@@ -47,7 +52,7 @@ class QueuedMessage:
         if hashlib.sha256(raw).hexdigest() != d["sha256"]:
             raise ValueError("outbox entry failed its integrity check")
         return cls(d["id"], d["created_at"], d["expires_at"], raw, list(d["recipients"]), d.get("followup"), d["sha256"], d.get("key"),
-                   d.get("edited_from"))
+                   d.get("edited_from"), d.get("requested_by"))
 
 
 class Outbox:
@@ -120,9 +125,11 @@ class Outbox:
 
     # -- operations ------------------------------------------------------------
     def add(self, raw: bytes, recipients: list[str], followup: dict[str, Any] | None = None, key: str | None = None,
-            approval_page: str = "the dashboard's Approvals page (/outbox when the dashboard is off)") -> QueuedMessage:
+            approval_page: str = "the dashboard's Approvals page (/outbox when the dashboard is off)",
+            requested_by: str | None = None) -> QueuedMessage:
         """Queue a message, or return the entry already waiting for the same bytes or the same key. A key names what the message
-        was built from (one saved draft), for when rebuilding it gives different bytes (a fresh Date or Message-ID)."""
+        was built from (one saved draft), for when rebuilding it gives different bytes (a fresh Date or Message-ID).
+        requested_by: the queueing client's name; left out, it is the one of the tool call running on this thread."""
         with self._lock:
             self._prune()
             sha = hashlib.sha256(raw).hexdigest()
@@ -134,7 +141,8 @@ class Outbox:
                                  "Nothing was queued. Do not retry: tell the owner to review the queue on "
                                  f"{approval_page}, where they can send or discard what is waiting.")
             now = time.time()
-            q = QueuedMessage(secrets.token_urlsafe(12), now, now + self.ttl, raw, recipients, followup, sha, key)
+            label = (requested_by if requested_by is not None else callctx.client()) or None
+            q = QueuedMessage(secrets.token_urlsafe(12), now, now + self.ttl, raw, recipients, followup, sha, key, requested_by=label)
             self._items[q.id] = q
             self._save()
         if self.on_new is not None:

@@ -5,6 +5,25 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **An agent can take back its own waiting request (fork).** `approval_withdraw(id, reason)` removes a request that still waits,
+  for mail, iMessage and calendar alike, by claiming it from its queue the way a discard does, so it and an Approve on the
+  dashboard cannot both win. `reason` is `mistake`, `duplicate`, `superseded` or `no_longer_needed` (the default), never free text.
+  Success answers `{id, withdrawn: true, status: "withdrawn"}`. A request that was already approved, discarded, expired or unknown
+  answers `{id, withdrawn: false, status}` with the status `approval_status` gives it, and never anything that reads as success.
+  The log gets `approval.withdrawn` by the actor `assistant` with `kind`, `outbox_id`, `reason` and the title, no text, and
+  no second `tool.*` line. `approval_status` gains the status `withdrawn` (also in `since`); `edited` reads as before. Nothing
+  is pushed and there is no rate limit yet. The tool stays with `TOOLS` presets and `essential`, refuses while the server is
+  paused. Like `approval_status`, its name is an exception to `area_verb_noun`.
+  A queued request now carries `requested_by`, the name the queueing client gave itself in its handshake or, on a stateless server (the default, which keeps no handshake), the name its app registered under (empty when there is neither),
+  and only that client may take it back; an entry with no label can be taken back by any client. The label guards against mix-ups
+  between two assistants. It is not a security boundary: a client cannot prove who it is. Home and the request show it as "from …".
+  Home mentions for 24 hours that your assistant took requests back, as a quiet line that goes away by itself, and Activity
+  shows "Your assistant withdrew …" with a "Withdrawn" tag, the reason in words and no text; the Approvals filter counts it.
+- **Tool texts no longer say the owner password is the only way to approve (fork).** The queued-mail notice and the rules agents
+  read now say that only the owner approves or discards, on the dashboard with their own sign-in (the password is the
+  fallback), and how to take back a mistake: `approval_withdraw`, then ask the owner before queueing a corrected version or the
+  same text again. The cap on the served instructions went from 10,500 to 10,800 characters and the tool list budget from
+  182,500 to 185,300 bytes for it. Not in this change: several versions of one request, `replaces` and `changes_requested`.
 - **`approval_status` says whether the owner edited the text (fork).** `edited` was always false; it is now true when the owner
   changed the text of a request and has not brought the agent's text back. A waiting request is edited when its queue entry
   still holds the text the agent asked for; one that has ended is edited when the newest of its `approval.edited` and

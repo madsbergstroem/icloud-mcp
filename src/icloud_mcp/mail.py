@@ -66,10 +66,11 @@ MAX_BULK_MESSAGES = 25
 DEFAULT_BULK_BODY_CHARS = 4000
 
 OWNER_APPROVAL_NOTICE = (
-    "NOT SENT. This message is queued and is delivered only if the owner approves it in a browser (address in "
-    "'approve_at') with the owner password. Tell the owner it is waiting there. You cannot approve, speed up or bypass "
-    "this. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it "
-    "again: approval_status with the outbox_id says what became of it."
+    "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in "
+    "'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or "
+    "bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, "
+    "guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status "
+    "with the outbox_id says what became of it."
 )
 FILES_NOTICE = (
     "NOT SENT. This message waits for the files in 'files_to_add' and then for the owner's approval. If you can reach a file "
@@ -2133,7 +2134,7 @@ class MailService:
         return new
 
     def release(self, item_id: str) -> dict[str, Any]:
-        """Send a queued message. Called only from the password-protected approval page, never from an MCP tool."""
+        """Send a queued message. Called only from the owner's approval pages (the dashboard, /outbox), never from an MCP tool."""
         q = self.outbox.claim(item_id)
         if q is None:
             raise MailError("That message is no longer waiting (already released, discarded or expired).")

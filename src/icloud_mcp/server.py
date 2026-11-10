@@ -31,6 +31,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse, Response
 from . import callctx
 from .approvals import register_outbox_routes
 from .approval_status import ApprovalLedger, register as register_approval_status
+from .approval_withdraw import register as register_approval_withdraw
 from .audit import AuditLog
 from .auth import SCOPE, OwnerOAuthProvider, register_routes
 from .setup_page import register_setup_routes
@@ -41,7 +42,7 @@ from .outbox import Outbox
 from .config import Settings
 from .contacts import ContactsError, ContactsService
 from .instructions import build_instructions, read_agent_notes
-from .safety import clean_deep, configure_screen, confirm_problem, stats as safety_stats, warnings_for
+from .safety import clean, clean_deep, configure_screen, confirm_problem, stats as safety_stats, warnings_for
 from .safety import confirm_token as make_confirm_token
 from .safety import compact
 from .bridge import OPS
@@ -154,6 +155,7 @@ _WRITE_TOOLS: set[str] = set()          # tools that change something (annotatio
 _PAST = {"send": "sent", "reply": "replied to", "forward": "forwarded", "mark": "marked", "move": "moved", "delete": "deleted",
          "create": "created", "update": "updated", "run": "ran", "undo": "undid", "unsubscribe": "unsubscribed from",
          "respond": "answered", "complete": "completed", "append": "appended to", "write": "wrote", "trash": "trashed"}
+_SELF_LOGGED = ("approval_withdraw",)    # tools that write their own activity line (a second one would repeat it)
 _AUDIT_LABELS = ("summary", "title", "subject", "name", "path", "list_name")
 _AUDIT_KEEP = ("folder", "destination", "calendar", "to_calendar", "new_name", "to", "response", "action", "uid", "id")
 _AUDIT_ADDRS = ("to", "cc", "bcc", "attendees", "add_attendees", "remove_attendees", "handle")
@@ -171,6 +173,28 @@ def _caller() -> tuple[str, str]:
     return (info.get("client_name") or ("An app" if cid else "Local client")), cid[:8]
 
 
+def _registered_name() -> str:
+    """The name the app behind this call registered under when it connected (OAuth dynamic registration), or ''."""
+    try:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+        cid = getattr(get_access_token(), "client_id", "") or ""
+        return str(((getattr(_audit_provider, "clients", {}) or {}).get(cid, {}) if cid else {}).get("client_name") or "")
+    except Exception:  # noqa: BLE001  -- no token behind the call (a local server, a direct call in a test)
+        return ""
+
+
+def _client_label(ctx: Any) -> str:
+    """A short name for the client behind this call: what it called itself in its handshake (clientInfo.name) or, when the server
+    keeps no handshake (MCP_STATELESS, the default, so a call after the first has none), the name its app registered under. ''
+    when neither is known. It tells two assistants apart, so a request one queued is not withdrawn by the other by mistake. It is
+    what the client says about itself, not proof of who it is: nothing is protected by it."""
+    try:
+        name = ctx.session.client_params.client_info.name
+    except Exception:  # noqa: BLE001  -- no request behind the call (a direct call in a test), or a client that did not introduce itself
+        name = ""
+    return re.sub(r"\s+", " ", clean(str(name or _registered_name()))).strip()[:40]
+
+
 def _addresses(v: Any) -> list[str]:
     items = v if isinstance(v, (list, tuple)) else [v]
     out = []
@@ -184,7 +208,7 @@ def _addresses(v: Any) -> list[str]:
 
 def _audit_call(name: str, kwargs: dict[str, Any], ok: bool, out: Any = None, error: str = "") -> None:
     """One line in the activity log for a tool that changes something: who, which tool, the target, never a body or a password."""
-    if _audit is None or name not in _WRITE_TOOLS:
+    if _audit is None or name not in _WRITE_TOOLS or name in _SELF_LOGGED:
         return
     area, _, rest = name.partition("_")
     verb, _, noun = rest.partition("_")
@@ -302,7 +326,7 @@ def _guard(fn=None, *, lane: str = "main"):
             return _resumed(ctx.request_state)    # the boundary unsealed it, so it is a result this server wrote
         if getattr(fn, "__name__", "") not in ALWAYS_KEPT and is_paused():      # checked per call: the owner can pause any time
             raise ToolError(PAUSED_MESSAGE)
-        holder: dict[str, Any] = {"stage": None}
+        holder: dict[str, Any] = {"stage": None, "client": _client_label(ctx)}
         name = getattr(fn, "__name__", "")
         try:
             call = functools.partial(run, holder, *args, **kwargs)
@@ -585,7 +609,8 @@ def _finish(mcp: MCPServer, s: Settings) -> None:
 AREA_PRESETS = {"mail": ("mail_",), "calendar": ("calendar_",), "contacts": ("contacts_",), "reminders": ("reminders_",),
                 "notes": ("notes_",), "drive": ("drive_",), "maps": ("maps_",), "imessage": ("imessage_",),
                 "health": ("health_",)}
-ALWAYS_KEPT = ("icloud_check_health", "icloud_get_helper_status", "approval_status")   # the diagnostics, and the way to ask how a queued request ended, stay with any area preset
+ALWAYS_KEPT = ("icloud_check_health", "icloud_get_helper_status", "approval_status")   # the diagnostics, and the way to ask how a queued request ended, stay with any area preset and answer while the server is paused
+KEPT_WITH_AREAS = ALWAYS_KEPT + ("approval_withdraw",)   # an area preset also keeps the way to take a queued request back; unlike the rest it does not answer while paused
 # Former tool names (0.7.0 made every name verb_noun, 0.12.0 area_verb_noun). TOOLS still accepts them (with a warning); they are not tools any more.
 RENAMED = {
     "mail_changes": "mail_list_changes", "mail_senders": "mail_list_senders", "mail_awaiting_reply": "mail_list_awaiting_reply",
@@ -613,7 +638,7 @@ ESSENTIAL_TOOLS = (
     "contacts_search_contacts", "contacts_get_contact",
     "reminders_list_reminders", "reminders_create_reminder", "reminders_complete_reminder",
     "notes_list_notes", "notes_read_note", "drive_search_files", "drive_read_file", "maps_get_travel_time", "imessage_search_messages",
-    "icloud_check_health", "approval_status",
+    "icloud_check_health", "approval_status", "approval_withdraw",
 )
 
 
@@ -631,7 +656,7 @@ def apply_tool_filter(mcp: MCPServer, wanted: tuple[str, ...]) -> None:
             keep.update(n for n in ESSENTIAL_TOOLS if n in present)   # essential tools of disabled areas are simply absent
         elif name.lower() in AREA_PRESETS:
             prefixes = AREA_PRESETS[name.lower()]
-            keep.update(n for n in present if n.startswith(prefixes) or n in ALWAYS_KEPT)
+            keep.update(n for n in present if n.startswith(prefixes) or n in KEPT_WITH_AREAS)
         elif name in present:
             keep.add(name)
         elif RENAMED.get(name) in present:
@@ -1044,7 +1069,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             @_guard
             def mail_send_draft(uid: Annotated[int, _d("The draft's uid in Drafts (from mail_search_messages(folder='Drafts')).")],
                                 uidvalidity: UidValidityRequired,
-                                folder: Annotated[str, _d("Where the draft is; default Drafts.")] = "Drafts") -> dict[str, Any]:
+                                folder: Annotated[str, _d("Where the draft is; default Drafts.")] = "Drafts",
+                                ctx: Context | None = None) -> dict[str, Any]:
                 """Send a draft already saved in Drafts exactly as it stands (its own recipients, subject, body and attachments), then move the draft to Trash.
 
                 Use when: the owner has reviewed a draft and says to send it. Not for editing it first (use mail_update_draft, then send the uid it returns), composing new mail (use mail_send_message), or answering a message (use mail_reply_to_message).
@@ -1425,6 +1451,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 request_id: Annotated[str | None, _d("Retry key unique to this request (e.g. 'lunch-anna-2026-09-24'): a repeat with the same key returns the first result, never a second copy.")] = None,
                 on_conflict: Annotated[Literal["warn", "refuse"], _d("'refuse' = create nothing when it overlaps another event; the result lists 'conflicts' either way.")] = "warn",
                 on_duplicate: Annotated[Literal["warn", "refuse"], _d("'refuse' = create nothing when the same title at the same time is already on that calendar.")] = "warn",
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Create one calendar event, optionally repeating, with location, notes, alarms, travel time and invited guests, all in a single call.
 
@@ -1474,6 +1501,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 occurrence_start: Annotated[str | None, _d("ONE occurrence of a repeating event (listed with recurring or recurrence_id) to change: its 'recurrence_id' if set, else its 'start'. Omit to change the whole series.")] = None,
                 add_attendees: Annotated[list[str] | None, _d("People to add; everyone else stays as they are. Not together with attendees.")] = None,
                 remove_attendees: Annotated[list[str] | None, _d("People to take off; iCloud emails them a cancellation. Not together with attendees.")] = None,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Change chosen fields of an existing event, or of one date of a repeating event, leaving every field you do not pass as it is.
 
@@ -1506,6 +1534,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 calendar: CalRead = None,
                 occurrence_start: Annotated[str | None, _d("ONE occurrence of a repeating event (listed with recurring or recurrence_id) to cancel: its 'recurrence_id' if set, else its 'start'. Omit to delete the whole series.")] = None,
                 timezone: TzName = None,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Delete an event by uid: a single event, a whole repeating series, or just one date of a series.
 
@@ -1602,6 +1631,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 calendar: CalRead = None,
                 occurrence_start: Annotated[str | None, _d("ONE occurrence of a repeating invitation (listed with recurring or recurrence_id): its 'recurrence_id' if set, else its 'start'. Omit to answer the whole series.")] = None,
                 timezone: TzName = None,
+                ctx: Context | None = None,
             ) -> dict[str, Any]:
                 """Answer an invitation someone else sent by setting the owner's reply to accepted, tentative or declined, for the whole series or one date.
 
@@ -2566,6 +2596,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                     text: Annotated[str, _d("The message.")],
                     chat_id: Annotated[str | None, _d("An existing conversation, from imessage_list_chats.")] = None,
                     handle: Annotated[str | None, _d("Or a new one: an email or +number (iMessage only).")] = None,
+                    ctx: Context | None = None,
                 ) -> dict[str, Any]:
                     """Send an iMessage from the owner's Mac to an existing conversation or a new handle, normally queued for the owner's approval first.
 
@@ -2899,7 +2930,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                             "imessage": approval["imessage_outbox"],
                             "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None}                       # counts for the admin API
     if provider is not None and _audit is not None and any(mcp._icloud_outboxes.values()):
-        register_approval_status(tool, _guard, ApprovalLedger(mcp._icloud_outboxes, _audit))   # also logs an entry that times out unanswered
+        ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
+        register_approval_status(tool, _guard, ledger)
+        register_approval_withdraw(tool, _guard, ledger)
     if (approval["mail"] or approval["imessage_outbox"]) and provider is not None:
         register_outbox_routes(mcp, provider, s, approval["mail"], approval["imessage"], approval["imessage_outbox"], audit=_audit)
     if s.dashboard and provider is not None and _audit is not None:

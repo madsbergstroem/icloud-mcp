@@ -96,7 +96,7 @@ def test_local_server_has_no_oauth_and_the_same_tools(local_env, tmp_path, monke
     monkeypatch.setenv("MCP_PUBLIC_URL", "https://mcp.example.com")
     monkeypatch.setenv("MCP_OWNER_PASSWORD", "x" * 16)
     remote, _ = create_server(Settings.from_env())
-    assert local_tools == {t.name for t in asyncio.run(remote.list_tools())} - {"approval_status"}   # a local server queues nothing to ask about
+    assert local_tools == {t.name for t in asyncio.run(remote.list_tools())} - {"approval_status", "approval_withdraw"}   # a local server queues nothing to ask about or take back
     assert {"mail_send_message", "calendar_create_event", "contacts_search_contacts"} <= local_tools
 
 
