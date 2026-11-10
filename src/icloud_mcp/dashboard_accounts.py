@@ -1,7 +1,8 @@
 """The dashboard's list of connected accounts: what /setup has saved, read only.
 
-GET /dashboard/api/accounts shows each account's provider, address, areas and whether it is read only. Changing an account stays
-on the /setup assistant, which the app links to. No password, token or server setting leaves this route.
+GET /dashboard/api/accounts shows each account's provider, address, areas, whether it is read only and which areas it is the
+default account of. Changing an account stays on the /setup assistant, which the app links to. No password, token or server
+setting leaves this route.
 """
 from __future__ import annotations
 
@@ -16,13 +17,16 @@ _AREA_LABELS = {"mail": "Mail", "calendar": "Calendar", "contacts": "Contacts"}
 
 
 def listing(s: Any) -> list[dict[str, Any]]:
+    data = A.current(s)
+    defaults = data["defaults"]
     out = []
-    for a in A.current(s)["accounts"]:
+    for a in data["accounts"]:
         provider = a.get("provider", "other")
         out.append({"id": str(a.get("id", "")), "provider": provider,
                     "label": "Other provider" if provider == "other" else A.PROVIDERS.get(provider, A.PROVIDERS["other"])["label"],
                     "address": str(a.get("email_address") or a.get("username") or ""),
                     "areas": [_AREA_LABELS[x] for x in A.AREAS if x in (a.get("areas") or [])],
+                    "default_for": [_AREA_LABELS[x] for x in A.AREAS if defaults.get(x) == a.get("id")],
                     "read_only": bool(a.get("read_only")),
                     "sign_in": "App-specific password" if provider in ("icloud", "gmail") else "Password",
                     "from_environment": a.get("id") == "env"})

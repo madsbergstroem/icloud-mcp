@@ -54,7 +54,7 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
 | Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear, Withdrawn), chain check and download |
 | Settings | `icm-settings` | One group per section: sign-in and security, connected accounts, iCloud, your Mac (live state of the helper), safety switches, account and server. On a wide screen a list of the sections replaces the side list, with "Back to app" |
-| Connected accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup` |
+| Connected accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup`. Where an area has more than one account, the default one carries a "Default for …" tag |
 | One area | `icm-group` | The area's fields as Ionic controls, Save in the toolbar, reset per field |
 | Notifications, Passkeys, Connected apps, Owner password, Server | `icm-*` | One job each |
 | Sign in / Confirm it is you | `app.js`, `ui.js` | Passkey first, then the owner password |
@@ -81,6 +81,28 @@ Ionic has nothing for these, so they are written here, each in one place in `app
 - `#/activity` and `#/settings` open those tabs.
 - Old addresses (`/dashboard/approvals?item=`, `/dashboard/attach/<id>`, `/dashboard/security`, `/dashboard/settings`)
   redirect to them.
+
+## Accounts model
+
+`DATA_DIR/accounts.json` is version 2: `accounts` (each with a random `id`, `provider`, `auth`, `areas`, `read_only` and its
+sign-in), `defaults` (area to account id) and `calendars_visible`. An area can be held by several accounts and has exactly one
+default; the server runs with the defaults, so `Settings` still knows one account per area and nothing else had to change. A
+file with no `version` is read as version 2 in memory and rewritten only when the owner saves on /setup (no copy is made); where
+such a file lets two accounts hold one area, the account listed last keeps it, as it always did. An id is random and says
+nothing about the address. `auth` is `app_password`; `oauth` is reserved and nothing reads it. `accounts.problems()` checks
+that ids are unique, that every default is an account holding that area and that every held area has a default, and `save()`
+refuses a model that fails it. /setup still offers one account per area, and the dashboard marks a default only where an area is shared.
+
+How a second account would attach (none of this exists yet). Tools take an optional `account`, an id from the owner's list and
+never an address; `settings_for_account(s, id)` already builds the settings for it, and without the argument the default of the
+tool's area applies, so today's calls read the same. A queued request gets `account_id`, set from the account the tool
+resolved: the owner sees the account on the request, Approve sends through that account, and the log records the id, never the
+address; an entry without one belongs to the default of its kind. The connection pools and caches (IMAP sessions, CalDAV clients,
+folder lists) live in the services, so they are built per account id on first use and closed when the file changes, with small
+pools so a second account does not double the open connections. The list of correspondents behind `mail_find_correspondent` is
+read from one mailbox and is kept per account id, never merged. Error scrubbing is built from one `Settings` today; with several
+accounts it must take the secrets of every stored account, not only the defaults'. `calendars_visible` is one list for the whole
+file and would become a field of the account.
 
 ## Looking at a change
 

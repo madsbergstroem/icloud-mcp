@@ -89,6 +89,8 @@
 !tests/
 !tests/*.py
 !tests/*.js
+!tests/fixtures/
+!tests/fixtures/*.json
 !tests/integration/
 !tests/integration/*.py
 !dev/

@@ -1,9 +1,14 @@
 """The accounts a person connects on the /setup page: which provider serves mail, calendar and contacts, with whose sign-in.
 
-They live in DATA_DIR/accounts.json (mode 600). Each area (mail, calendar, contacts) comes from exactly one account, so mail
-can be a WEB.DE or Gmail mailbox while calendar and contacts stay in iCloud. env_overlay() turns the file into environment
+They live in DATA_DIR/accounts.json (mode 600). Several accounts can hold the same area (mail, calendar, contacts); one of them is
+the default account of that area (`defaults`), and the server runs with the defaults. /setup still offers one account per area, so
+mail can be a WEB.DE or Gmail mailbox while calendar and contacts stay in iCloud. env_overlay() turns the file into environment
 settings that Settings.from_env reads in place of the deployment's own, so the rest of the server needs no second code path.
 Without the file nothing changes. Passwords stay on this server and are never logged or shown.
+
+The file has a `version`. A file without one (the first layout) is read as version 2 in memory and rewritten only when the owner
+saves something on /setup; nothing is copied or backed up. Older servers read a version 2 file too (they ignore what they do not
+know and take the account listed last for an area).
 """
 from __future__ import annotations
 
@@ -20,6 +25,9 @@ log = logging.getLogger(__name__)
 
 ACCOUNTS_FILE = "accounts.json"
 AREAS = ("mail", "calendar", "contacts")
+FILE_VERSION = 2                             # the layout of accounts.json; a file with no "version" is the first layout
+AUTH_KINDS = ("app_password", "oauth")       # how an account signs in; "oauth" is reserved, nothing signs in with it yet
+DEFAULT_AUTH = "app_password"
 PENDING_USERNAME = "pending@setup.invalid"   # what the server runs with before anyone connected an account
 CHECK_TIMEOUT = 25                           # seconds one sign-in check may take
 
@@ -83,35 +91,126 @@ def normalise_password(provider: str, raw: str) -> tuple[str, str | None]:
 
 
 # ---------------------------------------------------------------- the file
-def load(data_dir: str) -> dict[str, Any] | None:
-    """The saved accounts, or None when the /setup page has not saved any yet (or the file cannot be read)."""
-    try:
-        with open(os.path.join(data_dir, ACCOUNTS_FILE)) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+def new_id(taken: Any = ()) -> str:
+    """A random, opaque account id. Nothing in it comes from the address or the provider."""
+    while True:
+        i = secrets.token_hex(4)
+        if i not in taken:
+            return i
+
+
+def _defaults(accts: list[dict[str, Any]], wanted: Any = None) -> dict[str, dict[str, Any]]:
+    """The account that serves each area, areas in the order they first appear. A wanted default stands when that account holds
+    the area; otherwise the account listed last for the area takes it, which is how the file has always been read."""
+    wanted = wanted if isinstance(wanted, dict) else {}
+    out: dict[str, dict[str, Any]] = {}
+    for area in dict.fromkeys(x for a in accts for x in a.get("areas") or []):
+        holders = [a for a in accts if area in (a.get("areas") or [])]
+        want = wanted.get(area)
+        out[area] = next((a for a in holders if want is not None and a.get("id") == want), holders[-1])
+    return out
+
+
+def _complete(data: dict[str, Any]) -> dict[str, Any]:
+    """The accounts as the current layout: version, sign-in kind and a default account for every area filled in."""
+    accts = [dict(a, auth=a.get("auth") or DEFAULT_AUTH) for a in data["accounts"]]
+    return {"version": FILE_VERSION, "accounts": accts,
+            "defaults": {area: a.get("id") for area, a in _defaults(accts, data.get("defaults")).items()},
+            "calendars_visible": list(data.get("calendars_visible") or [])}
+
+
+def normalise(raw: Any) -> dict[str, Any] | None:
+    """What a parsed accounts file holds, as the current layout (None when it is not an accounts file). Accounts that cannot work
+    (no address, no password, no known area) are left out; an account without a usable id gets a fresh one. Nothing is written."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("accounts"), list):
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("accounts"), list):
-        return None
-    accts = [a for a in data["accounts"] if isinstance(a, dict) and a.get("username") and a.get("password")
-             and isinstance(a.get("areas"), list)]
+    accts = []
+    for a in raw["accounts"]:
+        if isinstance(a, dict) and a.get("username") and a.get("password") and isinstance(a.get("areas"), list):
+            a = dict(a, areas=[x for x in a["areas"] if x in AREAS])
+            if a["areas"]:
+                accts.append(a)
+    seen: set[str] = set()
     for a in accts:
-        a["areas"] = [x for x in a["areas"] if x in AREAS]
-    visible = data.get("calendars_visible") or []
-    return {"accounts": [a for a in accts if a["areas"]],
+        if not isinstance(a.get("id"), str) or not a["id"] or a["id"] in seen:
+            a["id"] = new_id(seen)
+        seen.add(a["id"])
+        if a.get("auth") not in AUTH_KINDS:
+            a["auth"] = DEFAULT_AUTH
+    version = raw.get("version")
+    own = raw.get("defaults") if isinstance(version, int) and version >= 2 else None   # the first layout had no defaults
+    visible = raw.get("calendars_visible") or []
+    return {"version": FILE_VERSION, "accounts": accts,
+            "defaults": {area: a["id"] for area, a in _defaults(accts, own).items()},
             "calendars_visible": [str(u) for u in visible if isinstance(u, str)] if isinstance(visible, list) else []}
 
 
+def problems(data: dict[str, Any]) -> list[str]:
+    """What is wrong with an accounts model, as short notes that name a position and never an address, password or id; [] when it
+    is sound: ids unique, every default an account that holds its area, every held area with a default."""
+    out: list[str] = []
+    if data.get("version") != FILE_VERSION:
+        out.append("version is not current")
+    accts = data.get("accounts")
+    if not isinstance(accts, list) or not all(isinstance(a, dict) for a in accts):
+        return out + ["accounts is not a list of accounts"]
+    ids: dict[str, dict[str, Any]] = {}
+    for n, a in enumerate(accts):
+        i = a.get("id")
+        if not isinstance(i, str) or not i:
+            out.append(f"account {n} has no id")
+        elif i in ids:
+            out.append(f"account {n} repeats the id of an earlier account")
+        else:
+            ids[i] = a
+        if a.get("auth") not in AUTH_KINDS:
+            out.append(f"account {n} has an unknown sign-in kind")
+        if not isinstance(a.get("areas"), list) or any(x not in AREAS for x in a["areas"]):
+            out.append(f"account {n} has unknown areas")
+    defaults = data.get("defaults")
+    if not isinstance(defaults, dict):
+        return out + ["defaults is missing"]
+    for area, i in defaults.items():
+        if area not in AREAS:
+            out.append(f"a default names an unknown area ({area})")
+        elif not isinstance(i, str) or i not in ids:
+            out.append(f"the default for {area} is not a known account")
+        elif area not in (ids[i].get("areas") or []):
+            out.append(f"the default for {area} is an account without that area")
+    for area in AREAS:
+        if area not in defaults and any(area in (a.get("areas") or []) for a in accts):
+            out.append(f"{area} has accounts but no default")
+    return out
+
+
+def load(data_dir: str) -> dict[str, Any] | None:
+    """The saved accounts in the current layout, or None when the /setup page has not saved any yet (or the file cannot be read)."""
+    try:
+        with open(os.path.join(data_dir, ACCOUNTS_FILE)) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return normalise(raw)
+
+
 def save(data_dir: str, data: dict[str, Any]) -> None:
+    """Write the accounts in the current layout. A model that does not hold together is refused (ValueError), so what is written
+    always reads back as it was."""
+    model = _complete(data)
+    if bad := problems(model):
+        raise ValueError("accounts do not hold together: " + "; ".join(bad))
     from .admin import _write_private
-    _write_private(os.path.join(data_dir, ACCOUNTS_FILE), json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    _write_private(os.path.join(data_dir, ACCOUNTS_FILE), json.dumps(model, indent=2, ensure_ascii=False) + "\n")
 
 
 def by_area(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {area: a for a in data["accounts"] for area in a["areas"]}
+    """The default account of each area that has one, areas in the order they first appear."""
+    return _defaults(data["accounts"], data.get("defaults"))
 
 
 def env_overlay(data_dir: str) -> dict[str, str]:
-    """The saved accounts as environment settings ({} without the file)."""
+    """The saved accounts as environment settings ({} without the file): each area from its default account. The Apple Account
+    slot (ICLOUD_USERNAME) is the account listed first, whatever it serves."""
     data = load(data_dir)
     if data is None:
         return {}
@@ -153,7 +252,7 @@ def current(s: Any) -> dict[str, Any]:
     if data is not None:
         return data
     if not s.username or s.username.lower().endswith(".invalid") or not s.app_password:
-        return {"accounts": [], "calendars_visible": []}
+        return _complete({"accounts": [], "calendars_visible": []})
     provider = guess_provider(s.imap_host)
     acct = {"id": "env", "provider": provider, "username": s.username, "password": s.app_password,
             "areas": [a for a, on in (("mail", s.enable_mail), ("calendar", s.enable_calendar), ("contacts", s.enable_contacts)) if on],
@@ -162,11 +261,7 @@ def current(s: Any) -> dict[str, Any]:
     if provider == "other":
         acct.update({"imap": f"{s.imap_host}:{s.imap_port}", "smtp": f"{s.smtp_host}:{s.smtp_port}", "caldav": s.caldav_url,
                      "carddav": s.carddav_url})
-    return {"accounts": [acct], "calendars_visible": list(s.calendars_visible)}
-
-
-def new_id() -> str:
-    return secrets.token_hex(4)
+    return _complete({"accounts": [acct], "calendars_visible": list(s.calendars_visible)})
 
 
 # ---------------------------------------------------------------- proving an account works
@@ -181,6 +276,29 @@ def trial_settings(s: Any, acct: dict[str, Any]) -> Any:
         smtp_host=sh, smtp_port=sp, smtp_security=security(sp), smtp_username=acct["username"],
         caldav_url=ep["caldav"], caldav_username=acct["username"], carddav_url=ep["carddav"], carddav_username=acct["username"],
         calendars_visible=(), read_only_areas=(), imap_pool_size=0, caldav_pool_size=1, caldav_keepalive_seconds=0)
+
+
+class UnknownAccount(LookupError):
+    """No saved account has the id that was asked for."""
+
+
+def settings_for_account(s: Any, account_id: str) -> Any:
+    """Settings that run one account, found by its id, inside the deployment's own server settings. Nothing calls it yet: it is
+    where an optional `account` argument of the tools will plug in. It starts from trial_settings (this account's sign-in and
+    servers, nothing of the others) and puts back what a sign-in check turns off: the connection pools, which areas are read
+    only, the From line and the areas the account serves. The calendar filter is one list for the whole file today, so it applies
+    to the default calendar account and every other account shows all its calendars. Raises UnknownAccount for an unknown id."""
+    data = current(s)
+    acct = next((a for a in data["accounts"] if a.get("id") == account_id), None) if isinstance(account_id, str) else None
+    if acct is None:
+        raise UnknownAccount("no account with this id")
+    own = tuple(dict.fromkeys(acct["areas"]))
+    visible = data["calendars_visible"] if by_area(data).get("calendar") is acct else []
+    return dataclasses.replace(
+        trial_settings(s, acct), enable_mail="mail" in own, enable_calendar="calendar" in own, enable_contacts="contacts" in own,
+        read_only_areas=own if acct.get("read_only") else (), calendars_visible=tuple(u.rstrip("/") for u in visible),
+        email_address=acct.get("email_address") or acct["username"], display_name=acct.get("display_name") or "",
+        imap_pool_size=s.imap_pool_size, caldav_pool_size=s.caldav_pool_size, caldav_keepalive_seconds=s.caldav_keepalive_seconds)
 
 
 def _check_mail(t: Any, send: bool) -> None:

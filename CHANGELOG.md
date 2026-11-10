@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **The accounts file can hold several accounts per area (fork, preparation only).** `accounts.json` is now version 2: every
+  account has a random id and a sign-in kind (`auth`, `app_password`; `oauth` is reserved and does nothing), and `defaults` names
+  the account each area runs with. A file from before is read as version 2 in memory and rewritten only when you save on /setup;
+  no copy is made, and the server runs with exactly the settings it had. Older servers still read a version 2 file. /setup still
+  offers one account per area. Saving refuses a model with duplicate ids or a default that does not hold its area. The dashboard's
+  account list says which account is the default of an area, but only where an area has more than one. `settings_for_account`
+  builds the settings of one account by id for the optional `account` argument a later change will add; no tool uses it yet.
+  Not in this change: that argument, the outbox, approval, OAuth, a second mailbox in use. `docs/DESIGN.md` says how they would attach.
 - **An agent can take back its own waiting request (fork).** `approval_withdraw(id, reason)` removes a request that still waits,
   for mail, iMessage and calendar alike, by claiming it from its queue the way a discard does, so it and an Approve on the
   dashboard cannot both win. `reason` is `mistake`, `duplicate`, `superseded` or `no_longer_needed` (the default), never free text.

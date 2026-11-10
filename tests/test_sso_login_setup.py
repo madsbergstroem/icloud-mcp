@@ -1,6 +1,7 @@
 """Owner sign-in through Cloudflare Access on the /login consent page and the /setup page (access_sso.py)."""
 from __future__ import annotations
 
+import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -165,6 +166,9 @@ async def test_setup_mail_from_webde_next_to_icloud(setup_env, tmp_path):
     assert env["ICLOUD_EMAIL_ADDRESS"] == "her@example.net" and env["ENABLE_MAIL"] == "true"
     saved = accounts.load(str(tmp_path))
     assert [a["areas"] for a in saved["accounts"]] == [["mail"], ["calendar", "contacts"]]
+    ids = [a["id"] for a in saved["accounts"]]
+    assert saved["defaults"] == {"mail": ids[0], "calendar": ids[1], "contacts": ids[1]} and accounts.problems(saved) == []
+    assert json.loads((tmp_path / accounts.ACCOUNTS_FILE).read_text())["version"] == 2
 
 
 async def test_setup_refused_sign_in_saves_nothing(setup_env, tmp_path):
@@ -213,6 +217,7 @@ async def test_setup_disconnect_asks_first(setup_env, tmp_path):
         assert "trennen?" in ask.text and "myaccount.google.com/apppasswords" in ask.text
         r = await c.post("/setup", data={**_form_tokens(ask.text), "action": "remove", "konto": acct_id}, headers=hdr)
     assert r.status_code == 200 and accounts.load(str(tmp_path))["accounts"] == []
+    assert accounts.load(str(tmp_path))["defaults"] == {}
     assert accounts.env_overlay(str(tmp_path))["ICLOUD_USERNAME"] == accounts.PENDING_USERNAME
 
 

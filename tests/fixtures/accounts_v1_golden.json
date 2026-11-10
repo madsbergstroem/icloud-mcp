@@ -1,0 +1,1546 @@
+[
+ {
+  "name": "one_icloud_account_all_areas",
+  "file": {
+   "accounts": [
+    {
+     "id": "ic01a2b3",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.mail.me.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.org",
+   "SMTP_HOST": "smtp.mail.me.com",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.org",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.org",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "ic01a2b3",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcd-efgh-ijkl-mnop",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "owner@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "webde_mail_icloud_dav_read_only",
+  "file": {
+   "accounts": [
+    {
+     "id": "wd02c4d5",
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "Web-Pass-1",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    },
+    {
+     "id": "dv05c0d1",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "wxyz-abcd-efgh-ijkl",
+     "areas": [
+      "calendar",
+      "contacts"
+     ],
+     "read_only": true
+    }
+   ],
+   "calendars_visible": [
+    "https://p01-caldav.icloud.com/1/calendars/home/"
+   ]
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.net",
+   "ICLOUD_APP_PASSWORD": "Web-Pass-1",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "calendar,contacts",
+   "CALENDARS_VISIBLE": "https://p01-caldav.icloud.com/1/calendars/home/",
+   "MAIL_PASSWORD": "Web-Pass-1",
+   "CALDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "CARDDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "IMAP_HOST": "imap.web.de",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.net",
+   "SMTP_HOST": "smtp.web.de",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.net",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.net",
+   "ICLOUD_DISPLAY_NAME": "Sample Owner",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "wd02c4d5",
+    "provider": "webde",
+    "label": "WEB.DE",
+    "address": "owner@example.net",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "Password",
+    "from_environment": false
+   },
+   {
+    "id": "dv05c0d1",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": true,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "WEB.DE",
+  "settings": {
+   "username": "owner@example.net",
+   "app_password": "Web-Pass-1",
+   "imap_host": "imap.web.de",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.net",
+   "smtp_host": "smtp.web.de",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.net",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "Web-Pass-1",
+   "caldav_password": "wxyz-abcd-efgh-ijkl",
+   "carddav_password": "wxyz-abcd-efgh-ijkl",
+   "email_address": "owner@example.net",
+   "display_name": "Sample Owner",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [
+    "calendar",
+    "contacts"
+   ],
+   "calendars_visible": [
+    "https://p01-caldav.icloud.com/1/calendars/home"
+   ],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "gmail_mail_icloud_rest",
+  "file": {
+   "accounts": [
+    {
+     "id": "gm03e6f7",
+     "provider": "gmail",
+     "username": "owner@gmail.example",
+     "password": "abcdefghijklmnop",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "alias@example.com",
+     "display_name": ""
+    },
+    {
+     "id": "ic01a2b3",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@gmail.example",
+   "ICLOUD_APP_PASSWORD": "abcdefghijklmnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "abcdefghijklmnop",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.gmail.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@gmail.example",
+   "SMTP_HOST": "smtp.gmail.com",
+   "SMTP_PORT": "465",
+   "SMTP_SECURITY": "ssl",
+   "SMTP_USERNAME": "owner@gmail.example",
+   "ICLOUD_EMAIL_ADDRESS": "alias@example.com",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "gm03e6f7",
+    "provider": "gmail",
+    "label": "Gmail",
+    "address": "alias@example.com",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   },
+   {
+    "id": "ic01a2b3",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "Gmail",
+  "settings": {
+   "username": "owner@gmail.example",
+   "app_password": "abcdefghijklmnop",
+   "imap_host": "imap.gmail.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@gmail.example",
+   "smtp_host": "smtp.gmail.com",
+   "smtp_port": 465,
+   "smtp_security": "ssl",
+   "smtp_username": "owner@gmail.example",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcdefghijklmnop",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "alias@example.com",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "other_provider_odd_area_order",
+  "file": {
+   "accounts": [
+    {
+     "id": "ot04a8b9",
+     "provider": "other",
+     "username": "owner@example.com",
+     "password": "Own-Server-Pass",
+     "areas": [
+      "contacts",
+      "mail",
+      "calendar"
+     ],
+     "read_only": false,
+     "imap": "imap.example.com:993",
+     "smtp": "smtp.example.com:465",
+     "caldav": "https://dav.example.com/cal",
+     "carddav": "https://dav.example.com/card"
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.com",
+   "ICLOUD_APP_PASSWORD": "Own-Server-Pass",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "Own-Server-Pass",
+   "CALDAV_PASSWORD": "Own-Server-Pass",
+   "CARDDAV_PASSWORD": "Own-Server-Pass",
+   "IMAP_HOST": "imap.example.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.com",
+   "SMTP_HOST": "smtp.example.com",
+   "SMTP_PORT": "465",
+   "SMTP_SECURITY": "ssl",
+   "SMTP_USERNAME": "owner@example.com",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.com",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://dav.example.com/cal",
+   "CALDAV_USERNAME": "owner@example.com",
+   "CARDDAV_URL": "https://dav.example.com/card",
+   "CARDDAV_USERNAME": "owner@example.com"
+  },
+  "listing": [
+   {
+    "id": "ot04a8b9",
+    "provider": "other",
+    "label": "Other provider",
+    "address": "owner@example.com",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "Password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "",
+  "settings": {
+   "username": "owner@example.com",
+   "app_password": "Own-Server-Pass",
+   "imap_host": "imap.example.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.com",
+   "smtp_host": "smtp.example.com",
+   "smtp_port": 465,
+   "smtp_security": "ssl",
+   "smtp_username": "owner@example.com",
+   "caldav_url": "https://dav.example.com/cal",
+   "caldav_username": "owner@example.com",
+   "carddav_url": "https://dav.example.com/card",
+   "carddav_username": "owner@example.com",
+   "mail_password": "Own-Server-Pass",
+   "caldav_password": "Own-Server-Pass",
+   "carddav_password": "Own-Server-Pass",
+   "email_address": "owner@example.com",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "no_accounts_pending",
+  "file": {
+   "accounts": [],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "pending@setup.invalid",
+   "ICLOUD_APP_PASSWORD": "pending-setup",
+   "MAIL_PASSWORD": "",
+   "CALDAV_PASSWORD": "",
+   "CARDDAV_PASSWORD": "",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": ""
+  },
+  "listing": [],
+  "mail_account": "",
+  "settings": {
+   "username": "pending@setup.invalid",
+   "app_password": "pending-setup",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "pending@setup.invalid",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "pending@setup.invalid",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "pending@setup.invalid",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "pending@setup.invalid",
+   "mail_password": "",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "pending@setup.invalid",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "two_accounts_claim_mail_last_wins",
+  "file": {
+   "accounts": [
+    {
+     "id": "first01",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    },
+    {
+     "id": "last02",
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "Web-Pass-1",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "Web-Pass-1",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.web.de",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.net",
+   "SMTP_HOST": "smtp.web.de",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.net",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.net",
+   "ICLOUD_DISPLAY_NAME": "Sample Owner",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "first01",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   },
+   {
+    "id": "last02",
+    "provider": "webde",
+    "label": "WEB.DE",
+    "address": "owner@example.net",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "Password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "WEB.DE",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.web.de",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.net",
+   "smtp_host": "smtp.web.de",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.net",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "Web-Pass-1",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "owner@example.net",
+   "display_name": "Sample Owner",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "read_only_areas_keep_first_seen_order",
+  "file": {
+   "accounts": [
+    {
+     "id": "dv05c0d1",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "wxyz-abcd-efgh-ijkl",
+     "areas": [
+      "contacts",
+      "calendar"
+     ],
+     "read_only": true
+    },
+    {
+     "id": "wd02c4d5",
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "Web-Pass-1",
+     "areas": [
+      "mail"
+     ],
+     "read_only": true,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "contacts,calendar,mail",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "Web-Pass-1",
+   "CALDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "CARDDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "IMAP_HOST": "imap.web.de",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.net",
+   "SMTP_HOST": "smtp.web.de",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.net",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.net",
+   "ICLOUD_DISPLAY_NAME": "Sample Owner",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "dv05c0d1",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": true,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   },
+   {
+    "id": "wd02c4d5",
+    "provider": "webde",
+    "label": "WEB.DE",
+    "address": "owner@example.net",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": true,
+    "sign_in": "Password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "WEB.DE",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "wxyz-abcd-efgh-ijkl",
+   "imap_host": "imap.web.de",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.net",
+   "smtp_host": "smtp.web.de",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.net",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "Web-Pass-1",
+   "caldav_password": "wxyz-abcd-efgh-ijkl",
+   "carddav_password": "wxyz-abcd-efgh-ijkl",
+   "email_address": "owner@example.net",
+   "display_name": "Sample Owner",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [
+    "contacts",
+    "calendar",
+    "mail"
+   ],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "junk_entries_are_dropped",
+  "file": {
+   "accounts": [
+    {
+     "id": "ic01a2b3",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "todos"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    },
+    {
+     "id": "dv05c0d1",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "wxyz-abcd-efgh-ijkl",
+     "areas": [
+      "todos"
+     ],
+     "read_only": true
+    },
+    {
+     "id": "wd02c4d5",
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    },
+    "text",
+    7,
+    {
+     "id": "gm09",
+     "provider": "gmail",
+     "username": "owner@gmail.example",
+     "password": "abcdefghijklmnop",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "alias@example.com",
+     "display_name": ""
+    }
+   ],
+   "calendars_visible": [
+    "https://c.example.org/x/",
+    5,
+    null
+   ]
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "false",
+   "ENABLE_CONTACTS": "false",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "https://c.example.org/x/",
+   "MAIL_PASSWORD": "abcdefghijklmnop",
+   "CALDAV_PASSWORD": "",
+   "CARDDAV_PASSWORD": "",
+   "IMAP_HOST": "imap.gmail.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@gmail.example",
+   "SMTP_HOST": "smtp.gmail.com",
+   "SMTP_PORT": "465",
+   "SMTP_SECURITY": "ssl",
+   "SMTP_USERNAME": "owner@gmail.example",
+   "ICLOUD_EMAIL_ADDRESS": "alias@example.com",
+   "ICLOUD_DISPLAY_NAME": ""
+  },
+  "listing": [
+   {
+    "id": "ic01a2b3",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   },
+   {
+    "id": "gm09",
+    "provider": "gmail",
+    "label": "Gmail",
+    "address": "alias@example.com",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "Gmail",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.gmail.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@gmail.example",
+   "smtp_host": "smtp.gmail.com",
+   "smtp_port": 465,
+   "smtp_security": "ssl",
+   "smtp_username": "owner@gmail.example",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcdefghijklmnop",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "alias@example.com",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": false,
+   "enable_contacts": false,
+   "read_only_areas": [],
+   "calendars_visible": [
+    "https://c.example.org/x"
+   ],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "accounts_without_ids",
+  "file": {
+   "accounts": [
+    {
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "Web-Pass-1",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    },
+    {
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "wxyz-abcd-efgh-ijkl",
+     "areas": [
+      "calendar",
+      "contacts"
+     ],
+     "read_only": true
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.net",
+   "ICLOUD_APP_PASSWORD": "Web-Pass-1",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "calendar,contacts",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "Web-Pass-1",
+   "CALDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "CARDDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "IMAP_HOST": "imap.web.de",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.net",
+   "SMTP_HOST": "smtp.web.de",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.net",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.net",
+   "ICLOUD_DISPLAY_NAME": "Sample Owner",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "",
+    "provider": "webde",
+    "label": "WEB.DE",
+    "address": "owner@example.net",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "Password",
+    "from_environment": false
+   },
+   {
+    "id": "",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": true,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "WEB.DE",
+  "settings": {
+   "username": "owner@example.net",
+   "app_password": "Web-Pass-1",
+   "imap_host": "imap.web.de",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.net",
+   "smtp_host": "smtp.web.de",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.net",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "Web-Pass-1",
+   "caldav_password": "wxyz-abcd-efgh-ijkl",
+   "carddav_password": "wxyz-abcd-efgh-ijkl",
+   "email_address": "owner@example.net",
+   "display_name": "Sample Owner",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [
+    "calendar",
+    "contacts"
+   ],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "two_accounts_share_one_id",
+  "file": {
+   "accounts": [
+    {
+     "id": "same",
+     "provider": "webde",
+     "username": "owner@example.net",
+     "password": "Web-Pass-1",
+     "areas": [
+      "mail"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": "Sample Owner"
+    },
+    {
+     "id": "same",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "wxyz-abcd-efgh-ijkl",
+     "areas": [
+      "calendar",
+      "contacts"
+     ],
+     "read_only": true
+    }
+   ],
+   "calendars_visible": []
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.net",
+   "ICLOUD_APP_PASSWORD": "Web-Pass-1",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "calendar,contacts",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "Web-Pass-1",
+   "CALDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "CARDDAV_PASSWORD": "wxyz-abcd-efgh-ijkl",
+   "IMAP_HOST": "imap.web.de",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.net",
+   "SMTP_HOST": "smtp.web.de",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.net",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.net",
+   "ICLOUD_DISPLAY_NAME": "Sample Owner",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "same",
+    "provider": "webde",
+    "label": "WEB.DE",
+    "address": "owner@example.net",
+    "areas": [
+     "Mail"
+    ],
+    "read_only": false,
+    "sign_in": "Password",
+    "from_environment": false
+   },
+   {
+    "id": "same",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": true,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "WEB.DE",
+  "settings": {
+   "username": "owner@example.net",
+   "app_password": "Web-Pass-1",
+   "imap_host": "imap.web.de",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.net",
+   "smtp_host": "smtp.web.de",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.net",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "Web-Pass-1",
+   "caldav_password": "wxyz-abcd-efgh-ijkl",
+   "carddav_password": "wxyz-abcd-efgh-ijkl",
+   "email_address": "owner@example.net",
+   "display_name": "Sample Owner",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [
+    "calendar",
+    "contacts"
+   ],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "visible_calendars_not_a_list",
+  "file": {
+   "accounts": [
+    {
+     "id": "ic01a2b3",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    }
+   ],
+   "calendars_visible": "https://c.example.org/"
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.mail.me.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.org",
+   "SMTP_HOST": "smtp.mail.me.com",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.org",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.org",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "ic01a2b3",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcd-efgh-ijkl-mnop",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "owner@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "no_visible_calendars_key",
+  "file": {
+   "accounts": [
+    {
+     "id": "ic01a2b3",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    }
+   ]
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "",
+   "MAIL_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.mail.me.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.org",
+   "SMTP_HOST": "smtp.mail.me.com",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.org",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.org",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "ic01a2b3",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": false
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcd-efgh-ijkl-mnop",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "owner@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "deployment_account_saved_by_the_calendar_form",
+  "file": {
+   "accounts": [
+    {
+     "id": "env",
+     "provider": "icloud",
+     "username": "owner@example.org",
+     "password": "abcd-efgh-ijkl-mnop",
+     "areas": [
+      "mail",
+      "calendar",
+      "contacts"
+     ],
+     "read_only": false,
+     "email_address": "",
+     "display_name": ""
+    }
+   ],
+   "calendars_visible": [
+    "https://p01-caldav.icloud.com/1/calendars/work/"
+   ]
+  },
+  "env_overlay": {
+   "ICLOUD_USERNAME": "owner@example.org",
+   "ICLOUD_APP_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "ENABLE_MAIL": "true",
+   "ENABLE_CALENDAR": "true",
+   "ENABLE_CONTACTS": "true",
+   "READ_ONLY_AREAS": "",
+   "CALENDARS_VISIBLE": "https://p01-caldav.icloud.com/1/calendars/work/",
+   "MAIL_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CALDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "CARDDAV_PASSWORD": "abcd-efgh-ijkl-mnop",
+   "IMAP_HOST": "imap.mail.me.com",
+   "IMAP_PORT": "993",
+   "IMAP_SECURITY": "ssl",
+   "IMAP_USERNAME": "owner@example.org",
+   "SMTP_HOST": "smtp.mail.me.com",
+   "SMTP_PORT": "587",
+   "SMTP_SECURITY": "starttls",
+   "SMTP_USERNAME": "owner@example.org",
+   "ICLOUD_EMAIL_ADDRESS": "owner@example.org",
+   "ICLOUD_DISPLAY_NAME": "",
+   "CALDAV_URL": "https://caldav.icloud.com",
+   "CALDAV_USERNAME": "owner@example.org",
+   "CARDDAV_URL": "https://contacts.icloud.com",
+   "CARDDAV_USERNAME": "owner@example.org"
+  },
+  "listing": [
+   {
+    "id": "env",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "owner@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": true
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "owner@example.org",
+   "app_password": "abcd-efgh-ijkl-mnop",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "owner@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "owner@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "owner@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "owner@example.org",
+   "mail_password": "abcd-efgh-ijkl-mnop",
+   "caldav_password": "abcd-efgh-ijkl-mnop",
+   "carddav_password": "abcd-efgh-ijkl-mnop",
+   "email_address": "owner@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [
+    "https://p01-caldav.icloud.com/1/calendars/work"
+   ],
+   "accounts_file": true
+  }
+ },
+ {
+  "name": "file_is_not_an_object",
+  "file": {
+   "text": "[1, 2]"
+  },
+  "env_overlay": {},
+  "listing": [
+   {
+    "id": "env",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "deploy@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": true
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "deploy@example.org",
+   "app_password": "dddd-eeee-ffff-gggg",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "deploy@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "deploy@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "deploy@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "deploy@example.org",
+   "mail_password": "",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "deploy@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": false
+  }
+ },
+ {
+  "name": "accounts_is_not_a_list",
+  "file": {
+   "text": "{\"accounts\": {\"a\": 1}}"
+  },
+  "env_overlay": {},
+  "listing": [
+   {
+    "id": "env",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "deploy@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": true
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "deploy@example.org",
+   "app_password": "dddd-eeee-ffff-gggg",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "deploy@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "deploy@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "deploy@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "deploy@example.org",
+   "mail_password": "",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "deploy@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": false
+  }
+ },
+ {
+  "name": "file_is_not_json",
+  "file": {
+   "text": "{not json"
+  },
+  "env_overlay": {},
+  "listing": [
+   {
+    "id": "env",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "deploy@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": true
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "deploy@example.org",
+   "app_password": "dddd-eeee-ffff-gggg",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "deploy@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "deploy@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "deploy@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "deploy@example.org",
+   "mail_password": "",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "deploy@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": false
+  }
+ },
+ {
+  "name": "no_file",
+  "file": null,
+  "env_overlay": {},
+  "listing": [
+   {
+    "id": "env",
+    "provider": "icloud",
+    "label": "iCloud",
+    "address": "deploy@example.org",
+    "areas": [
+     "Mail",
+     "Calendar",
+     "Contacts"
+    ],
+    "read_only": false,
+    "sign_in": "App-specific password",
+    "from_environment": true
+   }
+  ],
+  "mail_account": "iCloud",
+  "settings": {
+   "username": "deploy@example.org",
+   "app_password": "dddd-eeee-ffff-gggg",
+   "imap_host": "imap.mail.me.com",
+   "imap_port": 993,
+   "imap_security": "ssl",
+   "imap_username": "deploy@example.org",
+   "smtp_host": "smtp.mail.me.com",
+   "smtp_port": 587,
+   "smtp_security": "starttls",
+   "smtp_username": "deploy@example.org",
+   "caldav_url": "https://caldav.icloud.com",
+   "caldav_username": "deploy@example.org",
+   "carddav_url": "https://contacts.icloud.com",
+   "carddav_username": "deploy@example.org",
+   "mail_password": "",
+   "caldav_password": "",
+   "carddav_password": "",
+   "email_address": "deploy@example.org",
+   "display_name": "",
+   "enable_mail": true,
+   "enable_calendar": true,
+   "enable_contacts": true,
+   "read_only_areas": [],
+   "calendars_visible": [],
+   "accounts_file": false
+  }
+ }
+]
