@@ -183,6 +183,44 @@ own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is w
 Not built yet: choosing a chat by name on the dashboard, the last messages of a chat on the card (another person's words, so a
 switch of its own), and an instance for a second owner, who would have to agree first.
 
+## Messages
+
+`messages_list_chats` and `messages_read_chat` read the owner's chats through one model, whatever channel a chat lives on. Step 1
+serves iMessage only, from the code the `imessage_*` tools already use. It adds no ability: those tools stay exactly as they were,
+and `tests/test_imessage_golden.py` pins their tool list, their answers and the calls they make to the Mac.
+
+| Piece | What it is | Where |
+| --- | --- | --- |
+| Model | `Account`, `Person`, `Chat`, `Message` and `Page`, all frozen. A chat has an id, title, `single` or `group`, account, last activity, unread count and its people; a message has an id, sender, time, text and what it answers | `messages.py` |
+| Backend | A protocol: `name` (the id prefix), `accounts()`, `list_chats(filter)`, `read_chat(chat_id, limit, cursor)`. It knows nothing of tools or filters | `messages.py` |
+| Hub | Finds the backend by prefix, applies the owner's filters, scans the text of others, shapes the answer | `messages.py` |
+| iMessage backend | An adapter over `IMessageService`. Reading, the Mac helper call, matching handles to contacts, the owner's lists and the errors stay in the service; the adapter only changes the shape of what it returns | `imessage.py` |
+
+- A chat id is `<backend>:<the backend's own id>` (`imessage:+15550100`), so ids of two backends cannot collide. A `Chat` cannot be
+  made without the prefix, and the hub refuses an id with no prefix or an unregistered one before anything is asked. A message id is
+  unique within its chat. A cursor is opaque to the agent; for iMessage it is the rowid of the oldest message on the page.
+- The owner's filters are the existing `IMESSAGE_*` settings: hidden chats, "only these chats", the maximum age, service senders
+  and the label on the owner's own assistant's thread. The hub applies them to every backend, to what a caller asks for and to what
+  a backend returns, and refuses a hidden chat before the backend is asked. The iMessage backend also lets its service apply them,
+  so the Mac is not asked for what is hidden. The hub takes the age floor before it asks a backend, so it is never stricter than the
+  backend's own.
+- Titles, previews and messages are other people's words: the answer carries the notice and `safety_warnings` (titles included), and
+  the tool layer cleans invisible characters from all of it, as for every tool.
+- Nothing is stored, and reading is not logged, as with every read tool. A test pins that no title, chat id or text is in the
+  activity log or the server log after these tools ran.
+- `account` is an id of the owner's list, never an address. The Messages app is one account, `imessage`. Resolving an account
+  among several of one area is the accounts model's later step ("Accounts model" above).
+
+What was already general in the iMessage layer: the notice and the scan of text (`safety.py`), the shape of the owner's lists, the
+label on the assistant's thread, the age floor and the paging by "older than". What was not: the id (a handle, or `chatNNN` for a
+group) and how two ids compare (the last nine digits of a number), the rowid cursor, the SMS and iMessage services, which senders
+are "service senders", tapbacks, and the Mac helper itself.
+
+Steps: 1 is this one. 2: read Beeper through a read key at the gateway, as a second backend (`beeper:<id>`), with the same filters.
+3: one request to send, through the approval hub, in place of the send tools. 4: remove the old names (`imessage_list_chats`,
+`imessage_read_chat`). Search across channels comes after the reads. Not in step 1: Beeper, sending, any change to approval or the
+outbox, an account list for several accounts of one backend, a name for the hub.
+
 ## Looking at a change
 
 `PYTHONPATH=src python dev/preview_dashboard.py` serves the dashboard with made-up data (a fake mailbox and Mac helper, a few
