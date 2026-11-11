@@ -245,7 +245,7 @@ async def test_every_queueing_tool_labels_its_request(web):
     app, mcp, *_ = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE)
     mcp._icloud_bridge.call = lambda op, a=None: ({"chat": {"chat_id": "anna@example.org", "participants": ["anna@example.org"], "name": ""},
                                                   "messages": [], "complete": True} if op == "imessage_read" else {})
-    got = await as_client(mcp, "agent-a", "imessage_send_message", {"text": "Hello", "handle": "anna@example.org"})
+    got = await as_client(mcp, "agent-a", "messages_send_request", {"text": "Hello", "handle": "anna@example.org"})
     assert json.loads(got.content[0].text)["status"] == "queued_for_owner_approval", got.content[0].text
     (q,) = mcp._icloud_outboxes["imessage"].pending()
     assert q.requested_by == "agent-a"
@@ -453,7 +453,7 @@ async def test_no_tool_text_names_the_password_as_the_only_way_to_approve(web):
     tools = {t.name: t.description for t in await mcp.list_tools()}
     texts = {"instructions": mcp.instructions, "queued mail notice": OWNER_APPROVAL_NOTICE, "approval_status": tools["approval_status"],
              "approval_withdraw": tools["approval_withdraw"], "mail_send_message": tools["mail_send_message"],
-             "imessage_send_message": tools.get("imessage_send_message", "")}
+             "messages_send_request": tools.get("messages_send_request", "")}
     for name, text in texts.items():
         for sentence in sentences(text):
             # a sentence about the password only forbids handling it, or calls it the fallback; none says it is the way in

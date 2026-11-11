@@ -1,0 +1,321 @@
+{
+ "beeper": {
+  "group": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/external:<id:bp-group>",
+   "chat": {
+    "group": true,
+    "network": "Signal",
+    "title": "Example Club"
+   },
+   "expires_in_seconds": "<time left>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:bp-group>",
+   "sent": false,
+   "status": "queued_for_owner_approval"
+  },
+  "on_disk": [
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFzaW5nbGU6YmVlcGVyLnRlc3QiLCJjaGF0X3RpdGxlIjoiRXhhbXBsZSBQZXJzb24iLCJpc19ncm91cCI6ZmFsc2UsIm5ldHdvcmsiOiJXaGF0c0FwcCIsInRleHQiOiJTZWUgeW91IGF0IHRoZSBub3J0aCBnYXRlIGF0IG5pbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!single:beeper.test\",\"chat_title\":\"Example Person\",\"is_group\":false,\"network\":\"WhatsApp\",\"text\":\"See you at the north gate at nine\"}}",
+    "recipients": [
+     "!single:beeper.test"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFncm91cDpiZWVwZXIudGVzdCIsImNoYXRfdGl0bGUiOiJFeGFtcGxlIENsdWIiLCJpc19ncm91cCI6dHJ1ZSwibmV0d29yayI6IlNpZ25hbCIsInRleHQiOiJNZWV0aW5nIG1vdmVkIHRvIG5pbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!group:beeper.test\",\"chat_title\":\"Example Club\",\"is_group\":true,\"network\":\"Signal\",\"text\":\"Meeting moved to nine\"}}",
+    "recipients": [
+     "!group:beeper.test"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "key": "ask-1",
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFzaW5nbGU6YmVlcGVyLnRlc3QiLCJjaGF0X3RpdGxlIjoiRXhhbXBsZSBQZXJzb24iLCJpc19ncm91cCI6ZmFsc2UsIm5ldHdvcmsiOiJXaGF0c0FwcCIsInJlcGx5X3RvIjoibXNnLTEiLCJ0ZXh0IjoiWWVzLCBuaW5lIGlzIGZpbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!single:beeper.test\",\"chat_title\":\"Example Person\",\"is_group\":false,\"network\":\"WhatsApp\",\"reply_to\":\"msg-1\",\"text\":\"Yes, nine is fine\"}}",
+    "recipients": [
+     "!single:beeper.test"
+    ],
+    "sha256": "<sha>"
+   }
+  ],
+  "same_key": {
+   "already_queued": true,
+   "approve_at": "https://mcp.example.com/dashboard#/item/external:<id:bp-key>",
+   "chat": {
+    "group": false,
+    "network": "WhatsApp",
+    "title": "Example Person"
+   },
+   "expires_in_seconds": "<time left>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:bp-key>",
+   "sent": false,
+   "status": "queued_for_owner_approval"
+  },
+  "single": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/external:<id:bp-single>",
+   "chat": {
+    "group": false,
+    "network": "WhatsApp",
+    "title": "Example Person"
+   },
+   "expires_in_seconds": "<time left>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:bp-single>",
+   "sent": false,
+   "status": "queued_for_owner_approval"
+  },
+  "stored": [
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFzaW5nbGU6YmVlcGVyLnRlc3QiLCJjaGF0X3RpdGxlIjoiRXhhbXBsZSBQZXJzb24iLCJpc19ncm91cCI6ZmFsc2UsIm5ldHdvcmsiOiJXaGF0c0FwcCIsInRleHQiOiJTZWUgeW91IGF0IHRoZSBub3J0aCBnYXRlIGF0IG5pbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!single:beeper.test\",\"chat_title\":\"Example Person\",\"is_group\":false,\"network\":\"WhatsApp\",\"text\":\"See you at the north gate at nine\"}}",
+    "recipients": [
+     "!single:beeper.test"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFncm91cDpiZWVwZXIudGVzdCIsImNoYXRfdGl0bGUiOiJFeGFtcGxlIENsdWIiLCJpc19ncm91cCI6dHJ1ZSwibmV0d29yayI6IlNpZ25hbCIsInRleHQiOiJNZWV0aW5nIG1vdmVkIHRvIG5pbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!group:beeper.test\",\"chat_title\":\"Example Club\",\"is_group\":true,\"network\":\"Signal\",\"text\":\"Meeting moved to nine\"}}",
+    "recipients": [
+     "!group:beeper.test"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "action_type": "beeper.message.send",
+    "followup": null,
+    "key": "ask-1",
+    "raw": "eyJhY3Rpb25fdHlwZSI6ImJlZXBlci5tZXNzYWdlLnNlbmQiLCJwYXJhbXMiOnsiY2hhdF9pZCI6IiFzaW5nbGU6YmVlcGVyLnRlc3QiLCJjaGF0X3RpdGxlIjoiRXhhbXBsZSBQZXJzb24iLCJpc19ncm91cCI6ZmFsc2UsIm5ldHdvcmsiOiJXaGF0c0FwcCIsInJlcGx5X3RvIjoibXNnLTEiLCJ0ZXh0IjoiWWVzLCBuaW5lIGlzIGZpbmUifX0=",
+    "raw_text": "{\"action_type\":\"beeper.message.send\",\"params\":{\"chat_id\":\"!single:beeper.test\",\"chat_title\":\"Example Person\",\"is_group\":false,\"network\":\"WhatsApp\",\"reply_to\":\"msg-1\",\"text\":\"Yes, nine is fine\"}}",
+    "recipients": [
+     "!single:beeper.test"
+    ],
+    "sha256": "<sha>"
+   }
+  ],
+  "with_reply_and_key": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/external:<id:bp-key>",
+   "chat": {
+    "group": false,
+    "network": "WhatsApp",
+    "title": "Example Person"
+   },
+   "expires_in_seconds": "<time left>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:bp-key>",
+   "sent": false,
+   "status": "queued_for_owner_approval"
+  }
+ },
+ "imessage": {
+  "by_handle": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/imessage:<id:im-handle>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:im-handle>",
+   "sent": false,
+   "status": "queued_for_owner_approval",
+   "to": {
+    "chat_id": null,
+    "group": false,
+    "handle": "anna@example.org",
+    "name": "",
+    "participants": [
+     {
+      "contact_uid": "u-anna",
+      "handle": "anna@example.org",
+      "match": "exact",
+      "name": "Anna Example"
+     }
+    ]
+   }
+  },
+  "in_chat": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/imessage:<id:im-chat>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:im-chat>",
+   "sent": false,
+   "status": "queued_for_owner_approval",
+   "to": {
+    "chat_id": "anna@example.org",
+    "group": false,
+    "handle": null,
+    "name": "",
+    "participants": [
+     {
+      "contact_uid": "u-anna",
+      "handle": "anna@example.org",
+      "match": "exact",
+      "name": "Anna Example"
+     }
+    ]
+   }
+  },
+  "in_group": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/imessage:<id:im-group>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:im-group>",
+   "sent": false,
+   "status": "queued_for_owner_approval",
+   "to": {
+    "chat_id": "chat900",
+    "group": true,
+    "handle": null,
+    "name": "Hiking crew",
+    "participants": [
+     {
+      "handle": "+31600000002"
+     },
+     {
+      "contact_uid": "u-anna",
+      "handle": "anna@example.org",
+      "match": "exact",
+      "name": "Anna Example"
+     }
+    ]
+   }
+  },
+  "on_disk": [
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogbnVsbCwgImhhbmRsZSI6ICJhbm5hQGV4YW1wbGUub3JnIiwgInRleHQiOiAiTHVuY2ggPGI+dG9tb3Jyb3c8L2I+PyAgw5xCRVItY2Fmw6kiLCAidG8iOiB7ImNoYXRfaWQiOiBudWxsLCAiaGFuZGxlIjogImFubmFAZXhhbXBsZS5vcmciLCAibmFtZSI6ICIiLCAicGFydGljaXBhbnRzIjogW3siaGFuZGxlIjogImFubmFAZXhhbXBsZS5vcmciLCAibmFtZSI6ICJBbm5hIEV4YW1wbGUiLCAiY29udGFjdF91aWQiOiAidS1hbm5hIiwgIm1hdGNoIjogImV4YWN0In1dLCAiZ3JvdXAiOiBmYWxzZX19",
+    "raw_text": "{\"chat_id\": null, \"handle\": \"anna@example.org\", \"text\": \"Lunch <b>tomorrow</b>?  ÜBER-café\", \"to\": {\"chat_id\": null, \"handle\": \"anna@example.org\", \"name\": \"\", \"participants\": [{\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": false}}",
+    "recipients": [
+     "anna@example.org"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogImNoYXQ5MDAiLCAiaGFuZGxlIjogbnVsbCwgInRleHQiOiAiU2VlIHlvdSBhdCB0aGUgc3RhdGlvbiIsICJ0byI6IHsiY2hhdF9pZCI6ICJjaGF0OTAwIiwgImhhbmRsZSI6IG51bGwsICJuYW1lIjogIkhpa2luZyBjcmV3IiwgInBhcnRpY2lwYW50cyI6IFt7ImhhbmRsZSI6ICIrMzE2MDAwMDAwMDIifSwgeyJoYW5kbGUiOiAiYW5uYUBleGFtcGxlLm9yZyIsICJuYW1lIjogIkFubmEgRXhhbXBsZSIsICJjb250YWN0X3VpZCI6ICJ1LWFubmEiLCAibWF0Y2giOiAiZXhhY3QifV0sICJncm91cCI6IHRydWV9fQ==",
+    "raw_text": "{\"chat_id\": \"chat900\", \"handle\": null, \"text\": \"See you at the station\", \"to\": {\"chat_id\": \"chat900\", \"handle\": null, \"name\": \"Hiking crew\", \"participants\": [{\"handle\": \"+31600000002\"}, {\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": true}}",
+    "recipients": [
+     "chat900"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogImFubmFAZXhhbXBsZS5vcmciLCAiaGFuZGxlIjogbnVsbCwgInRleHQiOiAiUnVubmluZyBsYXRlIiwgInRvIjogeyJjaGF0X2lkIjogImFubmFAZXhhbXBsZS5vcmciLCAiaGFuZGxlIjogbnVsbCwgIm5hbWUiOiAiIiwgInBhcnRpY2lwYW50cyI6IFt7ImhhbmRsZSI6ICJhbm5hQGV4YW1wbGUub3JnIiwgIm5hbWUiOiAiQW5uYSBFeGFtcGxlIiwgImNvbnRhY3RfdWlkIjogInUtYW5uYSIsICJtYXRjaCI6ICJleGFjdCJ9XSwgImdyb3VwIjogZmFsc2V9fQ==",
+    "raw_text": "{\"chat_id\": \"anna@example.org\", \"handle\": null, \"text\": \"Running late\", \"to\": {\"chat_id\": \"anna@example.org\", \"handle\": null, \"name\": \"\", \"participants\": [{\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": false}}",
+    "recipients": [
+     "anna@example.org"
+    ],
+    "sha256": "<sha>"
+   }
+  ],
+  "refused": {
+   "assistant": "refused",
+   "not_listed": "refused"
+  },
+  "same_again": {
+   "approve_at": "https://mcp.example.com/dashboard#/item/imessage:<id:im-handle>",
+   "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it.",
+   "outbox_id": "<id:im-handle>",
+   "sent": false,
+   "status": "queued_for_owner_approval",
+   "to": {
+    "chat_id": null,
+    "group": false,
+    "handle": "anna@example.org",
+    "name": "",
+    "participants": [
+     {
+      "contact_uid": "u-anna",
+      "handle": "anna@example.org",
+      "match": "exact",
+      "name": "Anna Example"
+     }
+    ]
+   }
+  },
+  "stored": [
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogbnVsbCwgImhhbmRsZSI6ICJhbm5hQGV4YW1wbGUub3JnIiwgInRleHQiOiAiTHVuY2ggPGI+dG9tb3Jyb3c8L2I+PyAgw5xCRVItY2Fmw6kiLCAidG8iOiB7ImNoYXRfaWQiOiBudWxsLCAiaGFuZGxlIjogImFubmFAZXhhbXBsZS5vcmciLCAibmFtZSI6ICIiLCAicGFydGljaXBhbnRzIjogW3siaGFuZGxlIjogImFubmFAZXhhbXBsZS5vcmciLCAibmFtZSI6ICJBbm5hIEV4YW1wbGUiLCAiY29udGFjdF91aWQiOiAidS1hbm5hIiwgIm1hdGNoIjogImV4YWN0In1dLCAiZ3JvdXAiOiBmYWxzZX19",
+    "raw_text": "{\"chat_id\": null, \"handle\": \"anna@example.org\", \"text\": \"Lunch <b>tomorrow</b>?  ÜBER-café\", \"to\": {\"chat_id\": null, \"handle\": \"anna@example.org\", \"name\": \"\", \"participants\": [{\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": false}}",
+    "recipients": [
+     "anna@example.org"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogImNoYXQ5MDAiLCAiaGFuZGxlIjogbnVsbCwgInRleHQiOiAiU2VlIHlvdSBhdCB0aGUgc3RhdGlvbiIsICJ0byI6IHsiY2hhdF9pZCI6ICJjaGF0OTAwIiwgImhhbmRsZSI6IG51bGwsICJuYW1lIjogIkhpa2luZyBjcmV3IiwgInBhcnRpY2lwYW50cyI6IFt7ImhhbmRsZSI6ICIrMzE2MDAwMDAwMDIifSwgeyJoYW5kbGUiOiAiYW5uYUBleGFtcGxlLm9yZyIsICJuYW1lIjogIkFubmEgRXhhbXBsZSIsICJjb250YWN0X3VpZCI6ICJ1LWFubmEiLCAibWF0Y2giOiAiZXhhY3QifV0sICJncm91cCI6IHRydWV9fQ==",
+    "raw_text": "{\"chat_id\": \"chat900\", \"handle\": null, \"text\": \"See you at the station\", \"to\": {\"chat_id\": \"chat900\", \"handle\": null, \"name\": \"Hiking crew\", \"participants\": [{\"handle\": \"+31600000002\"}, {\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": true}}",
+    "recipients": [
+     "chat900"
+    ],
+    "sha256": "<sha>"
+   },
+   {
+    "followup": null,
+    "raw": "eyJjaGF0X2lkIjogImFubmFAZXhhbXBsZS5vcmciLCAiaGFuZGxlIjogbnVsbCwgInRleHQiOiAiUnVubmluZyBsYXRlIiwgInRvIjogeyJjaGF0X2lkIjogImFubmFAZXhhbXBsZS5vcmciLCAiaGFuZGxlIjogbnVsbCwgIm5hbWUiOiAiIiwgInBhcnRpY2lwYW50cyI6IFt7ImhhbmRsZSI6ICJhbm5hQGV4YW1wbGUub3JnIiwgIm5hbWUiOiAiQW5uYSBFeGFtcGxlIiwgImNvbnRhY3RfdWlkIjogInUtYW5uYSIsICJtYXRjaCI6ICJleGFjdCJ9XSwgImdyb3VwIjogZmFsc2V9fQ==",
+    "raw_text": "{\"chat_id\": \"anna@example.org\", \"handle\": null, \"text\": \"Running late\", \"to\": {\"chat_id\": \"anna@example.org\", \"handle\": null, \"name\": \"\", \"participants\": [{\"handle\": \"anna@example.org\", \"name\": \"Anna Example\", \"contact_uid\": \"u-anna\", \"match\": \"exact\"}], \"group\": false}}",
+    "recipients": [
+     "anna@example.org"
+    ],
+    "sha256": "<sha>"
+   }
+  ]
+ },
+ "status": {
+  "bp-group": {
+   "action_type": "beeper.message.send",
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:bp-group>",
+   "kind": "external",
+   "status": "waiting"
+  },
+  "bp-key": {
+   "action_type": "beeper.message.send",
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:bp-key>",
+   "kind": "external",
+   "status": "waiting"
+  },
+  "bp-single": {
+   "action_type": "beeper.message.send",
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:bp-single>",
+   "kind": "external",
+   "status": "waiting"
+  },
+  "im-chat": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:im-chat>",
+   "kind": "imessage",
+   "status": "waiting"
+  },
+  "im-group": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:im-group>",
+   "kind": "imessage",
+   "status": "waiting"
+  },
+  "im-handle": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:im-handle>",
+   "kind": "imessage",
+   "status": "waiting"
+  }
+ }
+}

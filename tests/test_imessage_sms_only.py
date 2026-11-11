@@ -60,7 +60,7 @@ def test_sms_only_chat_is_refused_and_names_the_imessage_chat(s, tmp_path):
         m.send("See you tonight", chat_id="+31600000001", outbox=box, public_url=s.public_url)
     msg = str(e.value)
     assert "exists only as SMS" in msg and "Nothing was sent or queued" in msg
-    assert "chat_id 'anna@example.org'" in msg and "chat900" not in msg       # her 1:1 iMessage chat, never the group
+    assert "chat_id 'imessage:anna@example.org'" in msg and "chat900" not in msg       # her 1:1 iMessage chat, never the group
     assert "Anna" not in msg                                                   # no address-book text in the error
     assert not box.pending() and not [op for op, _ in b.calls if op == "imessage_send"]
 
@@ -98,5 +98,5 @@ def test_the_hint_matches_by_contact_uid_and_never_searches_for_the_name(s, tmp_
     with pytest.raises(IMessageError) as e:
         m.send("Hi", chat_id="+31600000001", outbox=box, public_url=s.public_url)
     assert seen and all(not kw.get("query") for kw in seen)
-    assert "chat_id 'anna@example.org'" in str(e.value) and "DROP" not in str(e.value) and "ignore" not in str(e.value)
+    assert "chat_id 'imessage:anna@example.org'" in str(e.value) and "DROP" not in str(e.value) and "ignore" not in str(e.value)
     assert all("query" not in (args or {}) for op, args in b.calls)

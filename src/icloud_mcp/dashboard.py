@@ -391,7 +391,7 @@ class IMessageApprovals(ApprovalSource):
         return T.imessage_text(q.raw)
 
     def clean_text(self, text):
-        return T.clean(text, allow_empty=False, limit=self.text_limit, strip=True)    # as imessage_send_message does
+        return T.clean(text, allow_empty=False, limit=self.text_limit, strip=True)    # as messages_send_request does
 
     def with_text(self, q, text):
         return T.imessage_with_text(q.raw, text), None
