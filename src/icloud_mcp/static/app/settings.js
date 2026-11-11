@@ -74,7 +74,7 @@ async function saveKeys(st, values) {
 }
 
 // The groups of the Settings list. On a wide screen the side list picks one; "accounts" opens its own page.
-export const SECTIONS = [["security", "Sign-in and security"], ["accounts", "Connected accounts"], ["icloud", "iCloud"], ["mac", "Your Mac"],
+export const SECTIONS = [["security", "Sign-in and security"], ["accounts", "Accounts"], ["icloud", "iCloud"], ["mac", "Your Mac"],
   ["safety", "Safety"], ["server", "Account and server"]];
 
 class Settings extends HTMLElement {
@@ -112,12 +112,12 @@ class Settings extends HTMLElement {
       security: head("Sign-in and security") + `<ion-list class="inset">
         ${row({ title: "Notifications", button: true, attrs: 'data-nav="icm-notifications"' })}
         ${row({ title: "Passkeys", note: String(sec.passkeys.length), button: true, attrs: 'data-nav="icm-passkeys"' })}
-        ${row({ title: "Connected apps", note: String(sec.apps.length), button: true, attrs: 'data-nav="icm-apps"' })}
+        ${row({ title: "AI clients", note: String(sec.apps.length), button: true, attrs: 'data-nav="icm-apps"' })}
         ${row({ title: "Owner password", ...state(sec.password_login), button: true, attrs: 'data-nav="icm-password"' })}
         ${row({ title: "This device", sub: `Signed in with ${esc(sec.via)}, ${esc(ago(sec.signed_in_at))}` })}
         <ion-item button detail="false" data-signout><ion-label color="danger">Sign out</ion-label></ion-item></ion-list>`,
-      accounts: head("Connected accounts") + `<ion-list class="inset">
-        ${row({ title: "Connected accounts", sub: "Where mail, calendar and contacts come from", note: accts == null ? "" : String(accts), button: true, attrs: 'data-nav="icm-accounts"' })}</ion-list>`,
+      accounts: head("Accounts") + `<ion-list class="inset">
+        ${row({ title: "Accounts", note: accts == null ? "" : String(accts), button: true, attrs: 'data-nav="icm-accounts"' })}</ion-list>`,
       icloud: head("iCloud") + `<ion-list class="inset">
         ${row({ title: "Mail", ...state(v.ENABLE_MAIL), button: true, attrs: 'data-page="mail"' })}
         ${row({ title: "Calendar", ...state(v.ENABLE_CALENDAR), button: true, attrs: 'data-page="calendar"' })}
@@ -300,25 +300,25 @@ class Passkeys extends HTMLElement {
 }
 customElements.define("icm-passkeys", Passkeys);
 
-// -- connected apps -----------------------------------------------------------------------------------------------------
+// -- AI clients -----------------------------------------------------------------------------------------------------
 class Apps extends HTMLElement {
   connectedCallback() { this.body = page(this, "", "Settings"); this.load(); }
 
   async load() {
     let sec;
     try { sec = await get("/security"); } catch (e) { fail(e); return; }
-    this.body.innerHTML = titleBlock("Connected apps", "A signed-out app has to connect again, and that needs you.")
+    this.body.innerHTML = titleBlock("AI clients", "Apps that signed in to this server. One you sign out has to connect again, and only you can allow that.")
       + (sec.apps.length ? `<ion-list class="inset" style="margin-top:14px!important">${sec.apps.map((a) => `<ion-item>
         <ion-label class="ion-text-wrap"><h2>${esc(a.name)}</h2><p>${a.host ? `${esc(a.host)} · ` : ""}active ${esc(ago(a.last_used))}</p></ion-label>
         <ion-button slot="end" fill="clear" size="small" data-out="${esc(a.id)}" data-name="${esc(a.name)}">Sign out</ion-button></ion-item>`).join("")}</ion-list>
-        <div class="acts"><ion-button fill="outline" color="danger" data-all>Sign out all apps</ion-button></div>`
-        : `<div class="empty">No app is signed in.</div>`);
+        <div class="acts"><ion-button fill="outline" color="danger" data-all>Sign out all clients</ion-button></div>`
+        : `<div class="empty">No client is signed in.</div>`);
     this.querySelectorAll("[data-out]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await ask(`Sign out ${b.dataset.name}?`, "It has to connect again, and that needs you.", "Sign out", { danger: true }))) return;
       try { const r = await post(`/security/apps/${encodeURIComponent(b.dataset.out)}/sign-out`); toast(r.note); this.load(); } catch (e) { fail(e); }
     }));
     this.querySelector("[data-all]")?.addEventListener("click", async () => {
-      if (!(await ask("Sign out all apps?", "Every app has to connect again, and that needs you.", "Sign out all", { danger: true }))) return;
+      if (!(await ask("Sign out all clients?", "Every client has to connect again, and only you can allow that.", "Sign out all", { danger: true }))) return;
       try { const r = await post("/security/apps/sign-out-all"); toast(r.note); this.load(); } catch (e) { fail(e); }
     });
   }
@@ -332,7 +332,7 @@ class Password extends HTMLElement {
     const [sec, st] = await Promise.all([get("/security"), get("/settings")]).catch((e) => { fail(e); return [null, null]; });
     if (!sec) return;
     const ed = st.editable ? "" : "disabled";
-    body.innerHTML = titleBlock("Owner password", "It also approves new apps on the connect page.")
+    body.innerHTML = titleBlock("Owner password", "It also approves new clients on the connect page.")
       + `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-toggle data-login ${on(st.values.OWNER_PASSWORD_LOGIN) ? "checked" : ""} ${ed}>
         Sign in with the password</ion-toggle></ion-item></ion-list>
         <p class="note">${sec.passkeys.length ? "Off means passkey and Tailscale only." : "Stays on until you have a passkey."}</p>`
@@ -364,7 +364,7 @@ class Server extends HTMLElement {
     this.body.innerHTML = titleBlock("Server", `${esc(srv.host)} · version ${esc(srv.version)}${srv.paused ? " · paused" : ""}`)
       + section("Services", srv.checked_at ? `checked ${esc(ago(srv.checked_at))}` : "") + `<ion-list class="inset">${areas}</ion-list>
         <div class="acts"><ion-button fill="outline" color="medium" data-check>Check now</ion-button></div>`
-      + section("Tools") + `<ion-list class="inset">${row({ title: "Offered", note: `${srv.tools} tools` })}${row({ title: "Connected apps", note: esc(srv.apps.join(", ") || "none") })}</ion-list>
+      + section("Tools") + `<ion-list class="inset">${row({ title: "Offered", note: `${srv.tools} tools` })}${row({ title: "AI clients", note: esc(srv.apps.join(", ") || "none") })}</ion-list>
         <div class="acts"><ion-button fill="outline" color="${srv.paused ? "primary" : "danger"}" data-pause>${srv.paused ? "Resume tools" : "Pause all tools"}</ion-button></div>
         <p class="note">Pausing makes every tool answer that the server is paused. Nobody is signed out.</p>`
       + st.server.map((grp) => section(grp.title) + `<ion-list class="inset">${grp.rows.map(([k, val]) => row({ title: esc(k), note: esc(val) })).join("")}</ion-list>`).join("")
