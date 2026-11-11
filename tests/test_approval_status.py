@@ -430,7 +430,7 @@ async def test_an_iMessage_handed_to_messages_without_confirmation_is_unclear(we
         sends.append(a)
         return {"status": "unconfirmed", "note": "Handed to Messages."}
     mcp._icloud_bridge.call = bridge
-    queued = json.loads((await mcp.call_tool("imessage_send_message", {"text": "See you at 6", "handle": "anna@example.org"})).content[0].text)
+    queued = json.loads((await mcp.call_tool("messages_send_request", {"text": "See you at 6", "handle": "anna@example.org"})).content[0].text)
     assert queued["status"] == "queued_for_owner_approval" and "approval_status" in queued["notice"]
     assert (await call(mcp, {"id": queued["outbox_id"]}))["kind"] == "imessage"
     async with client(app) as c:

@@ -220,10 +220,10 @@ class Settings:
     imessage_max_age_days: int = 0                 # IMESSAGE_MAX_AGE_DAYS: 0 = the whole history (default); e.g. 365 limits it
     imessage_hide_short_codes: bool = True         # IMESSAGE_HIDE_SHORT_CODES: hide service senders (banks, one-time codes): not email, not a full number
     imessage_never_send: tuple[str, ...] = ()      # IMESSAGE_NEVER_SEND: handles or chat ids nothing is ever sent to (e.g. an assistant's own Apple ID)
-    imessage_allow_send: bool = False              # IMESSAGE_ALLOW_SEND: register imessage_send_message at all
+    imessage_allow_send: bool = False              # IMESSAGE_ALLOW_SEND: iMessage chats can be written to through messages_send_request at all
     imessage_send_requires_approval: bool = True   # IMESSAGE_SEND_REQUIRES_APPROVAL: every iMessage waits for the owner (independent of mail)
     imessage_send_allowlist: tuple[str, ...] = ()  # IMESSAGE_SEND_ALLOWLIST: who may receive; empty = nobody, "*" = anyone
-    beeper_gateway_url: str = ""                   # BEEPER_GATEWAY_URL: the gateway's MCP endpoint (beeper.py); with the key it turns beeper_send_request on
+    beeper_gateway_url: str = ""                   # BEEPER_GATEWAY_URL: the gateway's MCP endpoint (beeper.py); with the key it lets messages_send_request write to beeper: chats
     beeper_exec_key: str = ""                      # BEEPER_EXEC_KEY: the gateway key that sends after approval and reads chat details; only in the environment
     beeper_send_allowlist: tuple[str, ...] = ()    # BEEPER_SEND_ALLOWLIST: chat ids that may be written to; empty = nobody, "*" = any chat
     beeper_chat_tool: str = "beeper-get_chat"      # BEEPER_CHAT_TOOL: the gateway's name for Beeper's get_chat

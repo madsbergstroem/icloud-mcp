@@ -12,6 +12,9 @@ chat. It knows nothing of the tools or of the owner's filters. The hub sits betw
   (`safety_warnings`, the same check as for mail) and every result carries the notice. The tool layer removes invisible
   characters from the whole result, as for every tool.
 
+A request to send goes the other way, through a sender (one per channel that can be written to). The hub only picks the sender by
+the same prefix; the sender is the channel's own approval flow, and nothing is carried out here.
+
 Nothing here keeps a message: each call reads the backend live, and nothing is written to the activity log or the server log.
 """
 from __future__ import annotations
@@ -119,6 +122,34 @@ class Page:
 
 
 @dataclass(frozen=True)
+class Match:
+    """A message a search found, with the chat it is in."""
+    message: Message
+    title: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class Matches:
+    found: tuple[Match, ...]
+    scanned: int | None = None
+    complete: bool = True                        # False: the limit was hit or the search ran out of time
+
+    def __post_init__(self) -> None:
+        _frozen(self, found=tuple(self.found))
+
+
+@dataclass(frozen=True)
+class SendRequest:
+    """A request to send, as a sender gets it: the backend's own chat id (no prefix) or a handle, never both."""
+    text: str
+    chat_id: str | None = None
+    handle: str | None = None
+    reply_to: str | None = None
+    request_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ChatFilter:
     """What a caller asks of a listing. The hub applies all of it to what comes back; a backend can use query, since and limit to ask
     the source for less."""
@@ -138,6 +169,17 @@ class Backend(Protocol):
     def list_chats(self, flt: ChatFilter) -> list[Chat]: ...
 
     def read_chat(self, chat_id: str, limit: int, cursor: str | None) -> Page: ...
+
+    def search(self, query: str, chat_id: str | None, since: str | None, before: str | None, limit: int) -> Matches: ...
+
+
+class Sender(Protocol):
+    """A channel the owner can be asked to approve a message on. It queues the request in that channel's own approval flow and
+    answers as that flow does."""
+    name: str                                    # the prefix of its chat ids
+    takes_handle: bool                           # True: a request may name an address for a new conversation instead of a chat
+
+    def send_request(self, req: SendRequest) -> dict[str, Any]: ...
 
 
 # -- the owner's filters ------------------------------------------------------------------------------------------------
@@ -187,6 +229,11 @@ def chat_wire(c: Chat, *, preview: bool = True) -> dict[str, Any]:
     return out
 
 
+def match_wire(m: Match) -> dict[str, Any]:
+    """A search hit: the chat it is in, then the message with its sender named in place (a search shows no list of participants)."""
+    return {"chat_id": m.message.chat_id, "chat_title": m.title, "type": m.kind, **message_wire(m.message, set())}
+
+
 def message_wire(m: Message, handles: set[str]) -> dict[str, Any]:
     """A message without its empty fields. The sender is its bare handle when the chat's participants name them (names are given once,
     there), anyone else a person with a name where one is known."""
@@ -196,11 +243,30 @@ def message_wire(m: Message, handles: set[str]) -> dict[str, Any]:
 
 
 class Hub:
-    def __init__(self, backends: Iterable[tuple[Backend, Filters]]):
-        self._backends = {b.name: (b, f) for b, f in backends}
-        for name in self._backends:
-            if not _BACKEND.fullmatch(name):
-                raise ValueError(f"'{name}' cannot be a chat id prefix")
+    def __init__(self, backends: Iterable[tuple[Backend, Filters]] = (), senders: Iterable[Sender] = ()):
+        self._backends: dict[str, tuple[Backend, Filters]] = {}
+        self._senders: dict[str, Sender] = {}
+        for backend, filters in backends:
+            self.add_backend(backend, filters)
+        for sender in senders:
+            self.add_sender(sender)
+
+    def add_backend(self, backend: Backend, filters: Filters) -> None:
+        self._named(backend.name)
+        self._backends[backend.name] = (backend, filters)
+
+    def add_sender(self, sender: Sender) -> None:
+        self._named(sender.name)
+        self._senders[sender.name] = sender
+
+    @staticmethod
+    def _named(name: str) -> None:
+        if not _BACKEND.fullmatch(name):
+            raise ValueError(f"'{name}' cannot be a chat id prefix")
+
+    @property
+    def can_send(self) -> bool:
+        return bool(self._senders)
 
     def accounts(self) -> list[Account]:
         return [a for b, _f in self._backends.values() for a in b.accounts()]
@@ -208,21 +274,35 @@ class Hub:
     def _route(self, chat_id: str) -> tuple[Backend, Filters, str]:
         name, native = split_id(chat_id)
         if name not in self._backends:
+            if name in self._senders:
+                raise MessagesError(f"Chats of '{name}' can be written to (messages_send_request) but not read here yet.")
             raise MessagesError(f"No backend '{name}' here (known: {', '.join(self._backends)}). Take chat_ids from messages_list_chats.")
         return (*self._backends[name], native)
+
+    def _reachable(self, chat_id: str) -> tuple[Backend, Filters, str]:
+        """_route, and refused when the owner keeps the chat out of reach: a chat that cannot be listed cannot be read, searched or written to."""
+        backend, filters, native = self._route(chat_id)
+        if not filters.shown(native):
+            raise MessagesError(f"No conversation with chat_id '{chat_id}' (take it from messages_list_chats).")
+        return backend, filters, native
+
+    def _holding(self, account: str | None) -> list[tuple[Backend, Filters]]:
+        """The backends that hold an account, or all of them for none. An account no backend holds is refused."""
+        if account is None:
+            return list(self._backends.values())
+        if account not in {a.account for a in self.accounts()}:
+            raise MessagesError(f"No account '{account}' (known: {', '.join(a.account for a in self.accounts())}).")
+        return [(b, f) for b, f in self._backends.values() if account in {a.account for a in b.accounts()}]
 
     def list_chats(self, *, account: str | None = None, type: str | None = None, unread: bool | None = None,
                    query: str | None = None, since: str | None = None, limit: int = 20) -> dict[str, Any]:
         if type not in (None, *KINDS):
             raise MessagesError("type is 'single' or 'group'.")
-        if account is not None and account not in {a.account for a in self.accounts()}:
-            raise MessagesError(f"No account '{account}' (known: {', '.join(a.account for a in self.accounts())}).")
+        holding = self._holding(account)
         limit = max(1, min(int(limit), 200))
         flt = ChatFilter(account, type, unread, query, since, limit)
         found: list[Chat] = []
-        for backend, filters in self._backends.values():
-            if account is not None and account not in {a.account for a in backend.accounts()}:
-                continue
+        for backend, filters in holding:
             floor = filters.floor()                  # taken before the backend is asked, so it is never later than the backend's own
             for c in backend.list_chats(flt):
                 name, native = split_id(c.chat_id)
@@ -240,9 +320,7 @@ class Hub:
                 **({"safety_warnings": warned} if warned else {})}
 
     def read_chat(self, chat_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
-        backend, filters, native = self._route(chat_id)
-        if not filters.shown(native):
-            raise MessagesError(f"No conversation with chat_id '{chat_id}' (take it from messages_list_chats).")
+        backend, filters, native = self._reachable(chat_id)
         floor = filters.floor()
         page = backend.read_chat(chat_id, max(1, min(int(limit), 500)), cursor or None)
         if split_id(page.chat.chat_id)[0] != backend.name:
@@ -254,3 +332,58 @@ class Hub:
         return {"notice": NOTICE, "chat": chat_wire(chat, preview=False), "messages": [message_wire(m, handles) for m in kept],
                 "complete": page.next_cursor is None, **({"next_cursor": page.next_cursor} if page.next_cursor else {}),
                 **({"safety_warnings": warned} if warned else {})}
+
+    def search(self, query: str, *, account: str | None = None, chat_id: str | None = None, since: str | None = None,
+               before: str | None = None, limit: int = 20) -> dict[str, Any]:
+        if not (query or "").strip():
+            raise MessagesError("query is empty.")
+        limit = max(1, min(int(limit), 200))
+        holding = self._holding(account)
+        if chat_id:
+            backend, _f, _native = self._reachable(chat_id)
+            holding = [(b, f) for b, f in holding if b is backend]
+            if not holding:
+                raise MessagesError(f"chat_id '{chat_id}' is not in account '{account}'.")
+        hits: list[Match] = []
+        scanned: int | None = None
+        complete = True
+        for backend, filters in holding:
+            floor = filters.floor()
+            got = backend.search(query.strip(), chat_id, since, before, limit)
+            complete = complete and got.complete
+            scanned = got.scanned if scanned is None or got.scanned is None else scanned + got.scanned
+            for m in got.found:
+                name, native = split_id(m.message.chat_id)
+                if name != backend.name:
+                    raise MessagesError(f"The '{backend.name}' backend returned a match of '{name}'.")
+                if filters.shown(native) and _not_older(m.message.at, floor):
+                    hits.append(m)
+        if len(self._backends) > 1:
+            hits.sort(key=lambda m: _when(m.message.at) or datetime.min, reverse=True)
+        if len(hits) > limit:
+            hits, complete = hits[:limit], False
+        warned = warnings_for(*(m.title for m in hits), *(m.message.text for m in hits if not m.message.from_me))
+        return {"notice": NOTICE, "count": len(hits), "matches": [match_wire(m) for m in hits], "scanned": scanned, "complete": complete,
+                **({"safety_warnings": warned} if warned else {})}
+
+    def send_request(self, text: str, *, chat_id: str | None = None, handle: str | None = None, reply_to: str | None = None,
+                     request_id: str | None = None) -> dict[str, Any]:
+        """Hand a request to the channel its chat_id names (or, for a handle, the channel that takes addresses). What comes back is that
+        channel's own answer: the request waits for the owner, and nothing is sent here."""
+        chat_id, handle = (chat_id or "").strip() or None, (handle or "").strip() or None
+        if bool(chat_id) == bool(handle):
+            raise MessagesError("Give exactly one of chat_id (an existing chat, copied from messages_list_chats) or handle (an address for a new conversation).")
+        if handle:
+            sender = next((s for s in self._senders.values() if s.takes_handle), None)
+            if sender is None:
+                raise MessagesError("No channel here takes an address for a new conversation; use the chat_id of an existing chat.")
+            native = None
+        else:
+            name, native = split_id(chat_id)
+            if name not in self._senders:
+                on = ", ".join(self._senders) or "no channel"
+                raise MessagesError(f"Sending to '{name}' chats is not turned on here (it is on for: {on}). Take chat_ids from messages_list_chats.")
+            if name in self._backends:
+                self._reachable(chat_id)
+            sender = self._senders[name]
+        return sender.send_request(SendRequest(text, native, handle, (reply_to or "").strip() or None, (request_id or "").strip() or None))

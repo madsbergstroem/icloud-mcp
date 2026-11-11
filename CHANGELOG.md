@@ -5,20 +5,40 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
-- **One pair of tools to read chats, whatever the channel (fork, step 1).** `messages_list_chats` (filters `account`, `type`,
-  `unread`, `query`, `since`, `limit`) and `messages_read_chat` (`chat_id`, `limit`, `cursor`) give for iMessage what
-  `imessage_list_chats` and `imessage_read_chat` give, in a model that other channels can use later: a chat id starts with its
-  backend (`imessage:…`, an id without a known prefix is refused), a message has a `message_id`, and paging is a `cursor` taken
-  from `next_cursor`. They exist when `ENABLE_IMESSAGE` is on, stop with a pause, and `TOOLS=messages` picks them as an area. The
-  `IMESSAGE_*` settings steer them as before (hidden chats, "only these chats", maximum age, service senders, the label on your
-  own assistant's thread), and the hub applies those lists itself, so they will hold for a channel added later. Titles are other
-  people's text, like messages: they count towards `safety_warnings`. Archived chats are not listed yet. Nothing is stored and
-  reading is still not logged; a test checks that no title, chat id or text reaches the activity log or the server log.
-  The `imessage_*` tools did not change (`tests/test_imessage_golden.py` pins their tool list, answers and the calls to the Mac).
-  The served instructions and the tool map name the new tools. Not in this change: other channels, sending, any change to approval,
-  removing the old tools. `docs/DESIGN.md` has a Messages section with the steps that follow.
+- **One set of tools for chats on every channel (fork). The old names are gone.** `messages_list_chats` (filters `account`, `type`,
+  `unread`, `query`, `since`, `limit`), `messages_read_chat` (`chat_id`, `limit`, `cursor`), `messages_search` (`query`, `account`,
+  `chat_id`, `since`, `before`, `limit`) and `messages_send_request` (`text`, `chat_id`, `handle`, `reply_to`, `request_id`)
+  replace `imessage_list_chats`, `imessage_read_chat`, `imessage_search_messages`, `imessage_send_message` and
+  `beeper_send_request`. A chat id starts with its channel, `imessage:…` or `beeper:…`; an id without a known prefix is refused,
+  and paging is a `cursor` taken from `next_cursor`. Clients and skills that call the old names must change them (table below).
+  The tools exist under the same settings as before: `ENABLE_IMESSAGE` for the three that read, `IMESSAGE_ALLOW_SEND` (with
+  `ENABLE_IMESSAGE`) and `BEEPER_GATEWAY_URL` with `BEEPER_EXEC_KEY` for the one that writes, which is there when either is on.
+  The `IMESSAGE_*` and `BEEPER_*` settings steer them as they steered the old tools (hidden chats, "only these chats", maximum age,
+  service senders, the label on your own assistant's thread, the send lists), and the hub applies the reading lists to every
+  channel, so they will hold for one added later. `messages_send_request` sends by the prefix of `chat_id`: `imessage:` goes to the
+  iMessage approval, `beeper:` to the Beeper approval. Both keep their queue files, cards, hashes, statuses, log lines and push
+  texts; a test compares what is stored with what the old tools stored. `handle` (a new iMessage conversation by address) is for
+  iMessage only, and `chat_id` and `handle` must not come together. `reply_to` and `request_id` are for Beeper chats: an iMessage
+  request that carries either is refused. The one line in the activity log that changes is the `tool.queued` line, which names the
+  new tool. Titles are other people's text, like messages: they count towards `safety_warnings`. Archived chats are not listed
+  yet, and Beeper chats cannot be read yet. Nothing is stored and reading is still not logged; a test checks that no title, chat id
+  or text reaches the activity log or the server log. In `TOOLS`, `messages` is a new area and `imessage` stays valid and means the
+  same tools; an old tool name in `TOOLS` is accepted with a warning and means the tool that replaced it. A `TOOLS=beeper` setting now
+  matches no tool (the diagnostics stay), because the area had one tool and it is gone. The served instructions and the tool map
+  name the new tools. `docs/DESIGN.md` has a Messages section.
+
+  | Before | Now |
+  | --- | --- |
+  | `imessage_list_chats(query, limit, since, include_archived)` | `messages_list_chats(account, type, unread, query, since, limit)`; no archived chats yet |
+  | `imessage_read_chat(chat_id, limit, before_id, since)` | `messages_read_chat(chat_id, limit, cursor)`; `chat_id` has the prefix; `before_id` is `cursor` (from `next_cursor`, was `older_before_id`); no `since` |
+  | `imessage_search_messages(query, chat_id, limit, since, before)` | `messages_search(query, account, chat_id, since, before, limit)`; `chat_id` has the prefix |
+  | `imessage_send_message(text, chat_id, handle)` | `messages_send_request(text, chat_id, handle)`; `chat_id` has the prefix `imessage:` |
+  | `beeper_send_request(chat_id, text, reply_to, request_id)` | `messages_send_request(chat_id="beeper:<id>", text, reply_to, request_id)` |
+  | In results: `name`, `group` | `title`, `type` (`single` or `group`) |
+  | In results: `last_message_at`, `rowid`, `older_before_id`, `reply_to_rowid` | `last_at`, `message_id`, `next_cursor`, `reply_to` |
+  | In results: `matches[].chat_name`, `matches[].group` | `matches[].chat_title`, `matches[].type` |
 - **Beeper messages after your approval (fork).** With `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` set, a new tool
-  `beeper_send_request` asks you to approve a message on any network behind Beeper. Nothing is sent when it is called. The card
+  `messages_send_request` asks you to approve a message on any network behind Beeper, with `chat_id` as `beeper:` and the id Beeper gives. Nothing is sent when it is called. The card
   shows the chat as Beeper describes it (title, network, group or single), the server asks Beeper again just before it sends and
   stops when the chat changed, and the send goes through the gateway with a key of its own, so the server holds no Beeper token.
   `failed` (the gateway never took the call) puts the request back; anything after the call left is `unclear` and never repeated.

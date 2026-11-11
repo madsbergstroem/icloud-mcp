@@ -4,9 +4,10 @@ One server with iMessage sending and the Beeper gateway on gets a fixed run of r
 chat, the same request again, a group, a request with a reply and a key, and the same key again. For each, the check records the
 tool's answer, then every entry as it is stored (the bytes the owner approves: raw, sha256, recipients, key, action type), both from
 memory and as read back from the queue files, and what approval_status says of each. Ids and times are replaced by labels. The
-result is compared with tests/fixtures/send_requests_golden.json, which was made from the code as it stood before the change
-(`imessage_send_message` and `beeper_send_request`); `send_imessage` and `send_beeper` below are the only lines that name the tools.
-Run with UPDATE_GOLDEN=1 to write it again, and only when what is stored is meant to change.
+result is compared with tests/fixtures/send_requests_golden.json, which was made from the code as it stood before the two send tools
+were merged into `messages_send_request` (then `imessage_send_message` and `beeper_send_request`); `send_imessage` and `send_beeper`
+below are the only lines that name the tool, and they are the only lines that changed. Run with UPDATE_GOLDEN=1 to write it
+again, and only when what is stored is meant to change.
 """
 import base64
 import copy
@@ -35,13 +36,13 @@ async def call(mcp, name, args):
 
 async def send_imessage(mcp, text, *, chat_id=None, handle=None):
     """The one call that queues an iMessage, whatever the tool is called."""
-    return await call(mcp, "imessage_send_message", {"text": text, **({"chat_id": chat_id} if chat_id else {}),
+    return await call(mcp, "messages_send_request", {"text": text, **({"chat_id": f"imessage:{chat_id}"} if chat_id else {}),
                                                      **({"handle": handle} if handle else {})})
 
 
 async def send_beeper(mcp, chat_id, text, **kw):
     """The one call that queues a Beeper message, whatever the tool is called."""
-    return await call(mcp, "beeper_send_request", {"chat_id": chat_id, "text": text, **kw})
+    return await call(mcp, "messages_send_request", {"chat_id": f"beeper:{chat_id}", "text": text, **kw})
 
 
 def stored(box):

@@ -15,8 +15,9 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
 
-from .messages import (ASSISTANT_NOTE, NOTICE, Account, Chat, ChatFilter, Filters, Message, MessagesError, Page, Person,
-                       make_id, split_id)
+from .bridge import BridgeError
+from .messages import (ASSISTANT_NOTE, NOTICE, Account, Chat, ChatFilter, Filters, Match, Matches, Message, MessagesError, Page, Person,
+                       SendRequest, make_id, split_id)
 from .safety import compact, warnings_for
 
 
@@ -98,7 +99,7 @@ class IMessageService:
     # -- which chats exist ---------------------------------------------------------------------
     def _check_chat(self, chat_id: str) -> None:
         if not self._shown(chat_id):
-            raise IMessageError(f"No conversation with chat_id '{chat_id}' (take it from imessage_list_chats).")
+            raise IMessageError(f"No conversation with chat_id '{chat_id}' (take it from messages_list_chats).")
 
     def _shown(self, chat_id: str) -> bool:
         k = _key(chat_id)
@@ -233,7 +234,7 @@ class IMessageService:
                                                                      "exclude": self._exclude()}.items() if v is not None})
         c = got.get("chat") or {}
         if c.get("chat_id") != chat_id:
-            raise IMessageError(f"No conversation with chat_id '{chat_id}' (take it from imessage_list_chats).")
+            raise IMessageError(f"No conversation with chat_id '{chat_id}' (take it from messages_list_chats).")
         return {"chat_id": chat_id, "handle": None, "name": c.get("name", ""), "participants": c.get("participants", []),
                 "group": c.get("group", False), "services": c.get("services", [])}
 
@@ -261,8 +262,8 @@ class IMessageService:
         msg = (f"Conversation '{t['chat_id']}' exists only as SMS, and only iMessage is sent from here. Nothing was sent or "
                "queued. ")
         if alts:
-            return msg + "Send to the same person's iMessage conversation instead: chat_id " + ", ".join(f"'{a}'" for a in alts) + "."
-        return msg + ("Pick a conversation of this person whose services include iMessage (imessage_list_chats), or ask the "
+            return msg + "Send to the same person's iMessage conversation instead: chat_id " + ", ".join(f"'{make_id('imessage', a)}'" for a in alts) + "."
+        return msg + ("Pick a conversation of this person whose services include iMessage (messages_list_chats), or ask the "
                       "owner for their Apple ID address.")
 
     def _permit(self, t: dict[str, Any]) -> None:
@@ -398,7 +399,10 @@ class IMessageBackend:
             before = int(cursor) if cursor else None
         except ValueError:
             raise MessagesError("cursor is the next_cursor of an earlier answer, copied exactly.") from None
-        got = self.svc.read_chat(split_id(chat_id)[1], limit=limit, before_id=before)
+        try:
+            got = self.svc.read_chat(split_id(chat_id)[1], limit=limit, before_id=before)
+        except BridgeError as e:
+            raise _missing(chat_id, e) from None
         c = got["chat"]
         people = tuple(self._person(p) for p in c["participants"] if p)
         by_handle = {p.handle: p for p in people}
@@ -413,3 +417,47 @@ class IMessageBackend:
         chat = Chat(make_id(self.name, c["chat_id"]), c["name"], "group" if c["group"] else "single", self.ACCOUNT.account,
                     participants=people, details=compact({"service": c.get("service")}))
         return Page(chat, tuple(messages), str(got["older_before_id"]) if got.get("older_before_id") else None)
+
+    def search(self, query: str, chat_id: str | None, since: str | None, before: str | None, limit: int) -> Matches:
+        try:
+            got = self.svc.search(query, chat_id=split_id(chat_id)[1] if chat_id else None, limit=limit, since=since, before=before)
+        except BridgeError as e:
+            raise _missing(chat_id or "", e) from None
+        found = []
+        for m in got["matches"]:
+            who = m.get("sender")
+            rest = {k: v for k, v in m.items() if k not in _SEARCH_CORE}
+            found.append(Match(Message(str(m["rowid"]), make_id(self.name, m["chat_id"]), m.get("at"), IMessageBackend._person(who) if who else None,
+                                       bool(m.get("from_me")), m.get("text", ""), details=rest),
+                               m.get("chat_name", ""), "group" if m.get("group") else "single"))
+        return Matches(tuple(found), got.get("scanned"), got.get("complete", True))
+
+
+_SEARCH_CORE = ("id", "rowid", "at", "from_me", "sender", "text", "reply_to", "chat_id", "chat_name", "group")
+
+
+def _missing(chat_id: str, e: BridgeError) -> Exception:
+    """The Mac says a conversation does not exist in its own words, which name a tool this server no longer has. Said here instead.
+    Anything else the Mac says is passed on as it is."""
+    if "no conversation" in str(e).lower():
+        return MessagesError(f"No conversation with chat_id '{chat_id}' (take it from messages_list_chats).")
+    return e
+
+
+class IMessageSender:
+    """Queues an iMessage for the owner's approval, through the same service, queue file and approval card as ever. A reply and a key
+    are things the iMessage queue does not have, so a request that asks for them is refused instead of quietly sent without."""
+    name = "imessage"
+    takes_handle = True
+
+    def __init__(self, service: IMessageService, outbox: Any, public_url: str):
+        self.svc, self.outbox, self.public_url = service, outbox, public_url
+
+    def send_request(self, req: SendRequest) -> dict[str, Any]:
+        if req.reply_to or req.request_id:
+            raise MessagesError("reply_to and request_id are for Beeper chats only. An iMessage request has neither: leave them out. "
+                                "A repeat of an identical request that still waits returns that request; ask approval_status before asking again.")
+        try:
+            return self.svc.send(req.text, chat_id=req.chat_id, handle=req.handle, outbox=self.outbox, public_url=self.public_url)
+        except BridgeError as e:
+            raise _missing(make_id(self.name, req.chat_id) if req.chat_id else "", e) from None
