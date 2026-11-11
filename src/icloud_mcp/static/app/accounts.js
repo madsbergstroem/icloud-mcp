@@ -1,4 +1,4 @@
-// Connected accounts: what the /setup assistant has saved, read only. Adding, changing and disconnecting stay in that assistant.
+// Accounts: what the /setup assistant has saved, read only. Adding, changing and disconnecting stay in that assistant.
 import { get } from "./api.js";
 import { esc, fail, section, tag, titleBlock, wide } from "./ui.js";
 import { page } from "./settings.js";
@@ -23,7 +23,7 @@ class Accounts extends HTMLElement {
       <ion-label class="ion-text-wrap"><h2>${esc(a.label)}</h2><p style="overflow-wrap:anywhere">${esc(a.address)}</p>
         <div class="chips">${defaultTag(a)}${a.read_only ? tag("Read only", "warn") : ""}${tag(a.sign_in)}${a.areas.map((x) => tag(x)).join("")}${a.from_environment ? tag("Set in the server's environment") : ""}</div>
       </ion-label></ion-item>`).join("");
-    this.body.innerHTML = titleBlock("Connected accounts", "Everything your assistant reads from or writes through. Sending always waits for your approval.")
+    this.body.innerHTML = titleBlock("Accounts")
       + (rows ? section("Connected", `<span class="num">${r.accounts.length}</span>`) + `<ion-list class="inset">${rows}</ion-list>`
         : `<div class="empty"><b>No account is connected yet.</b>Open the setup assistant to connect one.</div>`)
       + section("Add or change an account")

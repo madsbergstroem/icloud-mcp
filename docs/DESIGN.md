@@ -53,10 +53,10 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 | After Approve | `icm-item` | Sending (the buttons are off), sent (back to Home with the result), unclear (Messages did not confirm it: nothing is sent again, the page stays until Done), not sent (the request still waits: Try again or Discard) |
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
 | Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear, Withdrawn), chain check and download |
-| Settings | `icm-settings` | One group per section: sign-in and security, connected accounts, iCloud, your Mac (live state of the helper), safety switches, account and server. On a wide screen a list of the sections replaces the side list, with "Back to app" |
-| Connected accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup`. Where an area has more than one account, the default one carries a "Default for …" tag |
+| Settings | `icm-settings` | One group per section: sign-in and security, accounts, iCloud, your Mac (live state of the helper), safety switches, account and server. On a wide screen a list of the sections replaces the side list, with "Back to app" |
+| Accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup`. Where an area has more than one account, the default one carries a "Default for …" tag |
 | One area | `icm-group` | The area's fields as Ionic controls, Save in the toolbar, reset per field |
-| Notifications, Passkeys, Connected apps, Owner password, Server | `icm-*` | One job each |
+| Notifications, Passkeys, AI clients, Owner password, Server | `icm-*` | One job each |
 | Sign in / Confirm it is you | `app.js`, `ui.js` | Passkey first, then the owner password |
 
 At 900px and wider, the tabs become a side list (Home with its count, Activity, Settings, the count waiting by kind, the pause
