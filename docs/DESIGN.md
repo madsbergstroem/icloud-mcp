@@ -163,8 +163,9 @@ gateway (a LiteLLM MCP endpoint) with an execution key that has no user and two 
 own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is what keeps them from sending.
 
 - The card shows the chat as Beeper describes it. The tool asks `get_chat` (no participant names, no messages) and stores the
-  title, the network, group or single, and the number of people with the request. A group adds a warning with its size. The tool
-  takes none of these as parameters.
+  title, the network, and group or single with the request. Beeper's text answer carries no number of people when none are
+  asked for, so the card has none either; an answer with structured data adds it. A group adds a warning. The tool takes none
+  of these as parameters.
 - Just before the send, the executor asks `get_chat` again. If the title, the network, single or group, or the number of people
   differs from what the owner saw, it sends nothing. The entry keeps waiting with the reason, so the owner discards it and the
   agent asks again.

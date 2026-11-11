@@ -41,18 +41,30 @@ class FakeGateway:
         }
         self.send_error = False
         self.slow = 0.0
+        self.structured = False          # False: get_chat answers as Beeper's MCP does, in text; True: as structured data
 
     def new_app(self):
         """A fresh MCP server: the client of beeper.py runs every call in an event loop of its own, and a server's session manager
         cannot move between loops."""
         server = MCPServer("fake-gateway")
 
-        @server.tool(name="beeper-get_chat")
-        def get_chat(chatID: str, maxParticipantCount: int = -1) -> dict:
+        def look(chatID: str, maxParticipantCount: int) -> dict:
             self.chat_calls.append({"chatID": chatID, "maxParticipantCount": maxParticipantCount})
             if chatID not in self.chats:
                 raise ToolError("Chat not found")
             return self.chats[chatID]
+
+        if self.structured:
+            @server.tool(name="beeper-get_chat")
+            def get_chat(chatID: str, maxParticipantCount: int = -1) -> dict:
+                return look(chatID, maxParticipantCount)
+        else:
+            @server.tool(name="beeper-get_chat")
+            def get_chat(chatID: str, maxParticipantCount: int = -1) -> str:
+                c = look(chatID, maxParticipantCount)
+                return (f"\n## {c['title']} (chatID: {c['id']})\nChat on {c['network']} ({c['accountID']}).\n**Type**: {c['type']}\n"
+                        "**Last Activity**: 2026-11-11T18:22:38.000Z\nThis chat is pinned.\n\n# Using this information\n\n"
+                        "- Use search_messages to find specific content in this chat.\n")
 
         @server.tool(name="beeper_send-send_message")
         def send_message(chatID: str, text: str = "", replyToMessageID: str = "") -> str:
@@ -158,7 +170,7 @@ async def test_a_request_waits_with_the_chat_as_beeper_describes_it_and_sends_no
     app, mcp, src = launch(web, hub)
     got = await ask(mcp)
     assert got["status"] == "queued_for_owner_approval" and got["sent"] is False and got["chat"] == {
-        "title": "Example Person", "network": "WhatsApp", "group": False, "people": 2}
+        "title": "Example Person", "network": "WhatsApp", "group": False}
     assert got["approve_at"].endswith(f"/dashboard#/item/external:{got['outbox_id']}") and got["expires_in_seconds"] > 0
     assert gateway.sent == []
     assert gateway.chat_calls == [{"chatID": SINGLE, "maxParticipantCount": 0}]     # details only, no names of people
@@ -167,13 +179,34 @@ async def test_a_request_waits_with_the_chat_as_beeper_describes_it_and_sends_no
     assert q.recipients == [SINGLE]
     d = src.describe(q)
     assert d["title"] == "Beeper message" and d["text"] == WORDS and d["warnings"] == []
-    assert ("Chat", "Example Person") in d["rows"] and ("Network", "WhatsApp") in d["rows"] and ("People", "2") in d["rows"]
+    assert ("Chat", "Example Person") in d["rows"] and ("Network", "WhatsApp") in d["rows"] and not [r for r in d["rows"] if r[0] == "People"]
 
 
-async def test_a_group_shows_its_size_as_a_warning(web, hub, gateway):
+async def test_a_group_carries_a_warning(web, hub, gateway):
     app, mcp, src = launch(web, hub)
-    await ask(mcp, GROUP)
-    assert src.describe(src.pending()[0])["warnings"] == ["A group chat with 12 people: all of them read this."]
+    got = await ask(mcp, GROUP)
+    assert got["chat"] == {"title": "Example Club", "network": "Signal", "group": True}
+    assert src.describe(src.pending()[0])["warnings"] == ["A group chat: everyone in it reads this."]
+
+
+async def test_a_gateway_that_passes_structured_data_gives_the_size_too(web, hub, gateway):
+    gateway.structured = True
+    app, mcp, src = launch(web, hub)
+    got = await ask(mcp, GROUP)
+    assert got["chat"] == {"title": "Example Club", "network": "Signal", "group": True, "people": 12}
+    d = src.describe(src.pending()[0])
+    assert d["warnings"] == ["A group chat with 12 people: all of them read this."] and ("People", "12") in d["rows"]
+
+
+def test_beepers_text_answer_is_read_as_it_comes():
+    text = ("\n## Example Club (chatID: !g:beeper.test)\nChat on Signal (signal.1000000001).\n**Type**: group\n"
+            "**Last Activity**: 2026-11-11T12:18:36.000Z\nThis chat is muted.\n\n# Using this information\n\n- Use search_messages.\n")
+    assert B._chat_of(B.Answer(False, None, text), "!g:beeper.test") == B.Chat("Example Club", "Signal", True, None)
+    assert B._chat_of(B.Answer(False, None, text), "!other:beeper.test") is None            # the answer is for another chat
+    assert B._chat_of(B.Answer(True, None, text), "!g:beeper.test") is None                 # an error is no chat
+    assert B._chat_of(B.Answer(False, None, "No such chat."), "!g:beeper.test") is None
+    two_words = text.replace("Example Club (chatID: !g:beeper.test)", "Club (Berlin) (chatID: !g:beeper.test)").replace("Signal (", "Facebook Messenger (")
+    assert B._chat_of(B.Answer(False, None, two_words), "!g:beeper.test") == B.Chat("Club (Berlin)", "Facebook Messenger", True, None)
 
 
 async def test_what_the_agent_says_about_the_chat_is_not_taken(web, hub, gateway):
@@ -287,6 +320,7 @@ async def test_a_chat_that_changed_since_the_owner_looked_is_not_written_to(web,
 
 
 async def test_more_people_in_the_chat_than_the_owner_saw_stops_it_too(web, hub, gateway):
+    gateway.structured = True                        # only a gateway that passes the count on can notice this
     app, mcp, src = launch(web, hub)
     got = await ask(mcp, GROUP)
     gateway.chats[GROUP]["participants"]["total"] = 40
