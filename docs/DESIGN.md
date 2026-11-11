@@ -108,13 +108,13 @@ file and would become a field of the account.
 
 The approval outbox is meant to grow into one place where the owner approves actions of any kind. The rule stays as it is:
 an agent or an outside system can only ask, only the owner approves, and the server carries it out. So far the core and the
-registry exist; nothing connects to them yet.
+registry exist, and one connector uses them: Beeper (below).
 
 | Layer | What it is | Where |
 | --- | --- | --- |
 | Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `outbox.py`, `dashboard*.py`, `approval_*.py`, `textedit.py`, `audit.py` |
 | Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `actions.py`, `external.py` |
-| Inputs | How a request arrives. Today only `queue_external`, which nothing in the server calls; code in a connector or an input would | later |
+| Inputs | How a request arrives. Today `queue_external`, and the Beeper tool is its one caller; a further connector or an input would be another | `external.py`, `beeper.py` |
 | Outputs | What leaves after a decision: the executor's call and, later, a message about a status change | later |
 
 What every layer keeps:
@@ -153,6 +153,34 @@ Where the seam is not general yet:
 - A source's outbox is found by probing for `mail`, `cal` or `box` on it (in `dashboard.py` and `textedit.py`).
 - `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
   as calendar changes do.
+
+## Beeper
+
+`beeper_send_request(chat_id, text, reply_to, request_id)` asks the owner to approve a message on a network behind Beeper. It exists
+only when `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` are set. Calling it sends nothing: the request waits as an action of type
+`beeper.message.send`, and the owner approves it on the dashboard, as with a mail. The server holds no Beeper token. It calls the
+gateway (a LiteLLM MCP endpoint) with an execution key that has no user and two grants: `send_message` on a server entry of its
+own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is what keeps them from sending.
+
+- The card shows the chat as Beeper describes it. The tool asks `get_chat` (no participant names, no messages) and stores the
+  title, the network, group or single, and the number of people with the request. A group adds a warning with its size. The tool
+  takes none of these as parameters.
+- Just before the send, the executor asks `get_chat` again. If the title, the network, single or group, or the number of people
+  differs from what the owner saw, it sends nothing. The entry keeps waiting with the reason, so the owner discards it and the
+  agent asks again.
+- `BEEPER_SEND_ALLOWLIST` lists the chat ids that may be written to (empty means nobody, `*` any chat). It is checked when the
+  request is queued and again when it is approved. It holds ids because names repeat and change. Choosing a chat by name on the
+  dashboard is not built yet, so for now the ids are typed or pasted.
+- After an approval, `sent` means Beeper accepted the message. `failed` means nothing reached the send tool: the gateway could
+  not be reached, it answered 401 or 403 before the call, or the chat changed. The entry goes back to waiting. `unclear` means
+  the call left and no readable answer came back, or the tool answered with an error. It is never repeated, and the owner is told
+  to look in the chat.
+- `request_id` is the key of `queue_external`: the same key with the same request returns the first entry.
+- Log, audit and push carry the kind, the id, the outcome and the time. The card's title is always "Beeper message". The text,
+  the chat's name and its id appear only in the entry itself, which is removed with it.
+
+Not built yet: choosing a chat by name on the dashboard, the last messages of a chat on the card (another person's words, so a
+switch of its own), and an instance for a second owner, who would have to agree first.
 
 ## Looking at a change
 

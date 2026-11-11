@@ -98,9 +98,9 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
         assert (await c.get("/dashboard/api/state")).json()["kinds"]["external"] == 0
 
 
-async def test_nothing_in_the_server_calls_queue_external_yet():
+async def test_only_the_beeper_tool_calls_queue_external():
     users = [p.name for p in Path(A.__file__).parent.glob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    assert users == []
+    assert users == ["beeper.py"]
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
@@ -391,7 +391,7 @@ async def test_the_owners_list_is_checked_again_when_approving(web, hub):
 async def test_a_type_that_is_gone_cannot_be_approved_but_can_be_discarded(web, hub):
     app, mcp, src, ex = launch(web, hub)
     q = echo(src)
-    del hub._items["test.echo"]                                                              # e.g. a connector was switched off and the server restarted
+    del src.registry._items["test.echo"]                                                     # e.g. a connector was switched off and the server restarted
     async with client(app) as c:
         token = await signed_in(c)
         it = (await c.get(url(q.id))).json()

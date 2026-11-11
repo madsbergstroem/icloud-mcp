@@ -140,7 +140,7 @@ class ExternalApprovals(ApprovalSource):
             raise A.ExternalError("Who this request reaches could not be worked out.") from e
         people = list(dict.fromkeys(p for p in people if p))
         allowed = reg.allowed_set()
-        blocked = [p for p in people if p.casefold() not in allowed]
+        blocked = [] if "*" in allowed else [p for p in people if p.casefold() not in allowed]
         if blocked:
             raise A.ExternalError(f"Not permitted for {at.id}: {', '.join(blocked)}. Tell the owner; only the owner can change who may be reached.")
         return plain, people

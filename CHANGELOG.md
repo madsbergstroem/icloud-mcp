@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Beeper messages after your approval (fork).** With `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` set, a new tool
+  `beeper_send_request` asks you to approve a message on any network behind Beeper. Nothing is sent when it is called. The card
+  shows the chat as Beeper describes it (title, network, group size), the server asks Beeper again just before it sends and
+  stops when the chat changed, and the send goes through the gateway with a key of its own, so the server holds no Beeper token.
+  `failed` (the gateway never took the call) puts the request back; anything after the call left is `unclear` and never repeated.
+  The chats it may reach are a list of ids, `BEEPER_SEND_ALLOWLIST` (empty means nobody, `*` any chat), editable on the dashboard.
+  A `*` in the owner's list of a type now allows every recipient; each server builds its own copy of the action registry. Off
+  unless both settings are present, and then nothing else about the server changes.
 - **Approvals can carry more kinds of action (fork, preparation only).** `actions.py` holds a registry of action types: how a
   request looks on the card, its parameters as a JSON Schema (checked with `jsonschema`, which `mcp` already requires and is now
   listed as a dependency), which parameter is the text the owner may edit, whom it reaches, and an executor that does the work.

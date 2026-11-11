@@ -551,6 +551,9 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `IMESSAGE_NEVER_SEND` | empty | Handles nothing is ever sent to (your own assistant's Apple ID, say); its chat is labelled as the assistant's |
 | `IMESSAGE_ALLOW_SEND`, `IMESSAGE_SEND_REQUIRES_APPROVAL` | false, true | Allow `imessage_send_message`; every iMessage then waits for your approval on the dashboard, whatever the mail setting |
 | `IMESSAGE_SEND_ALLOWLIST` | empty | Who may receive an iMessage (handles or chat ids); empty means nobody, `*` anyone |
+| `BEEPER_GATEWAY_URL`, `BEEPER_EXEC_KEY` | empty | Both set: `beeper_send_request` exists, and an approved Beeper message is sent through the gateway with that key (the server holds no Beeper token). Only in the environment |
+| `BEEPER_SEND_ALLOWLIST` | empty | Chat ids (as Beeper gives them) that may be written to; empty means nobody, `*` any chat. Editable on the dashboard |
+| `BEEPER_CHAT_TOOL`, `BEEPER_SEND_TOOL`, `BEEPER_TIMEOUT_SECONDS` | `beeper-get_chat`, `beeper_send-send_message`, 30 | The gateway's names for Beeper's `get_chat` and for `send_message` on its own server entry, and how long one call may take |
 | `TOOLS` | all | `essential`, areas (`mail`, `calendar`, `contacts`, `reminders`, `notes`, `drive`, `maps`, `imessage`, `health`) and/or tool names to expose; everything else is not registered at all. An unknown name stops the server and lists the real ones |
 | `BRIDGE_TOKEN`, `BRIDGE_BIND` | empty, 127.0.0.1 | Mac helper secret (32+ characters) and the address its private port is published on |
 | `BRIDGE_HOST` | 127.0.0.1 (0.0.0.0 in the Docker image) | Address the bridge binds to inside the process. Loopback unless the helper's Mac reaches this process over the network |

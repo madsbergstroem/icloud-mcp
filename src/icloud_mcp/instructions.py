@@ -101,6 +101,8 @@ _RULES: list[tuple[str, str, tuple[str, ...]]] = [
     ("MESSAGES", "A chat marked assistant_thread is the owner's own assistant: never send to it.", ("imessage_list_chats",)),
     ("MESSAGES", "Send with imessage_send_message only to a conversation or person the owner named here, with wording they "
                  "approved; status queued_for_owner_approval or not_sent_needs_owner means NOT sent.", ("imessage_send_message",)),
+    ("MESSAGES", "Write on Beeper only with beeper_send_request, to a chat the owner named here and with wording they approved; the chat_id "
+                 "comes from search_chats on the Beeper server. status queued_for_owner_approval means NOT sent.", ("beeper_send_request",)),
     ("HEALTH", "Health figures are the owner's private data: use them only for what the owner asked or a task they set up, and "
                "never put them in a message, mail, note or file for anyone else.", ("health_get_summary",)),
     ("HEALTH", "Check freshness before judging: a day without data, or a heart_rate 'from'/'to' span of minutes, means the Watch "
@@ -152,7 +154,8 @@ _TOOL_MAP: list[tuple[str, list[str]]] = [
                "drive_read_file (to read) / drive_get_file (to attach or send)", "drive_write_file / drive_create_folder",
                "drive_move_item / drive_trash_item"]),
     ("Travel and places", ["maps_get_travel_time", "maps_search_places"]),
-    ("Messages", ["imessage_search_messages (find words)", "imessage_list_chats, then imessage_read_chat", "imessage_send_message"]),
+    ("Messages", ["imessage_search_messages (find words)", "imessage_list_chats, then imessage_read_chat", "imessage_send_message",
+                  "beeper_send_request (a Beeper message, sent only after the owner approves)"]),
     ("Health", ["health_get_summary (per day, and sleeps)", "health_get_day (one day in detail)", "health_get_status (how fresh)",
                 "health_refresh_data"]),
     ("Shortcuts", ["shortcuts_list_shortcuts, then shortcuts_run_shortcut"]),
@@ -160,7 +163,7 @@ _TOOL_MAP: list[tuple[str, list[str]]] = [
                               "approval_withdraw (take back a request you queued)"]),
     ("Something fails", ["icloud_check_health", "icloud_get_helper_status (the owner's Mac)"]),
 ]
-_TOOL_NAME = re.compile(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud|approval)_[a-z_]+")
+_TOOL_NAME = re.compile(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud|approval|beeper)_[a-z_]+")
 
 
 def _tool_map(ok) -> str:
