@@ -32,6 +32,7 @@ from . import callctx
 from .approvals import register_outbox_routes
 from .approval_status import ApprovalLedger, register as register_approval_status
 from .approval_withdraw import register as register_approval_withdraw
+from . import beeper
 from .audit import AuditLog
 from .auth import SCOPE, OwnerOAuthProvider, register_routes
 from .setup_page import register_setup_routes
@@ -505,7 +506,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
         _executor = ThreadPoolExecutor(max_workers=s.tool_workers, thread_name_prefix="icloud-tool")
     if _mac_executor is None or _mac_executor._max_workers != min(s.tool_workers, 6):
         _mac_executor = ThreadPoolExecutor(max_workers=min(s.tool_workers, 6), thread_name_prefix="icloud-mac")
-    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token)
+    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.beeper_exec_key)
     _error_ids = (s.username, s.email_address, s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
     _audit, _audit_provider = None, None
     if s.local_mode:
@@ -608,7 +609,7 @@ def _finish(mcp: MCPServer, s: Settings) -> None:
 # (TOOLS=essential). TOOLS also takes area presets (mail, calendar, contacts, reminders, notes, drive) and tool names.
 AREA_PRESETS = {"mail": ("mail_",), "calendar": ("calendar_",), "contacts": ("contacts_",), "reminders": ("reminders_",),
                 "notes": ("notes_",), "drive": ("drive_",), "maps": ("maps_",), "imessage": ("imessage_",),
-                "health": ("health_",)}
+                "health": ("health_",), "beeper": ("beeper_",)}
 ALWAYS_KEPT = ("icloud_check_health", "icloud_get_helper_status", "approval_status")   # the diagnostics, and the way to ask how a queued request ended, stay with any area preset and answer while the server is paused
 KEPT_WITH_AREAS = ALWAYS_KEPT + ("approval_withdraw",)   # an area preset also keeps the way to take a queued request back; unlike the rest it does not answer while paused
 # Former tool names (0.7.0 made every name verb_noun, 0.12.0 area_verb_noun). TOOLS still accepts them (with a warning); they are not tools any more.
@@ -2926,12 +2927,16 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         - safety_warnings_since_start counts how often third-party text looked hostile."""
         return health_report()
 
-    external = None                  # requests of the action types registered in actions.py; nothing registers one yet, so this stays off
+    external, beeper_link = None, None     # requests of the action types registered in actions.py, and the Beeper gateway when it is set up
     if s.dashboard and provider is not None and _audit is not None:
         from . import actions
-        if actions.REGISTRY.types():
+        registry = actions.REGISTRY.copy()         # this server's own, so what its settings turn on stays with it
+        if beeper.configured(s):
+            beeper_link = beeper.connect(s)
+            beeper.register_type(registry, beeper_link, s)
+        if registry.types():
             from .external import ExternalApprovals
-            external = ExternalApprovals(Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="external-outbox.json"), actions.REGISTRY)
+            external = ExternalApprovals(Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="external-outbox.json"), registry)
     mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
                             "imessage": approval["imessage_outbox"],
                             "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,
@@ -2940,6 +2945,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
         register_approval_status(tool, _guard, ledger)
         register_approval_withdraw(tool, _guard, ledger)
+        if beeper_link is not None and external is not None:
+            beeper.register_tool(tool, _guard, beeper_link, external, s)
     if (approval["mail"] or approval["imessage_outbox"]) and provider is not None:
         register_outbox_routes(mcp, provider, s, approval["mail"], approval["imessage"], approval["imessage_outbox"], audit=_audit)
     if s.dashboard and provider is not None and _audit is not None:

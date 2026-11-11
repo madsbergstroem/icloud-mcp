@@ -202,6 +202,12 @@ GROUPS: list[Group] = [
                                                                        ("Drive", "ENABLE_DRIVE"), ("Maps", "ENABLE_MAPS"),
                                                                        ("Messages", "ENABLE_IMESSAGE"), ("Health", "ENABLE_HEALTH"))
                                                     if _on(v(k))) or "Nothing") + " on"),
+    Group("beeper", "Beeper", "Messages on WhatsApp, Signal, Telegram and more, sent after your approval. Needs BEEPER_GATEWAY_URL and BEEPER_EXEC_KEY in the environment.", [
+        Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat.",
+             loosens=_changed, section="Sending"),
+    ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
+                          else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
+                          else "Nobody may be written to")),
     Group("safety", "Safety", "Switches that limit everything at once.", [
         Spec("READ_ONLY", "Read-only server", default="false", help="Nothing can be sent, moved, changed or deleted.", loosens=_to_false),
     ], summary=lambda v: "Read-only: nothing can change" if _on(v("READ_ONLY")) else "Agents may make changes"),

@@ -137,13 +137,20 @@ class ActionRegistry:
                  allowed_recipients: Callable[[], Iterable[str]] | Iterable[str] = ()) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
-        anything: the list is the owner's, and an empty one allows nobody."""
+        anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient."""
         if action_type.id in self._items:
             raise ValueError(f"Action type {action_type.id} is already registered.")
         if not callable(getattr(executor, "execute", None)):
             raise TypeError("An executor has an execute(request) method.")
         allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
         self._items[action_type.id] = Registration(action_type, executor, allowed)
+
+    def copy(self) -> "ActionRegistry":
+        """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the
+        shared one (a process may build several servers)."""
+        other = ActionRegistry()
+        other._items = dict(self._items)
+        return other
 
     def get(self, action_type_id: str) -> Registration | None:
         return self._items.get(action_type_id)
