@@ -28,7 +28,7 @@ from starlette.responses import Response
 
 log = logging.getLogger(__name__)
 
-IMESSAGE_MAX_CHARS = 10000        # the limit imessage_send_message has when it queues a message
+IMESSAGE_MAX_CHARS = 10000        # the limit messages_send_request has when it queues an iMessage
 CALENDAR_MAX_CHARS = 10000
 _NOTHING = "Nothing was changed."
 

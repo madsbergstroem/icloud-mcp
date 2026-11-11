@@ -156,8 +156,9 @@ Where the seam is not general yet:
 
 ## Beeper
 
-`beeper_send_request(chat_id, text, reply_to, request_id)` asks the owner to approve a message on a network behind Beeper. It exists
-only when `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` are set. Calling it sends nothing: the request waits as an action of type
+`messages_send_request` with a `chat_id` that starts with `beeper:` (and `text`, `reply_to`, `request_id`) asks the owner to approve a
+message on a network behind Beeper. Beeper chats can be written to only when `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` are set; the
+id Beeper gets is the one after the prefix. Calling it sends nothing: the request waits as an action of type
 `beeper.message.send`, and the owner approves it on the dashboard, as with a mail. The server holds no Beeper token. It calls the
 gateway (a LiteLLM MCP endpoint) with an execution key that has no user and two grants: `send_message` on a server entry of its
 own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is what keeps them from sending.
@@ -185,41 +186,53 @@ switch of its own), and an instance for a second owner, who would have to agree 
 
 ## Messages
 
-`messages_list_chats` and `messages_read_chat` read the owner's chats through one model, whatever channel a chat lives on. Step 1
-serves iMessage only, from the code the `imessage_*` tools already use. It adds no ability: those tools stay exactly as they were,
-and `tests/test_imessage_golden.py` pins their tool list, their answers and the calls they make to the Mac.
+`messages_list_chats`, `messages_read_chat`, `messages_search` and `messages_send_request` work with the owner's chats through one
+model, whatever channel a chat lives on. They replace the per-channel tools of earlier versions, which no longer exist;
+`CHANGELOG.md` has the table of old and new names. For iMessage they are built on the service those tools used, so what is read,
+what is hidden and what is stored did not change.
 
 | Piece | What it is | Where |
 | --- | --- | --- |
-| Model | `Account`, `Person`, `Chat`, `Message` and `Page`, all frozen. A chat has an id, title, `single` or `group`, account, last activity, unread count and its people; a message has an id, sender, time, text and what it answers | `messages.py` |
-| Backend | A protocol: `name` (the id prefix), `accounts()`, `list_chats(filter)`, `read_chat(chat_id, limit, cursor)`. It knows nothing of tools or filters | `messages.py` |
-| Hub | Finds the backend by prefix, applies the owner's filters, scans the text of others, shapes the answer | `messages.py` |
-| iMessage backend | An adapter over `IMessageService`. Reading, the Mac helper call, matching handles to contacts, the owner's lists and the errors stay in the service; the adapter only changes the shape of what it returns | `imessage.py` |
+| Model | `Account`, `Person`, `Chat`, `Message`, `Page` and the search result, all frozen. A chat has an id, title, `single` or `group`, account, last activity, unread count and its people; a message has an id, sender, time, text and what it answers | `messages.py` |
+| Backend | What reads a channel. A protocol: `name` (the id prefix), `accounts()`, `list_chats(filter)`, `read_chat(chat_id, limit, cursor)`, `search(...)`. It knows nothing of tools or filters | `messages.py` |
+| Sender | What writes to a channel. A protocol: `name`, `takes_handle`, `send_request(request)`. It queues the request in the channel's own approval flow and answers as that flow does | `messages.py` |
+| Hub | Finds the backend or sender by prefix, applies the owner's filters, scans the text of others, shapes the answer | `messages.py` |
+| iMessage | `IMessageBackend` and `IMessageSender` over `IMessageService`. Reading, the Mac helper call, matching handles to contacts, the owner's lists, the queue file, the card and the errors stay in the service | `imessage.py` |
+| Beeper | `BeeperSender`: asks Beeper about the chat, then queues an action of type `beeper.message.send` in the `external` source. There is no Beeper backend yet, so those chats cannot be read here | `beeper.py` |
 
-- A chat id is `<backend>:<the backend's own id>` (`imessage:+15550100`), so ids of two backends cannot collide. A `Chat` cannot be
-  made without the prefix, and the hub refuses an id with no prefix or an unregistered one before anything is asked. A message id is
-  unique within its chat. A cursor is opaque to the agent; for iMessage it is the rowid of the oldest message on the page.
-- The owner's filters are the existing `IMESSAGE_*` settings: hidden chats, "only these chats", the maximum age, service senders
-  and the label on the owner's own assistant's thread. The hub applies them to every backend, to what a caller asks for and to what
-  a backend returns, and refuses a hidden chat before the backend is asked. The iMessage backend also lets its service apply them,
-  so the Mac is not asked for what is hidden. The hub takes the age floor before it asks a backend, so it is never stricter than the
-  backend's own.
-- Titles, previews and messages are other people's words: the answer carries the notice and `safety_warnings` (titles included), and
+- A chat id is `<channel>:<the channel's own id>` (`imessage:+15550100`, `beeper:!room:example.org`), so ids of two channels cannot
+  collide. A `Chat` cannot be made without the prefix, and the hub refuses an id with no prefix or an unregistered one before
+  anything is asked. A message id is unique within its chat. A cursor is opaque to the agent; for iMessage it is the rowid of the
+  oldest message on the page. The channel gets its own id, without the prefix.
+- Reading and searching: the owner's filters are the existing `IMESSAGE_*` settings (hidden chats, "only these chats", the maximum
+  age, service senders, the label on the owner's own assistant's thread). The hub applies them to every backend, to what a caller
+  asks for and to what a backend returns, and refuses a hidden chat before the backend is asked, for reading, searching and
+  writing alike. The iMessage backend also lets its service apply them, so the Mac is not asked for what is hidden. The hub takes
+  the age floor before it asks a backend, so it is never stricter than the backend's own.
+- Writing: the prefix picks the sender, and only `handle` (an address for a new conversation) is limited to a sender that takes it,
+  which is iMessage. `chat_id` and `handle` come alone. The answer is the sender's own, `queued_for_owner_approval` with the same
+  fields as before. What is stored (the queue file entry, the `external` entry), the card, the hashes, the status values, the log
+  lines and the push texts are those of the flow behind the sender, and `tests/test_send_requests_golden.py` pins the stored bytes.
+  `reply_to` and `request_id` belong to Beeper's flow. An iMessage request that carries either is refused: the iMessage queue has
+  neither, and sending without them would change what was asked. The one log line that differs from before is `tool.queued`,
+  which names the tool.
+- Titles, previews and messages are other people's words: the answers carry the notice and `safety_warnings` (titles included), and
   the tool layer cleans invisible characters from all of it, as for every tool.
 - Nothing is stored, and reading is not logged, as with every read tool. A test pins that no title, chat id or text is in the
   activity log or the server log after these tools ran.
 - `account` is an id of the owner's list, never an address. The Messages app is one account, `imessage`. Resolving an account
   among several of one area is the accounts model's later step ("Accounts model" above).
+- `TOOLS` takes `messages` as an area, and `imessage` still names the same tools so a setting that used it keeps the server
+  starting. A tool name from an earlier version in `TOOLS` is accepted with a warning and means its replacement.
 
 What was already general in the iMessage layer: the notice and the scan of text (`safety.py`), the shape of the owner's lists, the
 label on the assistant's thread, the age floor and the paging by "older than". What was not: the id (a handle, or `chatNNN` for a
 group) and how two ids compare (the last nine digits of a number), the rowid cursor, the SMS and iMessage services, which senders
 are "service senders", tapbacks, and the Mac helper itself.
 
-Steps: 1 is this one. 2: read Beeper through a read key at the gateway, as a second backend (`beeper:<id>`), with the same filters.
-3: one request to send, through the approval hub, in place of the send tools. 4: remove the old names (`imessage_list_chats`,
-`imessage_read_chat`). Search across channels comes after the reads. Not in step 1: Beeper, sending, any change to approval or the
-outbox, an account list for several accounts of one backend, a name for the hub.
+Next: read Beeper through a read key at the gateway, as a second backend (`beeper:<id>`) with the same filters. Not built: an account
+list for several accounts of one channel, a name for the hub, and a way to list or read chats of a channel that can only be written
+to.
 
 ## Looking at a change
 

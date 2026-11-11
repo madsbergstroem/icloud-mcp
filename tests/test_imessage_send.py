@@ -121,15 +121,15 @@ def test_release_rechecks_the_lists_and_only_requeues_what_the_mac_never_got(s, 
     assert m.release(box, q)["status"] == "sent" and m.bridge.calls[-1] == ("imessage_send", {"handle": "anna@example.org", "text": "Third"})
 
 
-def test_the_tool_exists_only_when_sending_is_allowed_and_writable(s):
+def test_the_send_tool_exists_only_when_sending_is_allowed_and_writable(s):
     def names(settings):
         async def go():
             mcp, _ = create_server(settings)
             return {t.name for t in await mcp.list_tools()}
         return asyncio.run(go())
-    assert "imessage_send_message" in names(s)
-    assert "imessage_send_message" not in names(dataclasses.replace(s, imessage_allow_send=False))
-    assert "imessage_send_message" not in names(dataclasses.replace(s, read_only=True))
+    assert "messages_send_request" in names(s)
+    assert "messages_send_request" not in names(dataclasses.replace(s, imessage_allow_send=False))
+    assert "messages_send_request" not in names(dataclasses.replace(s, read_only=True))
 
 
 async def test_the_outbox_page_shows_and_sends_a_queued_imessage(s, monkeypatch):
@@ -137,7 +137,7 @@ async def test_the_outbox_page_shows_and_sends_a_queued_imessage(s, monkeypatch)
     mcp, provider = create_server(s)
     sent = []
     mcp._icloud_bridge.call = lambda op, a=None: read_one(CHATS, a) if op == "imessage_read" else (sent.append((op, a)) or {"status": "sent"})
-    r = json.loads((await mcp.call_tool("imessage_send_message", {"text": "Lunch <b>tomorrow</b>?", "handle": "anna@example.org"})).content[0].text)
+    r = json.loads((await mcp.call_tool("messages_send_request", {"text": "Lunch <b>tomorrow</b>?", "handle": "anna@example.org"})).content[0].text)
     assert r["status"] == "queued_for_owner_approval" and not sent
     app = mcp.streamable_http_app(host="0.0.0.0")
     async with app.router.lifespan_context(app):

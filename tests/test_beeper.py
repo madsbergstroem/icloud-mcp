@@ -140,13 +140,13 @@ def launch(web, hub, *, allow=f"{SINGLE},{GROUP}", **env):
 
 
 async def ask(mcp, chat_id=SINGLE, text=WORDS, **kw):
-    return json.loads((await mcp.call_tool("beeper_send_request", {"chat_id": chat_id, "text": text, **kw})).content[0].text)
+    return json.loads((await mcp.call_tool("messages_send_request", {"chat_id": f"beeper:{chat_id}", "text": text, **kw})).content[0].text)
 
 
 # -- switched on only when set up ------------------------------------------------------------------------------------------------
 async def test_without_the_gateway_settings_there_is_no_tool_and_no_source(web, hub):
     app, mcp, *_ = web()
-    assert "beeper_send_request" not in [t.name for t in mcp._tool_manager.list_tools()]
+    assert "messages_send_request" not in [t.name for t in mcp._tool_manager.list_tools()]
     assert "external" not in mcp._icloud_dashboard.sources
 
 
@@ -155,12 +155,12 @@ async def test_the_gateway_address_and_the_key_are_both_needed(web, hub, missing
     env = {"BEEPER_GATEWAY_URL": URL, "BEEPER_EXEC_KEY": KEY, "BEEPER_SEND_ALLOWLIST": "*"}
     env.pop(missing)
     app, mcp, *_ = web(**env)
-    assert "beeper_send_request" not in [t.name for t in mcp._tool_manager.list_tools()]
+    assert "messages_send_request" not in [t.name for t in mcp._tool_manager.list_tools()]
 
 
 async def test_with_the_settings_the_tool_and_the_source_appear_and_the_shared_registry_stays_empty(web, hub, gateway):
     app, mcp, src = launch(web, hub)
-    assert "beeper_send_request" in [t.name for t in mcp._tool_manager.list_tools()]
+    assert "messages_send_request" in [t.name for t in mcp._tool_manager.list_tools()]
     assert src.registry.get(B.ACTION_ID) is not None and hub.types() == []       # the server's own copy took the type
     assert src.box.path.name == "external-outbox.json"
 
@@ -211,7 +211,7 @@ def test_beepers_text_answer_is_read_as_it_comes():
 
 async def test_what_the_agent_says_about_the_chat_is_not_taken(web, hub, gateway):
     app, mcp, src = launch(web, hub)
-    await mcp.call_tool("beeper_send_request", {"chat_id": SINGLE, "text": WORDS, "chat_title": "The Bank", "network": "Mail"})   # not parameters of the tool
+    await mcp.call_tool("messages_send_request", {"chat_id": f"beeper:{SINGLE}", "text": WORDS, "chat_title": "The Bank", "network": "Mail"})   # not parameters of the tool
     (q,) = src.pending()
     shown = dict(src.describe(q)["rows"])
     assert shown["Chat"] == "Example Person" and shown["Network"] == "WhatsApp"                     # what Beeper said
