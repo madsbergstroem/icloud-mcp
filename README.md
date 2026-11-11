@@ -194,7 +194,7 @@ Claude Desktop: Settings → Developer → Edit Config, add this to `claude_desk
 If your client can't find `uvx`, use its full path (`which uvx`). Without uv, `pip install icloud-mcp-server` and use `icloud-mcp` as the command.
 
 > [!TIP]
-> **Fewer tools, better choices.** Clients pick the right tool more reliably from a short list. Add `TOOLS=essential` for a core of 19: search, read and reply to mail; list events, find free time and create or update events; find contacts; the main Reminders, Notes and Drive tools; and the health check. Add exact names to it as needed, for example `TOOLS=essential,mail_move_messages`, or pick whole areas: `TOOLS=mail`, `TOOLS=mail,calendar` (also `contacts`, `reminders`, `notes`, `drive`, `maps`, `imessage`, `health`; the health check always stays).
+> **Fewer tools, better choices.** Clients pick the right tool more reliably from a short list. Add `TOOLS=essential` for a core of 19: search, read and reply to mail; list events, find free time and create or update events; find contacts; the main Reminders, Notes and Drive tools; and the health check. Add exact names to it as needed, for example `TOOLS=essential,mail_move_messages`, or pick whole areas: `TOOLS=mail`, `TOOLS=mail,calendar` (also `contacts`, `reminders`, `notes`, `drive`, `maps`, `imessage`, `messages`, `health`; the health check always stays).
 
 **How sending works locally.** There is no approval page, so with the default `SEND_REQUIRES_APPROVAL=true` every message your AI sends is saved to your **Drafts** folder instead, and the result says so. You review it in Mail and press Send yourself. Set `SEND_REQUIRES_APPROVAL=false` to let it send directly; your client's own approval prompt is then the only check.
 
@@ -318,7 +318,7 @@ Most clients can also ask you before a tool runs (in Claude, "ask before use" pe
 
 ## Tools
 
-**92 tools.** 50 for Mail, Calendar, Contacts, the clock and the health check, 40 more with the optional Mac helper, and 2 for Shortcuts you allowlist. Open a section for the details.
+**94 tools.** 50 for Mail, Calendar, Contacts, the clock and the health check, 42 more with the optional Mac helper, and 2 for Shortcuts you allowlist. Open a section for the details.
 
 Every name is `area_verb_noun` (`mail_send_message`, `calendar_create_event`). Eleven tools were renamed in 0.7.0 and 36 in 0.12.0 (a verb with no noun, such as `mail_send`) to follow that pattern; `TOOLS` still accepts the old names and logs the new one.
 
@@ -429,10 +429,11 @@ Every name is `area_verb_noun` (`mail_send_message`, `calendar_create_event`). E
 </details>
 
 <details>
-<summary><b>Messages</b> &nbsp;·&nbsp; 4 tools, with the Mac helper</summary>
+<summary><b>Messages</b> &nbsp;·&nbsp; 6 tools, with the Mac helper</summary>
 
-`imessage_list_chats`, `imessage_read_chat`, `imessage_search_messages`, `imessage_send_message` (off by default)
+`messages_list_chats`, `messages_read_chat`, `imessage_list_chats`, `imessage_read_chat`, `imessage_search_messages`, `imessage_send_message` (off by default)
 
+- `messages_list_chats` and `messages_read_chat` read chats through one model that other channels will join: a chat id starts with its channel (`imessage:…`), and you can narrow a list by account, one-to-one or group, unread, a word, a date. For iMessage they show what `imessage_list_chats` and `imessage_read_chat` show, which stay as they are, and the same settings below steer both. Archived chats are not listed yet.
 - Your own iMessage and SMS history on your Mac, read-only: conversations with who is in them (matched to your contacts), messages with reactions, delivery and read state and attachments by name, and search across the whole history (case and accents ignored).
 - Only your own Messages database is read (the Mac user the helper runs as); another user on the Mac is never touched. The helper's Python needs Full Disk Access, the same grant iCloud Drive uses.
 - Messages are other people's words: results carry the untrusted-data notice and safety warnings. `IMESSAGE_HIDDEN_CHATS` hides chats completely, service senders such as banks and one-time codes are hidden by default, `IMESSAGE_MAX_AGE_DAYS` limits how far back, and `IMESSAGE_NEVER_SEND` labels your own assistant's thread. Turn it on with `ENABLE_IMESSAGE=true`.
@@ -554,7 +555,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `BEEPER_GATEWAY_URL`, `BEEPER_EXEC_KEY` | empty | Both set: `beeper_send_request` exists, and an approved Beeper message is sent through the gateway with that key (the server holds no Beeper token). Only in the environment |
 | `BEEPER_SEND_ALLOWLIST` | empty | Chat ids (as Beeper gives them) that may be written to; empty means nobody, `*` any chat. Editable on the dashboard |
 | `BEEPER_CHAT_TOOL`, `BEEPER_SEND_TOOL`, `BEEPER_TIMEOUT_SECONDS` | `beeper-get_chat`, `beeper_send-send_message`, 30 | The gateway's names for Beeper's `get_chat` and for `send_message` on its own server entry, and how long one call may take |
-| `TOOLS` | all | `essential`, areas (`mail`, `calendar`, `contacts`, `reminders`, `notes`, `drive`, `maps`, `imessage`, `health`) and/or tool names to expose; everything else is not registered at all. An unknown name stops the server and lists the real ones |
+| `TOOLS` | all | `essential`, areas (`mail`, `calendar`, `contacts`, `reminders`, `notes`, `drive`, `maps`, `imessage`, `messages`, `health`) and/or tool names to expose; everything else is not registered at all. An unknown name stops the server and lists the real ones |
 | `BRIDGE_TOKEN`, `BRIDGE_BIND` | empty, 127.0.0.1 | Mac helper secret (32+ characters) and the address its private port is published on |
 | `BRIDGE_HOST` | 127.0.0.1 (0.0.0.0 in the Docker image) | Address the bridge binds to inside the process. Loopback unless the helper's Mac reaches this process over the network |
 | `SHORTCUTS_ALLOW` | empty | Exact names of Shortcuts the assistant may run through the Mac helper, separated by commas (or by `;` when a name contains a comma); the Mac must list them too (see below) |

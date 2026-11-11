@@ -5,6 +5,18 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **One pair of tools to read chats, whatever the channel (fork, step 1).** `messages_list_chats` (filters `account`, `type`,
+  `unread`, `query`, `since`, `limit`) and `messages_read_chat` (`chat_id`, `limit`, `cursor`) give for iMessage what
+  `imessage_list_chats` and `imessage_read_chat` give, in a model that other channels can use later: a chat id starts with its
+  backend (`imessage:…`, an id without a known prefix is refused), a message has a `message_id`, and paging is a `cursor` taken
+  from `next_cursor`. They exist when `ENABLE_IMESSAGE` is on, stop with a pause, and `TOOLS=messages` picks them as an area. The
+  `IMESSAGE_*` settings steer them as before (hidden chats, "only these chats", maximum age, service senders, the label on your
+  own assistant's thread), and the hub applies those lists itself, so they will hold for a channel added later. Titles are other
+  people's text, like messages: they count towards `safety_warnings`. Archived chats are not listed yet. Nothing is stored and
+  reading is still not logged; a test checks that no title, chat id or text reaches the activity log or the server log.
+  The `imessage_*` tools did not change (`tests/test_imessage_golden.py` pins their tool list, answers and the calls to the Mac).
+  The served instructions and the tool map name the new tools. Not in this change: other channels, sending, any change to approval,
+  removing the old tools. `docs/DESIGN.md` has a Messages section with the steps that follow.
 - **Beeper messages after your approval (fork).** With `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` set, a new tool
   `beeper_send_request` asks you to approve a message on any network behind Beeper. Nothing is sent when it is called. The card
   shows the chat as Beeper describes it (title, network, group or single), the server asks Beeper again just before it sends and

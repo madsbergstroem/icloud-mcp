@@ -128,7 +128,7 @@ def test_the_tool_map_names_every_tool_and_only_real_ones(monkeypatch, tmp_path)
     text, tools = _served(_every_area(monkeypatch, tmp_path))
     start = text.index("WHICH TOOL")
     tool_map = text[start:text.index("\n\n", start)]
-    named = set(re.findall(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud)_[a-z_]+", text)) - {"calendar_event"}
+    named = set(re.findall(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|messages|health|shortcuts|icloud)_[a-z_]+", text)) - {"calendar_event"}
     assert tools <= set(re.findall(r"\b[a-z]+_[a-z_]+", tool_map)), sorted(tools - set(re.findall(r"\b[a-z]+_[a-z_]+", tool_map)))
     assert named <= tools, sorted(named - tools)
     assert len(tool_map) < 3500                                       # a map, not a manual
@@ -140,7 +140,7 @@ def test_the_tool_map_shrinks_with_the_tool_set(monkeypatch, tmp_path):
     s = _every_area(monkeypatch, tmp_path)
     for variant in ({"read_only": True}, {"tools": ("essential",)}, {"enable_drive": False, "enable_health": False}):
         text, tools = _served(dataclasses.replace(s, **variant))
-        named = set(re.findall(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|health|shortcuts|icloud)_[a-z_]+", text)) - {"calendar_event"}
+        named = set(re.findall(r"\b(?:mail|calendar|contacts|reminders|notes|drive|maps|imessage|messages|health|shortcuts|icloud)_[a-z_]+", text)) - {"calendar_event"}
         assert named <= tools, (variant, sorted(named - tools))
     text, tools = _served(dataclasses.replace(s, tools=("essential",)))
     assert "calendar_update_event" in text and "calendar_delete_event" not in text        # half of "update / delete" survives
