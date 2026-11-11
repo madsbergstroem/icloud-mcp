@@ -6,7 +6,7 @@ An agent calls `beeper_send_request`. Nothing is sent: the request waits on the 
 no Beeper token and no copy of the owner's chats.
 
 What the card shows comes from Beeper, not from the agent: the tool asks Beeper for the chat (`get_chat`, metadata only, no
-participants' names and no messages) and stores title, network and size with the request. The executor asks again just before
+participants' names and no messages) and stores title, network and group or single with the request (and the size, when the answer has one). The executor asks again just before
 it sends, and when the chat is not the one the owner looked at (renamed, another network, more people) it sends nothing and the
 entry stays, so the owner discards it and asks again.
 
@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any, Callable, Mapping
@@ -133,14 +134,33 @@ def _answer(result: Any) -> Answer:
     return Answer(bool(getattr(result, "is_error", False)), data, text)
 
 
-def _chat_of(answer: Answer) -> Chat | None:
-    """The chat as Beeper describes it (GET /v1/chats/{id}: title, type 'single' or 'group', network, participants.total), or None
-    when the answer is not a chat."""
+_TITLE_LINE = re.compile(r"^## (?P<title>.+) \(chatID: (?P<id>[^)]+)\)\s*$", re.M)
+_NETWORK_LINE = re.compile(r"^Chat on (?P<network>.+?) \((?P<account>\S+)\)", re.M)
+_TYPE_LINE = re.compile(r"^\*\*Type\*\*: (?P<type>single|group)\s*$", re.M)
+
+
+def _chat_from_text(text: str, chat_id: str) -> Chat | None:
+    """Beeper's MCP answers get_chat as text: `## <title> (chatID: <id>)`, `Chat on <network> (<account>)`, `**Type**: single|group`.
+    With no participants asked for there is no count. The id in the answer must be the one asked for."""
+    title, kind = _TITLE_LINE.search(text), _TYPE_LINE.search(text)
+    if title is None or kind is None or title["id"].strip() != chat_id.strip():
+        return None
+    net = _NETWORK_LINE.search(text)
+    return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", None)
+
+
+def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
+    """The chat as Beeper describes it: from its text answer, or from structured data (title, type 'single' or 'group', network,
+    participants.total) when a gateway passes that on. None when the answer is not a chat."""
+    if answer.is_error:
+        return None
     d = answer.data
     if isinstance(d, Mapping) and isinstance(d.get("chat"), Mapping):
         d = d["chat"]
-    if answer.is_error or not isinstance(d, Mapping) or not isinstance(d.get("title"), str) or d.get("type") not in ("single", "group"):
-        return None
+    if not isinstance(d, Mapping) or not isinstance(d.get("title"), str) or d.get("type") not in ("single", "group"):
+        # not structured chat data. A text answer may still come wrapped as {"result": "<text>"} (how a string result is passed on)
+        text = answer.text or (d.get("result") if isinstance(d, Mapping) and isinstance(d.get("result"), str) else "")
+        return _chat_from_text(text, chat_id) if text else None
     parts = d.get("participants")
     total = parts.get("total") if isinstance(parts, Mapping) else None
     if not isinstance(total, int) or isinstance(total, bool):
@@ -162,7 +182,7 @@ class Beeper:
     def chat(self, chat_id: str) -> Chat | None:
         """The chat as Beeper has it now (names of people are not asked for), or None when Beeper does not know it or answers with
         something that is no chat. GatewayError when the gateway gives no answer."""
-        return _chat_of(self.gateway.call(self.chat_tool, {"chatID": chat_id, "maxParticipantCount": 0}))
+        return _chat_of(self.gateway.call(self.chat_tool, {"chatID": chat_id, "maxParticipantCount": 0}), chat_id)
 
     def send(self, chat_id: str, text: str, reply_to: str | None) -> Answer:
         return self.gateway.call(self.send_tool, {"chatID": chat_id, "text": text, **({"replyToMessageID": reply_to} if reply_to else {})})
@@ -191,15 +211,13 @@ def _warnings(p: Mapping[str, Any]) -> list[str]:
     if p.get("is_group"):
         n = p.get("participants")
         out.append(f"A group chat with {n} people: all of them read this." if isinstance(n, int) else "A group chat: everyone in it reads this.")
-    elif p.get("participants") is None:
-        out.append("Beeper did not say who is in this chat.")
     return out
 
 
 ACTION_TYPE = A.ActionType(
     id=ACTION_ID, title="Beeper message", badge="Beeper", approve_label="Send",
     params_schema=SCHEMA,
-    rows=(("Chat", "chat_title"), ("Network", "network"), ("People", "participants"), ("Replying to", "reply_to")),
+    rows=(("Chat", "chat_title"), ("Network", "network"), ("People", "participants"), ("Replying to", "reply_to")),   # People only when known
     text_field="text",
     recipients=lambda p: [p["chat_id"]],
     warnings=_warnings,

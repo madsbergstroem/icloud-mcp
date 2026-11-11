@@ -7,7 +7,7 @@ Update the Mac helper before the server whenever its version changes.
 
 - **Beeper messages after your approval (fork).** With `BEEPER_GATEWAY_URL` and `BEEPER_EXEC_KEY` set, a new tool
   `beeper_send_request` asks you to approve a message on any network behind Beeper. Nothing is sent when it is called. The card
-  shows the chat as Beeper describes it (title, network, group size), the server asks Beeper again just before it sends and
+  shows the chat as Beeper describes it (title, network, group or single), the server asks Beeper again just before it sends and
   stops when the chat changed, and the send goes through the gateway with a key of its own, so the server holds no Beeper token.
   `failed` (the gateway never took the call) puts the request back; anything after the call left is `unclear` and never repeated.
   The chats it may reach are a list of ids, `BEEPER_SEND_ALLOWLIST` (empty means nobody, `*` any chat), editable on the dashboard.
