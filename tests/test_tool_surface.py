@@ -10,10 +10,12 @@ from icloud_mcp.config import Settings
 from icloud_mcp.server import create_server, slim_schema
 
 SCHEMA_BUDGET = 52000       # raised for 0.9.0 and 0.10.0 (about 21 new tools), see docs/PERFORMANCE.md
-LIST_BUDGET = 185300        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
+LIST_BUDGET = 186400        # the whole tools/list result: the full-description change gave every tool a full description (use, parameters, behavior,
                             # returns, errors) for agents and registry scoring, 80,000 before; see docs/PERFORMANCE.md.
                             # 182,500 for approval_status, the one tool that answers how a queued request ended (about 2,000 characters);
-                            # 185,300 for approval_withdraw, the one tool that takes a waiting request back (about 2,500 bytes with its schema)
+                            # 185,300 for approval_withdraw, the one tool that takes a waiting request back (about 2,500 bytes with its schema);
+                            # 186,400 for icloud_list_accounts, every account of the hub in one call (about 1,000 bytes). messages_archive_chat is
+                            # only listed where a plugin reads chats, so it is not in this server (test_hub_tools checks its own surface)
 
 
 @pytest.fixture
@@ -116,7 +118,7 @@ def test_the_safety_sentences_survive(mcp, tool, param, phrase):
 
 # ------------------------------------------------------------------------------------------------ names
 PREFIXES = ("mail", "calendar", "contacts", "reminders", "notes", "drive", "shortcuts", "icloud", "maps", "imessage", "messages", "health")
-VERBS = {"append", "check", "complete", "create", "delete", "extract", "find", "forward", "get", "list", "mark", "move", "read",
+VERBS = {"append", "archive", "check", "complete", "create", "delete", "extract", "find", "forward", "get", "list", "mark", "move", "read",
          "refresh", "reply", "respond", "run", "search", "send", "trash", "undo", "unsubscribe", "update", "write"}
 
 

@@ -106,6 +106,9 @@ class FakeGateway:
         self.messages = made_up_messages()
         self.list_calls: list[dict] = []
         self.msearch_calls: list[dict] = []
+        self.archived: dict[str, bool] = {}   # what archive_chat set, by chat id
+        self.archive_calls: list[dict] = []
+        self.archive_error = False
 
     def new_app(self):
         """A fresh MCP server: the client of beeper.py runs every call in an event loop of its own, and a server's session manager
@@ -185,6 +188,15 @@ class FakeGateway:
             self.accounts_calls += 1
             return self.accounts_answer
 
+        @server.tool(name="beeper-archive_chat")
+        def archive_chat(chatID: str, archived: bool = True) -> str:
+            # Beeper's archive_chat (schema as the gateway lists it: chatID, archived)
+            self.archive_calls.append({"chatID": chatID, "archived": archived})
+            if self.archive_error or chatID not in self.chats:
+                raise ToolError("Could not archive")
+            self.archived[chatID] = archived
+            return f"Chat {'archived' if archived else 'unarchived'}."
+
         @server.tool(name="beeper_send-send_message")
         def send_message(chatID: str, text: str = "", replyToMessageID: str = "") -> str:
             self.sent.append({"chatID": chatID, "text": text, "replyToMessageID": replyToMessageID})
@@ -212,9 +224,9 @@ class FakeGateway:
             m = await receive()
             body, more = body + m.get("body", b""), m.get("more_body", False)
         is_call = b'"tools/call"' in body
-        # the grants as the gateway has them: the exec key sends and reads a chat's details; the read key reads accounts and chats
-        # and can never send
-        grants = {f"Bearer {KEY}": (b"beeper_send-send_message", b'"beeper-get_chat"'),
+        # the grants as the gateway has them: the exec key sends, reads a chat's details and archives; the read key reads accounts
+        # and chats and can never send or archive
+        grants = {f"Bearer {KEY}": (b"beeper_send-send_message", b'"beeper-get_chat"', b"beeper-archive_chat"),
                   f"Bearer {READ_KEY}": (b"beeper-get_accounts", b'"beeper-get_chat"', b"beeper-search_chats", b"beeper-list_messages",
                                          b"beeper-search_messages")}
         wrong_grant = is_call and not any(g in body for g in grants.get(key, ()))

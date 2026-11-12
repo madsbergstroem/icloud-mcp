@@ -11,11 +11,12 @@ A plugin declares data and implementations; the core does the rest:
   the Connect card) and `connection` (how it is connected: by whoever runs the server, or later with fields and a sign-in check);
 - its settings as data: `settings_keys` (the environment names the owner may change on the dashboard) and `settings_group()` (a
   `settings.Group`, so the dashboard draws it; plugins ship no JavaScript);
-- `secrets(s)` (values masked in every error), `health(s)` (an area of icloud_check_health) and `accounts(s)` (what the
-  service page lists: networks, mailboxes ...);
+- `secrets(s)` (values masked in every error), `health(s)` (an area of icloud_check_health), `accounts(s)` (what the
+  service page lists: networks, mailboxes ...) and `agent_accounts(s)` (its accounts as agents see them in icloud_list_accounts,
+  next to the mail, calendar and contacts accounts the core lists itself);
 - the capabilities it offers, each with an interface of its own in the core (below). `messages` is the one in use: reading
-  through a `messages.Backend`, sending through a `messages.Sender` with an `actions.ActionType` and an `actions.Executor`, and
-  finding chats for the recipient picker. `mail`, `calendar` and `contacts` are interfaces only so far, shaped after what
+  through a `messages.Backend`, sending through a `messages.Sender` with an `actions.ActionType` and an `actions.Executor`,
+  finding chats for the recipient picker, and archiving a chat through a `messages.Archiver` (optional). `mail`, `calendar` and `contacts` are interfaces only so far, shaped after what
   MailService, CalendarService and ContactsService do, so the IMAP, CalDAV and CardDAV code can become their first plugin.
 
 The guarantees stay in the core and a plugin cannot get round them: a request to send is queued with its canonical hash, the
@@ -66,6 +67,15 @@ class Listing:
     state: str = "ok"           # the plugin's own word for how reading went ("ok", "unreachable" ...), for logs and tests
 
 
+@dataclass(frozen=True)
+class AccountRef:
+    """One account of a service as agents see it (icloud_list_accounts): the service's id for it (what `account` takes in the chat
+    tools), the network it is on and the owner's name there. Never a password, a key, an address or a phone number."""
+    account: str
+    network: str = ""
+    name: str = ""
+
+
 # -- capabilities ---------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ChatRef:
@@ -99,6 +109,11 @@ class MessagesCapability:
     - reading_on(s): whether the owner has reading on (backend(s) then gives a Backend)
     - reading_keys: the plugin's reading settings the core's picker edits, by role: "on" (the switch), "hidden" and "visible"
       (chat lists in the shape of recipients_key), "max_age" (days), "short_codes" (hide service senders). Empty: not offered.
+    - archive(s): a messages.Archiver that archives or unarchives a chat by the service's own id, or None when the plugin cannot
+      here. Optional. The core offers messages_archive_chat only while this plugin's chats are read here (reading on, so its
+      backend joined the hub) and the server is not read only; it refuses a chat the owner keeps from agents before the archiver
+      is asked. Archiving is reversible and sends nothing, so it runs without the owner's approval; the core logs it (tool,
+      backend, result, never a title).
     """
     prefix: str
     action_type: Any = None
@@ -116,6 +131,7 @@ class MessagesCapability:
     sending_on: Callable[[Any], bool] = lambda s: False
     reading_on: Callable[[Any], bool] | None = None
     reading_keys: Mapping[str, str] = field(default_factory=dict)
+    archive: Callable[[Any], Any] | None = None
 
 
 @runtime_checkable
@@ -173,6 +189,9 @@ class Plugin:
     secrets: Callable[[Any], Iterable[str]] = lambda s: ()
     health: Callable[[Any], dict[str, Any]] | None = None   # an area of icloud_check_health: {"ok", ...}; may raise, the core reports it
     accounts: Callable[[Any], Callable[[], Listing]] | None = None   # built once per server; the page calls what it returns
+    # its accounts for icloud_list_accounts, as (state, accounts): state "ok" or why nothing could be read ("no_read_key",
+    # "unreachable" ...). Never raises; never a password, key, address or number. None: the plugin lists no accounts to agents.
+    agent_accounts: Callable[[Any], tuple[str, list[AccountRef]]] | None = None
 
 
 def _load(name: str, target: str) -> Plugin | None:

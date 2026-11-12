@@ -8,12 +8,17 @@ three rules on the dashboard, and a chat must pass all three: the list (BEEPER_S
 (BEEPER_SEND_NETWORKS, `*` for all) and group chats (BEEPER_SEND_GROUPS, off by default; a group must be on the list by its id
 even then, `*` never covers one). The recipient picker names the chats on the list and finds new ones with the read key, on the
 gateway's server entry BEEPER_READ_SERVER; nothing of it is stored, and the read key never sends.
+
+Two more parts of the contract: `archive` (archive.py) archives and unarchives a chat with the exec key, offered while reading is
+on; `agent_accounts` lists the networks Beeper is signed in to for icloud_list_accounts (network, the owner's name there, account
+id; read with the read key, never the address or the number Beeper also gives).
 """
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping
 
-from .. import Capabilities, ChatRef, Listing, MessagesCapability, Plugin
+from .. import AccountRef, Capabilities, ChatRef, Listing, MessagesCapability, Plugin
+from . import archive as AR
 from . import gateway as G
 from . import reading as R
 
@@ -59,6 +64,17 @@ def _accounts(s: Any) -> Any:
         return Listing("Networks", items, problem,
                        ("Tap a network to see its account ID. " if items else "") + "New networks are added in the Beeper app.", got["state"])
     return listing
+
+
+_account_readers: dict[int, tuple[Any, Any]] = {}       # one accounts reader per server, so agents' calls share its few minutes
+
+
+def _agent_accounts(s: Any) -> tuple[str, list[AccountRef]]:
+    got = _account_readers.get(id(s))
+    if got is None or got[0] is not s:
+        got = _account_readers[id(s)] = (s, G.accounts_reader(s))
+    read = got[1].read()
+    return read["state"], [AccountRef(n["account_id"], n["network"], n["user"]) for n in read["networks"]]
 
 
 def _health(s: Any) -> dict[str, Any]:
@@ -137,12 +153,14 @@ def plugin() -> Plugin:
             sending_on=G.configured,
             backend=R.backend, reading_on=R.reading_on,
             reading_keys={"on": R.READ, "hidden": R.HIDDEN, "visible": R.VISIBLE, "max_age": R.MAX_AGE, "short_codes": R.SHORT_CODES},
+            archive=AR.archiver,
         )),
         settings_keys=frozenset({ALLOW, NETWORKS, GROUPS, R.READ, R.HIDDEN, R.VISIBLE, R.MAX_AGE, R.SHORT_CODES}),
-        env_keys=frozenset({"BEEPER_READ_SERVER", "BEEPER_ACCOUNTS_TOOL"}),
+        env_keys=frozenset({"BEEPER_READ_SERVER", "BEEPER_ACCOUNTS_TOOL", AR.ARCHIVE_TOOL}),
         settings_group=_settings_group,
         enabled=lambda s: bool(s.beeper_gateway_url),
         secrets=lambda s: (s.beeper_exec_key, s.beeper_read_key),
         health=_health,
         accounts=_accounts,
+        agent_accounts=_agent_accounts,
     )

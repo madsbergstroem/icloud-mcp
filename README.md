@@ -429,12 +429,13 @@ Every name is `area_verb_noun` (`mail_send_message`, `calendar_create_event`). E
 </details>
 
 <details>
-<summary><b>Messages</b> &nbsp;·&nbsp; 4 tools, with the Mac helper</summary>
+<summary><b>Messages</b> &nbsp;·&nbsp; 5 tools, with the Mac helper</summary>
 
-`messages_list_chats`, `messages_read_chat`, `messages_search`, `messages_send_request` (off by default)
+`messages_list_chats`, `messages_read_chat`, `messages_search`, `messages_send_request`, `messages_archive_chat` (off by default)
 
 - One set of tools for every channel's chats. A chat id starts with its channel: `imessage:…` for your Messages, `beeper:…` for a chat on Beeper. `messages_list_chats` narrows by account, one-to-one or group, unread, a word and a date; `messages_read_chat` pages back with a cursor; `messages_search` finds a phrase across chats, in one account or one chat. Archived chats are not listed. Reading covers your own iMessage and SMS history on your Mac, read-only: conversations with who is in them (matched to your contacts), messages with reactions, delivery and read state and attachments by name (case and accents ignored in search). Beeper chats can be read when you turn reading on (Settings › Beeper › Reading): live through the gateway, with the same filters, and without attachments, reactions or edits.
 - `messages_send_request` asks you to approve a message, to a chat or, for iMessage, to a new address (`handle`). The channel comes from the chat id. Nothing is sent when it is called; the request waits on your dashboard.
+- `messages_archive_chat` archives a chat or brings it back, on a channel that offers it (Beeper, while its chats are read here). It takes effect at once without your approval, because it is reversible and reaches nobody; each call is in Activity. A chat you keep from agents cannot be archived.
 - Only your own Messages database is read (the Mac user the helper runs as); another user on the Mac is never touched. The helper's Python needs Full Disk Access, the same grant iCloud Drive uses.
 - Messages are other people's words: results carry the untrusted-data notice and safety warnings. `IMESSAGE_HIDDEN_CHATS` hides chats completely, service senders such as banks and one-time codes are hidden by default, `IMESSAGE_MAX_AGE_DAYS` limits how far back, and `IMESSAGE_NEVER_SEND` labels your own assistant's thread. Turn it on with `ENABLE_IMESSAGE=true`.
 - Sending iMessages is off unless `IMESSAGE_ALLOW_SEND=true`, only reaches people on `IMESSAGE_SEND_ALLOWLIST` (empty means nobody), never reaches `IMESSAGE_NEVER_SEND` or the handles in the Mac's own `imessage-never-send.txt`, and by default waits for your approval on the dashboard even when your mail sends directly. iMessage only, never SMS (a Beeper chat has its own list, `BEEPER_SEND_ALLOWLIST`); each send is confirmed from what Messages records. The first send asks once for permission to control Messages: `--selftest-imessage-send you@example.com` on the Mac triggers that while you are there.
@@ -454,9 +455,9 @@ Every name is `area_verb_noun` (`mail_send_message`, `calendar_create_event`). E
 </details>
 
 <details>
-<summary><b>Status and time</b> &nbsp;·&nbsp; 3 tools</summary>
+<summary><b>Status and time</b> &nbsp;·&nbsp; 4 tools</summary>
 
-`icloud_check_health` checks every enabled area in one call (signs in to mail, lists calendars, reads the address book, asks whether the Mac helper is online) and says how long each took. `icloud_get_helper_status` says whether the Mac helper is online, when it was last seen, which version it runs, how many jobs are queued and how long they take. `icloud_get_time` gives the current date, weekday and time in your timezone, so an agent never books from a guessed date.
+`icloud_check_health` checks every enabled area in one call (signs in to mail, lists calendars, reads the address book, asks whether the Mac helper is online) and says how long each took. `icloud_get_helper_status` says whether the Mac helper is online, when it was last seen, which version it runs, how many jobs are queued and how long they take. `icloud_get_time` gives the current date, weekday and time in your timezone, so an agent never books from a guessed date. `icloud_list_accounts` lists every account of the server: mail, calendar and contacts (provider, address, which area each serves by default, read only) and each chat channel with its accounts (for Beeper the networks and your name there), never a password, key or phone number.
 
 </details>
 
@@ -560,6 +561,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `BEEPER_SEND_NETWORKS`, `BEEPER_SEND_GROUPS` | `*`, false | The networks (as Beeper names them) that may be written to, and whether group chats may; a group must be on `BEEPER_SEND_ALLOWLIST` by its id, `*` never covers one. Editable on the dashboard |
 | `BEEPER_READ_CHATS` | false | The chat tools read `beeper:` chats too: live through the gateway with `BEEPER_READ_KEY` (`search_chats`, `get_chat`, `list_messages`, `search_messages` on `BEEPER_READ_SERVER`), nothing stored. Needs the read key. Editable on the dashboard |
 | `BEEPER_HIDDEN_CHATS`, `BEEPER_VISIBLE_CHATS`, `BEEPER_MAX_AGE_DAYS`, `BEEPER_HIDE_SHORT_CODES` | empty, empty, 0, true | As the `IMESSAGE_` ones, for Beeper chats by their Beeper id. A service sender is a one-to-one chat named by a number under nine digits. Editable on the dashboard |
+| `BEEPER_ARCHIVE_TOOL` | `archive_chat` on the entry of `BEEPER_CHAT_TOOL` | The gateway's name for Beeper's `archive_chat`, which `messages_archive_chat` calls with `BEEPER_EXEC_KEY` while Beeper chats are read (the gateway must grant it to that key, never to the read key). Only in the environment |
 | `TOOLS` | all | `essential`, areas (`mail`, `calendar`, `contacts`, `reminders`, `notes`, `drive`, `maps`, `messages`, `health`; `imessage` still works and means `messages`) and/or tool names to expose; everything else is not registered at all. An unknown name stops the server and lists the real ones |
 | `BRIDGE_TOKEN`, `BRIDGE_BIND` | empty, 127.0.0.1 | Mac helper secret (32+ characters) and the address its private port is published on |
 | `BRIDGE_HOST` | 127.0.0.1 (0.0.0.0 in the Docker image) | Address the bridge binds to inside the process. Loopback unless the helper's Mac reaches this process over the network |

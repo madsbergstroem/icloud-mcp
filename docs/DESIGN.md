@@ -193,6 +193,24 @@ for its list, networks and groups): Settings draws "Sending" (who it may write t
 write to", "Add a chat" and "Networks" for it (`static/app/picker.js`, routes `/dashboard/api/plugins/<id>/recipients|find|resolve`),
 and greys out "Reading" while the plugin cannot read. Names are read live each time and never stored or logged.
 
+Two optional hooks reach agents without any change to the core for a new plugin:
+
+- `Plugin.agent_accounts(s)` gives the plugin's accounts as `AccountRef` (account id, network, the owner's name there) and a state,
+  never raising. `icloud_list_accounts` (`hub_accounts.py`) puts them next to the mail, calendar and contacts accounts the core
+  reads from the accounts file (id, provider, address, areas, default per area, read only) and next to iMessage. Each channel says
+  what agents can do with it (reading, sending after approval, archiving). Nothing secret is returned: no password, key, server or
+  sign-in name, and for a chat network no address or number. The log has counts only. The name: every tool is
+  `area_verb_noun`, and `icloud_` is already the area of the server-wide tools (`icloud_check_health` also checks every plugin), so
+  the one list over every service is `icloud_list_accounts`; `messages_list_accounts` would have left out mail, calendar and contacts.
+- `MessagesCapability.archive(s)` gives a `messages.Archiver` for `messages_archive_chat`. The core offers the tool only for a
+  plugin whose chats are read here (its backend joined the hub, so reading is on) and on a server that is not read only. It refuses
+  a chat the owner keeps from agents before the plugin is asked; the plugin may refuse more (Beeper: service senders). Archiving is
+  reversible and reaches nobody, so it runs without approval, as marking a mail read does. It writes one server log line (backend,
+  archive or unarchive, result) and one activity line for the owner (the same plus the chat id, so it can be undone); never the
+  title. `archive` is the verb this added to the fixed list in `tests/test_tool_surface.py`.
+
+`tests/test_hub_tools.py` brings a third made-up plugin, Parlor, with both hooks and no core change.
+
 Beeper is the first plugin (`plugins/beeper`); `icloud_mcp.beeper` stays the same module under its old name. iMessage stays in the
 core for now (Mac helper); it could become a plugin the same way.
 
@@ -231,6 +249,12 @@ answer are never read, and Beeper's own account (`matrix`) is not a network. Wit
 refuses the key, or when the answer is not a list of accounts, one row says which. The page says once, not per network, that
 whoever runs the server sets Beeper up, that sending needs approval and goes only to `BEEPER_SEND_ALLOWLIST` (editable there as
 "Who it may write to"), and that reading chats is not built yet.
+
+Archiving (`plugins/beeper/archive.py`) uses the execution key, not the read key: a key that only reads must not change anything.
+It calls Beeper's `archive_chat` (`chatID`, `archived`) on the server entry of `BEEPER_CHAT_TOOL` (`beeper_alex-get_chat` gives
+`beeper_alex-archive_chat`; `BEEPER_ARCHIVE_TOOL` names another). So the gateway must grant `archive_chat` to the execution key.
+Before it archives it asks `get_chat`: an unknown chat, or a service sender while those are hidden, is refused as unknown. No answer
+after the call left is reported as not known, and asking again is safe because archiving is idempotent.
 
 Not built yet: choosing a chat by name on the dashboard, the last messages of a chat on the card (another person's words, so a
 switch of its own), and an instance for a second owner, who would have to agree first.
