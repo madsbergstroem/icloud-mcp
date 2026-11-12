@@ -25,7 +25,7 @@ function itemSub(w) {
   const text = w.kind === "mail" ? to : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
   const extra = w.blocked ? "a file is missing" : w.warning && !w.group ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
-  return tag(KINDS[w.kind] || w.kind) + (w.group ? tag("Group", "warn") : "") + [text, by, extra].filter(Boolean).join(" · ");
+  return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + (w.group ? tag("Group", "warn") : "") + [text, by, extra].filter(Boolean).join(" · ");
 }
 
 class Today extends HTMLElement {

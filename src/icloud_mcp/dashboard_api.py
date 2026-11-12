@@ -184,7 +184,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return next((val for k, val in v["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
 
     def summary(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
-        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
+        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
@@ -217,13 +217,26 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                    "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 
+    def waiting_by_kind() -> dict[str, int]:
+        """How many wait, per kind. Requests of the external source count under their type's badge, as `external:<badge>`."""
+        out: dict[str, int] = {}
+        for k, src in d.sources.items():
+            if not hasattr(src, "kind_label"):
+                out[k] = len(src.pending())
+                continue
+            out.update({f"{k}:{label}": 0 for label in src.kind_labels()})
+            for q in src.pending():
+                key = f"{k}:{src.kind_label(q)}"
+                out[key] = out.get(key, 0) + 1
+        return out
+
     @route("/state", ["GET"])
     async def state(request: Request) -> Response:
         got = reader(request)
         if isinstance(got, Response):
             return got
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
-        kinds = await asyncio.to_thread(lambda: {k: len(src.pending()) for k, src in d.sources.items()})
+        kinds = await asyncio.to_thread(waiting_by_kind)
         mac = bridge_state()
         return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "kinds": kinds,
                    "mac": "off" if not mac.get("set_up") else ("online" if mac.get("online") else "offline")})

@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Beeper's networks in Settings › Accounts (fork).** With `BEEPER_READ_KEY` set (a gateway key that may call Beeper's
+  `get_accounts`; `BEEPER_ACCOUNTS_TOOL` names the tool, default `beeper-get_accounts`), the list shows each network Beeper is
+  signed in to, with your name there and Beeper's account id, below the accounts of the setup assistant. Without the key, or when
+  the gateway does not answer, one row "Beeper" says why. The answer is kept in memory for three minutes; addresses and phone
+  numbers in it are never read. The key is masked in errors like `BEEPER_EXEC_KEY`. The page's texts no longer mention Cloudflare
+  Access and say who changes which account. "Waiting by kind" and the tags on waiting requests name a Beeper request "Beeper"
+  instead of "external", and a request of a type the server no longer has "Other"; `/dashboard/api/state` counts them as
+  `external:<badge>`.
+
 - **One set of tools for chats on every channel (fork). The old names are gone.** `messages_list_chats` (filters `account`, `type`,
   `unread`, `query`, `since`, `limit`), `messages_read_chat` (`chat_id`, `limit`, `cursor`), `messages_search` (`query`, `account`,
   `chat_id`, `since`, `before`, `limit`) and `messages_send_request` (`text`, `chat_id`, `handle`, `reply_to`, `request_id`)

@@ -507,7 +507,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
         _executor = ThreadPoolExecutor(max_workers=s.tool_workers, thread_name_prefix="icloud-tool")
     if _mac_executor is None or _mac_executor._max_workers != min(s.tool_workers, 6):
         _mac_executor = ThreadPoolExecutor(max_workers=min(s.tool_workers, 6), thread_name_prefix="icloud-mac")
-    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.beeper_exec_key)
+    _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.beeper_exec_key, s.beeper_read_key)
     _error_ids = (s.username, s.email_address, s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
     _audit, _audit_provider = None, None
     if s.local_mode:

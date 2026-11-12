@@ -229,6 +229,8 @@ class Settings:
     beeper_chat_tool: str = "beeper-get_chat"      # BEEPER_CHAT_TOOL: the gateway's name for Beeper's get_chat
     beeper_send_tool: str = "beeper_send-send_message"   # BEEPER_SEND_TOOL: the gateway's name for send_message on its own server entry
     beeper_timeout_seconds: float = 30.0           # BEEPER_TIMEOUT_SECONDS: how long one gateway call may take
+    beeper_read_key: str = ""                      # BEEPER_READ_KEY: a gateway key that may read Beeper's accounts for the dashboard; only in the environment
+    beeper_accounts_tool: str = "beeper-get_accounts"   # BEEPER_ACCOUNTS_TOOL: the gateway's name for Beeper's get_accounts
     warmup_on_start: bool = True  # WARMUP_ON_START: log in to mail, calendar and contacts in the background right after start
     tool_workers: int = 8         # TOOL_WORKERS: threads that run tool calls, so parallel calls do not queue behind each other
                                   # (Mac helper tools use a pool of their own, min(TOOL_WORKERS, 6), so they never hold these)
@@ -372,6 +374,8 @@ class Settings:
             beeper_chat_tool=_str("BEEPER_CHAT_TOOL", "beeper-get_chat").strip() or "beeper-get_chat",
             beeper_send_tool=_str("BEEPER_SEND_TOOL", "beeper_send-send_message").strip() or "beeper_send-send_message",
             beeper_timeout_seconds=float(max(5, min(_int("BEEPER_TIMEOUT_SECONDS", 30), 120))),
+            beeper_read_key=_str("BEEPER_READ_KEY").strip(),
+            beeper_accounts_tool=_str("BEEPER_ACCOUNTS_TOOL", "beeper-get_accounts").strip() or "beeper-get_accounts",
             warmup_on_start=_bool("WARMUP_ON_START", True),
             tool_workers=max(2, min(_int("TOOL_WORKERS", 8), 32)),
             agent_notes_file=_str("AGENT_NOTES_FILE"),

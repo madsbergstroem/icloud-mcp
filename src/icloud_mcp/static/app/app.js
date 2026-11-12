@@ -8,6 +8,8 @@ import { SECTIONS } from "./settings.js";
 import "./accounts.js";
 
 const KIND_NAMES = { mail: "Mail", imessage: "iMessage", calendar: "Calendar" };
+// a request of the external source counts under its action type's badge ("external:Beeper"); an unknown type under "Other"
+const kindName = (k) => (k.startsWith("external:") ? k.slice(9) || "Other" : KIND_NAMES[k] || k);
 
 const POLL = 15000;
 let lastV = null, timer = null;
@@ -116,7 +118,7 @@ function renderSide() {
   const pause = q("[data-pause]");
   if (pause) pause.textContent = app.paused ? "Resume tools" : "Pause tools";
   const kinds = q("[data-kinds]");
-  if (kinds) kinds.innerHTML = Object.entries(app.kinds).map(([k, n]) => `<ion-item class="sub" lines="none"><ion-label>${esc(KIND_NAMES[k] || k)}</ion-label>
+  if (kinds) kinds.innerHTML = Object.entries(app.kinds).map(([k, n]) => `<ion-item class="sub" lines="none"><ion-label>${esc(kindName(k))}</ion-label>
     <ion-note slot="end" class="num">${n}</ion-note></ion-item>`).join("");
   const foot = q("[data-foot]");
   if (foot) foot.innerHTML = `<b>${app.online ? (app.paused ? "Live, tools paused" : "Live") : "Offline"}</b>${esc((session.data || {}).host || "")}`

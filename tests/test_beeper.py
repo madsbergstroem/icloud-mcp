@@ -18,9 +18,34 @@ from test_dashboard import api, client, signed_in, web  # noqa: F401  (web is a 
 from test_external_approvals import audit_text, tool, url
 
 KEY = "exec-key-0123456789"
+READ_KEY = "read-key-9876543210"
 URL = "http://gateway.test/mcp"
 SINGLE, GROUP = "!single:beeper.test", "!group:beeper.test"
 WORDS = "See you at the north gate at nine"
+
+
+# Beeper's text answer to get_accounts, in its real form with made-up values. The address and the number must never come out.
+ACCOUNTS_TEXT = """# Accounts
+
+## WhatsApp
+**Account ID**: `wa-example-1`
+**User**: Alex Example
+**Phone**: +15550100
+
+## Beeper
+**Account ID**: `matrix`
+**User**: Alex Example
+**Email**: alex@example.org
+
+## Signal
+**Account ID**: `signal-example-2`
+**User**: Alex E.
+**Phone**: +15550199
+
+# Using this information
+
+- Use the Account ID to scope searches to one network.
+"""
 
 
 class FakeGateway:
@@ -42,6 +67,8 @@ class FakeGateway:
         self.send_error = False
         self.slow = 0.0
         self.structured = False          # False: get_chat answers as Beeper's MCP does, in text; True: as structured data
+        self.accounts_calls = 0
+        self.accounts_answer = ACCOUNTS_TEXT  # what get_accounts answers, as Beeper's MCP does: text
 
     def new_app(self):
         """A fresh MCP server: the client of beeper.py runs every call in an event loop of its own, and a server's session manager
@@ -65,6 +92,11 @@ class FakeGateway:
                 return (f"\n## {c['title']} (chatID: {c['id']})\nChat on {c['network']} ({c['accountID']}).\n**Type**: {c['type']}\n"
                         "**Last Activity**: 2026-11-11T18:22:38.000Z\nThis chat is pinned.\n\n# Using this information\n\n"
                         "- Use search_messages to find specific content in this chat.\n")
+
+        @server.tool(name="beeper-get_accounts")
+        def get_accounts() -> str:
+            self.accounts_calls += 1
+            return self.accounts_answer
 
         @server.tool(name="beeper_send-send_message")
         def send_message(chatID: str, text: str = "", replyToMessageID: str = "") -> str:
@@ -93,7 +125,10 @@ class FakeGateway:
             m = await receive()
             body, more = body + m.get("body", b""), m.get("more_body", False)
         is_call = b'"tools/call"' in body
-        status = 401 if self.mode == "refuse" or key != f"Bearer {KEY}" else 403 if self.mode == "forbid" or (self.mode == "forbid_call" and is_call) else None
+        # the exec key may not read accounts, the read key may do nothing else: as the gateway's grants are set up
+        wrong_grant = is_call and ((key == f"Bearer {KEY}") == (b"beeper-get_accounts" in body))
+        status = 401 if self.mode == "refuse" or key not in (f"Bearer {KEY}", f"Bearer {READ_KEY}") \
+            else 403 if self.mode == "forbid" or (self.mode == "forbid_call" and is_call) or wrong_grant else None
         if status:
             await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json")]})
             return await send({"type": "http.response.body", "body": b'{"error":"no"}'})
@@ -124,6 +159,7 @@ def gateway(monkeypatch):
     g = FakeGateway()
     monkeypatch.setattr(B, "connect", lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=g.make_http),
                                                          s.beeper_chat_tool, s.beeper_send_tool))
+    monkeypatch.setattr(B, "accounts_reader", lambda s: B.AccountsReader(s, make_http=g.make_http))
     return g
 
 
