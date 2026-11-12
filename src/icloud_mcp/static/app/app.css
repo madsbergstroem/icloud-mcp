@@ -163,6 +163,9 @@ ol.steps a { color: var(--accent-ink); font-weight: 500; text-decoration: none; 
 /* the toast with Undo sits above the tab bar */
 ion-toast.undo { --background: var(--text); --color: var(--ground); --button-color: var(--ground); }
 
+/* the feedback panel, when FEEDBACKKIT_URL is set (fork), in our accent */
+[data-feedbackkit="host"] { --fk-accent: var(--accent); --fk-accent-ink: var(--accent-contrast); --fk-accent-text: var(--accent-ink); }
+
 /* the sign-in screen */
 .signin { max-width: 420px; margin: 0 auto; padding-top: 8vh; }
 .signin .acts { flex-direction: column; }

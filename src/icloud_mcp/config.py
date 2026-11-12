@@ -271,6 +271,8 @@ class Settings:
     json_response: bool = True    # MCP_JSON_RESPONSE: answer each POST with one JSON body instead of an SSE stream
     structured_content: bool = False  # MCP_STRUCTURED_CONTENT: also send each result as structuredContent (for a client that needs it)
     dashboard: bool = True        # DASHBOARD: the owner's dashboard at /dashboard (hosted mode only)
+    feedbackkit_url: str = ""     # FEEDBACKKIT_URL: a FeedbackKit gateway's origin; with FEEDBACKKIT_PROJECT Settings offers "Send feedback"
+    feedbackkit_project: str = "" # FEEDBACKKIT_PROJECT: the project's public key (fk_pub_...); empty = off
     owner_password_login: bool = True   # OWNER_PASSWORD_LOGIN: false = the dashboard signs in with a passkey only (once one exists)
     dashboard_session_minutes: int = 30  # DASHBOARD_SESSION_MINUTES: a dashboard session ends after this long without use
     audit_log: bool = True        # AUDIT_LOG: record writes, approvals and sign-ins in DATA_DIR/audit.jsonl
@@ -415,6 +417,8 @@ class Settings:
             json_response=_bool("MCP_JSON_RESPONSE", True),
             structured_content=_bool("MCP_STRUCTURED_CONTENT", False),
             dashboard=_bool("DASHBOARD", True),
+            feedbackkit_url=_str("FEEDBACKKIT_URL"),
+            feedbackkit_project=_str("FEEDBACKKIT_PROJECT"),
             owner_password_login=_bool("OWNER_PASSWORD_LOGIN", True),
             dashboard_session_minutes=max(5, min(_int("DASHBOARD_SESSION_MINUTES", 30), 720)),
             audit_log=_bool("AUDIT_LOG", True),

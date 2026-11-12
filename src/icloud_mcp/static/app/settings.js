@@ -151,7 +151,8 @@ class Settings extends HTMLElement {
         <p class="note">These apply to every connected service.</p>`,
       server: head("Activity and server") + `<ion-list class="inset">
         ${row({ title: "Activity log", button: true, attrs: 'data-page="log"' })}
-        ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}</ion-list>`,
+        ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}
+        ${feedback() ? row({ title: "Send feedback", sub: "A bug or a wish for this dashboard", button: true, attrs: "data-feedback" }) : ""}</ion-list>`,
     };
     // a phone shows every group and the services in one list; a wide screen shows the one chosen in its own side list
     const services = only || !svc ? "" : section("Connected services") + `<ion-list class="inset">
@@ -171,6 +172,8 @@ class Settings extends HTMLElement {
     this.querySelectorAll("[data-page]").forEach((n) => n.addEventListener("click", () => push(this, "icm-group", { page: n.dataset.page })));
     this.querySelectorAll("[data-service]").forEach((n) => n.addEventListener("click", () => push(this, "icm-service", { sid: n.dataset.service })));
     this.querySelector("[data-connect]")?.addEventListener("click", () => push(this, "icm-connect"));
+    this.querySelector("[data-feedback]")?.addEventListener("click", () =>
+      window.FeedbackKit ? window.FeedbackKit.open() : toast("The feedback form didn't load. Try again later."));
     this.querySelector("[data-signout]")?.addEventListener("click", async () => {
       if (!(await ask("Sign out?", "You need your passkey or the password to come back.", "Sign out", { danger: true }))) return;
       try { await post("/signout"); } catch (e) { /* signed out anyway */ }
@@ -183,6 +186,10 @@ class Settings extends HTMLElement {
   }
 }
 customElements.define("icm-settings", Settings);
+
+// The server adds a feedback widget's script to the page only when it is set up for one (FEEDBACKKIT_URL); it brings no button of
+// its own, so it never covers the approve buttons, and opens from Settings
+function feedback() { return !!document.querySelector('script[data-project][src$="/widget.js"]'); }
 
 // -- one settings page --------------------------------------------------------------------------------------------------
 class Group extends HTMLElement {
