@@ -93,8 +93,10 @@ def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
     if m is not None:
         group = p.settings_group() if p.settings_group is not None else None
         out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(s) and m.action_type is not None),
-                           "reading": m.backend is not None, "settings": group.slug if group is not None else "",
-                           "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key}
+                           "reading": m.backend is not None and (m.reading_on is None or bool(m.reading_on(s))),
+                           "settings": group.slug if group is not None else "",
+                           "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key,
+                           "reading_keys": dict(m.reading_keys)}
     return out
 
 
@@ -245,16 +247,24 @@ def _split(value: str) -> list[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
-def _rules(s: Any, m: Any) -> dict[str, Any]:
-    """A plugin's rules as they stand in Settings now (saved values win over the environment; they apply after a restart)."""
+LISTS = ("recipients", "hidden", "visible")       # the chat lists the picker edits: who may be written to; chats never read; only these
+
+
+def _list_key(m: Any, which: str) -> str:
+    return m.recipients_key if which == "recipients" else m.reading_keys.get(which, "")
+
+
+def _rules(s: Any, m: Any, which: str = "recipients") -> dict[str, Any]:
+    """A plugin's rules as they stand in Settings now (saved values win over the environment; they apply after a restart). `which`
+    picks the chat list: the recipients, or a reading list (hidden, visible), which has no `*`."""
     from .settings import SettingsStore, current
     stored = SettingsStore(s.data_dir).read()
     value = lambda key, dflt="": current(key, stored)[0] if key else dflt      # noqa: E731
-    allow = _split(value(m.recipients_key))
-    return {"ids": [x for x in allow if x != "*"], "any": "*" in allow,
+    allow = _split(value(_list_key(m, which)))
+    return {"list": which, "ids": [x for x in allow if x != "*"], "any": which == "recipients" and "*" in allow,
             "networks": _split(value(m.networks_key, "*")) if m.networks_key else ["*"],
             "groups": value(m.groups_key, "false").strip().lower() in ("1", "true", "yes", "on") if m.groups_key else False,
-            "keys": {"recipients": m.recipients_key, "networks": m.networks_key, "groups": m.groups_key}}
+            "keys": {"recipients": _list_key(m, which), "networks": m.networks_key, "groups": m.groups_key}}
 
 
 def _wire(c: Any, added: set[str] | None = None) -> dict[str, Any]:
@@ -276,6 +286,11 @@ def register_picker_api(mcp: Any, d: Any) -> None:
         p = here.get(request.path_params["pid"])
         return (p, p.capabilities.messages) if p is not None else (None, None)
 
+    def which(request: Request, m: Any) -> str | None:
+        """?list=: recipients (the default), hidden or visible; None for a list this plugin does not have."""
+        w = str(request.query_params.get("list", "recipients"))
+        return w if w in LISTS and _list_key(m, w) else None
+
     @mcp.custom_route("/dashboard/api/plugins/{pid}/recipients", methods=["GET"])
     async def picker_recipients(request: Request) -> Response:
         got = d.api_reader(request)
@@ -284,7 +299,9 @@ def register_picker_api(mcp: Any, d: Any) -> None:
         p, m = found(request)
         if p is None:
             return d.api_err("No such service here.", 404)
-        rules = _rules(d.s, m)
+        if (w := which(request, m)) is None:
+            return d.api_err("No such list here.", 404)
+        rules = _rules(d.s, m, w)
         (state, chats), nets = await asyncio.gather(asyncio.to_thread(m.resolve, d.s, rules["ids"]), asyncio.to_thread(m.networks, d.s))
         return d.api_ok({**rules, "state": state, "chats": [_wire(c) for c in chats], "all_networks": nets, "name": p.name})
 
@@ -298,7 +315,9 @@ def register_picker_api(mcp: Any, d: Any) -> None:
             return d.api_err("No such service here.", 404)
         q = str(request.query_params.get("q", "")).strip()[:100]
         state, chats = await asyncio.to_thread(m.search_chats, d.s, q)
-        on = {x.casefold() for x in _rules(d.s, m)["ids"]}
+        if (w := which(request, m)) is None:
+            return d.api_err("No such list here.", 404)
+        on = {x.casefold() for x in _rules(d.s, m, w)["ids"]}
         return d.api_ok({"state": state, "query": q, "chats": [_wire(c, on) for c in chats]})
 
     @mcp.custom_route("/dashboard/api/plugins/{pid}/resolve", methods=["GET"])

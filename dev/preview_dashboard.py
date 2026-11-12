@@ -93,8 +93,9 @@ gw.mode = "down" if args.beeper == "down" else None
 B.connect = lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=gw.make_http), s.beeper_chat_tool, s.beeper_send_tool)
 B.accounts_reader = lambda s: B.AccountsReader(s, make_http=gw.make_http)
 B.chats_reader = lambda s: B.ChatsReader(s, make_http=gw.make_http)
+B.read_gateway = lambda s, make_http=None: B.Gateway(s.beeper_gateway_url, s.beeper_read_key, 5, make_http=gw.make_http)
 # more made-up chats to find and add: a person on Telegram and a group of three on Signal; "!gone" on the list is a chat Beeper lost
-gw.chats.update({"!morgan:beeper.test": {"id": "!morgan:beeper.test", "title": "Morgan Lee", "type": "single", "network": "Telegram", "accountID": "tg",
+gw.chats.update({"!morgan:beeper.test": {"id": "!morgan:beeper.test", "title": "Morgan Lee", "type": "single", "network": "Telegram", "accountID": "telegram-example-1",
                                           "participants": {"items": [], "total": 2}}})
 
 # The owner's Tailscale identity on every request (--owner yes), as tailscale serve would add it: the dashboard signs the owner in

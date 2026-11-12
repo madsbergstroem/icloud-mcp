@@ -5,7 +5,7 @@
 import { get, post } from "./api.js";
 import { esc, toast, fail, ask, section, titleBlock, row } from "./ui.js";
 import { page, macRows, macAside, wireSwitches } from "./settings.js";
-import { sendingSection, readingSection, wireSending } from "./picker.js";
+import { sendingSection, readingSection, wireSending, wireReading } from "./picker.js";
 
 const AREAS = [["mail", "Mail"], ["calendar", "Calendar"], ["contacts", "Contacts"]];
 const AREA_NAME = Object.fromEntries(AREAS);
@@ -173,11 +173,11 @@ class Service extends HTMLElement {
     const allow = m && m.settings ? (st.groups.find((x) => x.slug === m.settings) || {}).summary || "" : "";
     this.body.innerHTML = titleBlock(p.name, `${esc(p.description)} ${esc(p.status)}.`) + restartNotice(st)
       + (l ? section(l.label || "Accounts") + `<ion-list class="inset">${items}</ion-list>` + (l.note ? `<p class="note">${esc(l.note)}</p>` : "") : "")
-      + (m && m.picker ? sendingSection(p, this.rec) + (m.reading ? "" : readingSection(p))
+      + (m && m.picker ? sendingSection(p, this.rec) + (m.reading_keys && m.reading_keys.on ? readingSection(p, st) : "")
         : m ? section("What your assistant may do") + `<ion-list class="inset">
         ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: m.sending ? "On" : "Off", noteClass: m.sending ? "state-on" : "state-off" })}
         ${m.settings ? row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" }) : ""}
-        ${row({ title: "Read chats", note: m.reading ? "On" : "Not built yet" })}</ion-list>` : "")
+        ${row({ title: "Read chats", note: m.reading ? "On" : "Off", noteClass: m.reading ? "state-on" : "state-off" })}</ion-list>` : "")
       + (p.limits ? `<p class="note">${esc(p.limits)}</p>` : "");
     this.querySelectorAll("[data-item]").forEach((n) => n.addEventListener("click", () => {
       const x = l.items[Number(n.dataset.item)];
@@ -189,6 +189,7 @@ class Service extends HTMLElement {
     }));
     this.querySelector("[data-allow]")?.addEventListener("click", () => push(this, "icm-group", { page: m.settings, title: "Who it may write to" }));
     if (m && m.picker) wireSending(this, p, st, () => this.load());
+    if (m && m.reading_keys && m.reading_keys.on) wireReading(this, p, st, () => this.load());
     wireRestart(this);
   }
 }

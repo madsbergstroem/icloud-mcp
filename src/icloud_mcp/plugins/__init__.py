@@ -96,6 +96,9 @@ class MessagesCapability:
     - recipients_key / networks_key / groups_key: the plugin's settings the core's picker edits (its allowlist, `*` for any chat;
       the networks that may be written to, `*` for all; whether group chats may be written to). Empty: that part is not offered.
     - sending_on(s): whether sending is set up at all
+    - reading_on(s): whether the owner has reading on (backend(s) then gives a Backend)
+    - reading_keys: the plugin's reading settings the core's picker edits, by role: "on" (the switch), "hidden" and "visible"
+      (chat lists in the shape of recipients_key), "max_age" (days), "short_codes" (hide service senders). Empty: not offered.
     """
     prefix: str
     action_type: Any = None
@@ -111,6 +114,8 @@ class MessagesCapability:
     networks_key: str = ""
     groups_key: str = ""
     sending_on: Callable[[Any], bool] = lambda s: False
+    reading_on: Callable[[Any], bool] | None = None
+    reading_keys: Mapping[str, str] = field(default_factory=dict)
 
 
 @runtime_checkable

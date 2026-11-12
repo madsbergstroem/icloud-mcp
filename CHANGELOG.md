@@ -5,6 +5,16 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Your assistant can read Beeper chats (fork).** `messages_list_chats`, `messages_read_chat` and `messages_search` now cover
+  `beeper:` chats when you turn on Settings › Beeper › Reading › Read chats (`BEEPER_READ_CHATS`, off by default). Everything is
+  read live through the gateway with the read key (`search_chats`, `get_chat`, `list_messages`, `search_messages` on
+  `BEEPER_READ_SERVER`); nothing is stored. The filters are the iMessage ones: hidden chats (`BEEPER_HIDDEN_CHATS`), only these
+  chats (`BEEPER_VISIBLE_CHATS`), a maximum age (`BEEPER_MAX_AGE_DAYS`, 0 = everything) and service senders hidden
+  (`BEEPER_HIDE_SHORT_CODES`, on; a one-to-one chat named by a number under nine digits). Hidden chats and Only these chats use the
+  same chat picker as Who it may write to. Every answer carries the notice that the texts are other people's. Each read writes one
+  log line with the tool, the backend, a hash of the filters, the count and the result, never a title, chat id, name or text.
+  Formatting in Beeper's text is turned into plain text; attachments, reactions and edits are not shown.
+
 - **Who Beeper may write to, by name (fork).** Settings › Beeper › Sending shows the chats on the list by name, the networks
   ("1 of 2") and a Group chats switch. "Who it may write to" lists each chat with its network, one person or group with its size,
   and the last message, read live with the read key; a chat Beeper no longer knows says "Chat not found" and can be removed.
