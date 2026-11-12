@@ -12,6 +12,19 @@ Update the Mac helper before the server whenever its version changes.
   asks only public hosts, says so when a provider allows only its own login page (OAuth2), and saves nothing: the fields are
   filled in for review, and Check and connect signs in as before. `dnspython` (already pulled in by `caldav`) is now a direct
   dependency.
+- **Home, reworked (fork).** With nothing waiting, a wide screen shows Home in one column instead of an empty right half;
+  when something waits, the request still opens beside the list. "1 request was withdrawn by your assistant." becomes a section
+  "Taken back by your assistant" with one row per request withdrawn in the last 24 hours: title, kind and first recipient, time,
+  the reason the assistant chose and "Nothing was sent.". Tapping a row opens that entry in Activity. `/dashboard/api/today`
+  returns these rows in `withdrawn` (it returned timestamps), and the `approval.withdrawn` log line now keeps the first
+  recipient of a mail or an invitation, as `approval.sent` does; never the text. "Sent today" names the recipient too.
+- **Side list (fork).** The app's name is "Sendgate" in plain text (a working title; the page title, manifest and OAuth page keep
+  "iCloud connector"), without the letter tile. The box at the bottom (Live, host name, Mac helper) is gone: Home shows "Live",
+  the iCloud page shows the Mac helper.
+- **Updates show on a normal reload (fork).** Every dashboard module is now imported with the same `?v=` as `app.js`; the server
+  adds it when it serves a module. Before, a browser could keep an older `settings.js` or `services.js` until a reload without
+  cache.
+- **Beeper's page says that it is loading (fork)** while the gateway answers, instead of staying blank for a few seconds.
 
 - **Settings by connected service (fork).** Settings has two parts. General holds Sign-in and security, Safety, and Activity
   and server. Connected services lists each service with its address (iCloud, another email and calendar provider, Beeper with

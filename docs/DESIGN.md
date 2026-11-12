@@ -39,7 +39,8 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 - Buttons: one filled button per bar (the accent), the other is Ionic's button with the `neutral` class (raised, hairline).
   With a warning on a request, Discard is the filled one and "Send anyway…" asks first. Danger is tinted text, not a filled
   button. Text buttons use Ionic's `fill="clear"`.
-- There are no provider logos and no letter tiles for services; the app's own tile in the side list is the one `.av`. Icons are the ten Ionicons in
+- There are no logos and no letter tiles: the side list names the app in plain text ("Sendgate", a working title; the page
+  title, manifest and OAuth page still say "iCloud connector"). Icons are the ten Ionicons in
   `static/vendor/ionicons`; search, plus and check marks are not icons here.
 - A push note says only what kind of item waits, never who it goes to or what it says. Neither does the log: it records that
   a text was edited, never the text.
@@ -48,7 +49,7 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 
 | Screen | Element | Content |
 | --- | --- | --- |
-| Home | `icm-today` | Greeting by time of day, one sentence on what waits and when the oldest is dropped, the live line, notices (result, paused, burst, a request your assistant withdrew in the last 24 hours, install tip), Waiting (kind tag, group tag, time left), Sent today |
+| Home | `icm-today` | Greeting by time of day, one sentence on what waits and when the oldest is dropped, the live line, notices (result, paused, burst, install tip), Waiting (kind tag, group tag, time left), Taken back by your assistant (each request withdrawn in the last 24 hours: title, kind and first recipient, time, the reason, "Nothing was sent."; a tap opens the entry in Activity), Sent today. On a wide screen the request opens beside the list; with nothing waiting Home is one column |
 | One request | `icm-item` | Title, one line on who asked and when (and "Edited by you"), the warning, the mail it answers, missing files first, the message as it goes out with "Edit text", the text the agent asked for with "Bring it back" when it was edited, attachments (tap for preview), and Discard plus the approve button. When there is a warning, Discard is the main button and "Send anyway…" asks first |
 | After Approve | `icm-item` | Sending (the buttons are off), sent (back to Home with the result), unclear (Messages did not confirm it: nothing is sent again, the page stays until Done), not sent (the request still waits: Try again or Discard) |
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
@@ -62,7 +63,7 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 | Sign in / Confirm it is you | `app.js`, `ui.js` | Passkey first, then the owner password |
 
 At 900px and wider, the tabs become a side list (Home with its count, Activity, Settings, the count waiting by kind, the pause
-button and a state card), and Home shows the chosen request beside the list.
+button), and Home shows the chosen request beside the list.
 
 ## Own pieces
 
@@ -71,7 +72,8 @@ Ionic has nothing for these, so they are written here, each in one place in `app
 - `.title`, `.fresh`, `.notice` and `.note`: text blocks
 - `.msg`: the message exactly as it goes out, with `.bubble` for an iMessage and `.capr` for the line under it
 - `.warnbox`: why a request needs a second look
-- `.tag` and `.av`: a small label and the app's letter tile
+- `.tag`: a small label
+- `.single`: Home in one column on a wide screen when nothing waits
 - `.tiles`: the choices on "Connect a service" (Ionic cards in a grid), and `ol.steps` for numbered steps
 - `.slot`: the drop area for a missing file
 - `.footbar`: the bar under a request on a phone. It is a plain bar, not an `ion-toolbar`, because Ionic restyles buttons inside a toolbar

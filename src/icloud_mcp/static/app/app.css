@@ -94,9 +94,8 @@ ion-toggle::part(label) { white-space: normal; }
 .tag.end { margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .chips .tag { margin: 0; }
-/* a letter in a tile stands for an account or the app; there are no provider logos */
-.av { width: 38px; height: 38px; border-radius: 10px; background: var(--raised); border: 1px solid var(--border); display: grid; place-items: center;
-  font-weight: 600; color: var(--muted); flex: none; }
+
+ion-item.sel { --background: var(--active); }                          /* the open request; an entry Home pointed to in Activity */
 
 /* notices: a result, a pause, the install tip, how a send went */
 .notice { margin: 12px 16px 0; border-radius: var(--radius); padding: 14px 16px; font-size: 15px; line-height: 1.5; display: flex; gap: 12px; align-items: flex-start; background: var(--raised); color: var(--text); }
@@ -176,7 +175,6 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .side { display: flex; flex-direction: column; gap: 2px; width: 232px; flex: none; padding: 18px 12px; background: var(--side); border-right: 1px solid var(--border); overflow: auto; }
   .shell.in-settings .side:not(.setnav), .shell:not(.in-settings) .side.setnav { display: none; }
   .side .who { display: flex; gap: 10px; align-items: center; padding: 4px 10px 14px; font-weight: 600; font-size: 15.5px; }
-  .side .who .av { width: 26px; height: 26px; border-radius: 8px; font-size: 13px; }
   .side ion-button.pause { margin: 0 0 12px; height: 40px; --border-radius: 11px; font-size: 14.5px; font-weight: 500; }
   .side ion-item { --background: transparent; --border-radius: 10px; --min-height: 40px; --inner-border-width: 0; font-size: 15px; color: var(--text); }
   .side ion-item ion-icon { color: var(--muted); font-size: 17px; }
@@ -185,8 +183,6 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .side ion-item.sub { --min-height: 34px; --padding-start: 43px; color: var(--muted); font-size: 14.5px; }
   .side .lbl { padding: 18px 10px 6px; color: var(--muted); font-size: 13px; }
   .side ion-item p { margin: 1px 0 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
-  .side .foot { margin-top: auto; border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; font-size: 13.5px; color: var(--muted); line-height: 1.5; background: var(--surface); overflow-wrap: anywhere; }
-  .side .foot b { color: var(--text); font-weight: 500; display: block; }
   .shell { display: flex; height: 100%; }
   .shell > ion-tabs { flex: 1; position: relative; }
   icm-today ion-content { --padding-bottom: 0; --overflow: hidden; }   /* the two columns scroll, not the page */
@@ -201,7 +197,7 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .split > .detail .hint { margin: auto; color: var(--muted); text-align: center; padding: 40px; font-size: 15px; }
   /* the buttons stay in view at the bottom of the request, however long the message */
   .split > .detail [data-foot] { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); margin-top: 16px; }
-  ion-item.sel { --background: var(--active); }
+  .single { max-width: 720px; }                                       /* Home with nothing waiting: one column */
   /* Activity and the settings pages read in one column */
   ion-tab[tab="activity"] [data-body], ion-tab[tab="settings"] [data-body] { max-width: 720px; }
 }

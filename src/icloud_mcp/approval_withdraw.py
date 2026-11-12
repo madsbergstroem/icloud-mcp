@@ -17,8 +17,9 @@ What it does not do:
 A request is one entry today. The tool says nothing that ties a request to exactly one version of its text, so a later change
 can keep several versions of one request, with a withdrawal as the end of the line.
 
-The log entry is `approval.withdrawn` by the actor `assistant`: kind, outbox_id, reason and a summary with the title. Never the
-text, like every other approval line.
+The log entry is `approval.withdrawn` by the actor `assistant`: kind, outbox_id, reason, a summary with the title and, for a mail
+or an invitation, its first recipient (as `approval.sent` keeps it, for Home's "Taken back" list). Never the text, like every
+other approval line.
 """
 from __future__ import annotations
 
@@ -88,9 +89,12 @@ class Withdrawals:
         if claimed is None:                              # the owner (or the clock) got there between the look and the claim
             return self._not_withdrawn(item_id)
         badge, title = describe(kind, claimed)
+        # the first recipient, as approval.sent records it, so Home can say whom it was for; never the text
+        rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind in ("mail", "calendar") else []
         self.ledger.audit.record("approval.withdrawn", actor="assistant", via=client,
                                  summary=f"Withdrew {badge} “{title}”" if title else f"Withdrew a queued {kind} request",
-                                 kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None))
+                                 kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None),
+                                 **({"recipients": rcpt} if rcpt else {}))
         return {"id": item_id, "withdrawn": True, "status": "withdrawn"}
 
 

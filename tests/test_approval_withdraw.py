@@ -311,7 +311,11 @@ async def test_the_log_line_is_by_the_assistant_and_holds_no_text(web):
         ("assistant", kind, ids[kind], "duplicate") for kind in ids]
     assert [e["summary"] for e in entries] == ["Withdrew email “Invoice 2291”", "Withdrew imessage “iMessage to Anna Rivera (anna@example.org)”",
                                                "Withdrew invitation “Autumn fair”"]
-    assert all(e["ok"] is True and set(e["details"]) == {"kind", "outbox_id", "reason"} for e in entries)
+    # a mail and an invitation keep their first recipient, as approval.sent does, so Home can say whom it was for
+    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients"}),
+                                                               (True, {"kind", "outbox_id", "reason"}),
+                                                               (True, {"kind", "outbox_id", "reason", "recipients"})]
+    assert entries[0]["details"]["recipients"] == ["bob@example.org"]
     raw_log = mcp._icloud_dashboard.audit.path.read_text()
     for hidden in ("Hidden mail body", "Hidden iMessage text", "Hidden event notes"):
         assert hidden not in raw_log
@@ -378,7 +382,7 @@ async def test_activity_shows_a_withdrawal_in_plain_words_with_its_reason_and_a_
     assert names == ["assistant"]
 
 
-async def test_home_counts_what_was_taken_back_in_the_last_day_and_lets_go_after_that(web, monkeypatch):
+async def test_home_lists_what_was_taken_back_in_the_last_day_and_lets_go_after_that(web, monkeypatch):
     app, mcp, *_ = web()
     audit = mcp._icloud_dashboard.audit
     async with client(app) as c:
@@ -386,13 +390,17 @@ async def test_home_counts_what_was_taken_back_in_the_last_day_and_lets_go_after
         assert (await c.get("/dashboard/api/today")).json()["withdrawn"] == []
         keep = queue(mcp, subject="Stays waiting", body="x")
         for n in range(2):
-            await withdraw(mcp, queue(mcp, subject=f"Taken back {n}", body="x"))
+            await withdraw(mcp, queue(mcp, subject=f"Taken back {n}", body="Secret words"), reason="duplicate" if n else None)
         long_ago = time.time() - 25 * 3600
         with monkeypatch.context() as m:                                           # a withdrawal from 25 hours ago, written then
             m.setattr(time, "time", lambda: long_ago)
             audit.record("approval.withdrawn", actor="assistant", summary="Withdrew email “Old”", kind="mail", outbox_id="old", reason="mistake")
         today = (await c.get("/dashboard/api/today")).json()
-        assert len(today["withdrawn"]) == 2 and all(0 <= time.time() - t < 60 for t in today["withdrawn"])
+        assert len(today["withdrawn"]) == 2 and all(0 <= time.time() - w["t"] < 60 for w in today["withdrawn"])
+        # what Activity shows for each, newest first: title, kind, first recipient, the reason; never the text
+        assert [(w["title"], w["what"], w["to"], w["why"]) for w in today["withdrawn"]] == [
+            ("Taken back 1", "Email", "bob@example.org", "A duplicate."), ("Taken back 0", "Email", "bob@example.org", "No longer needed.")]
+        assert "Secret words" not in json.dumps(today["withdrawn"])
         assert [w["title"] for w in today["waiting"]] == ["Stays waiting"] and today["waiting"][0]["key"] == f"mail:{keep}"   # waiting entries are untouched
         assert [e["actor"] for e in audit.entries(5, ("approval.withdrawn",))].count("assistant") == 3      # the log keeps all three
         later = time.time() + 24 * 3600 + 120                                       # only the API's clock moves: the sign-in stays valid
@@ -400,12 +408,12 @@ async def test_home_counts_what_was_taken_back_in_the_last_day_and_lets_go_after
         assert (await c.get("/dashboard/api/today")).json()["withdrawn"] == []        # a day on: nothing to say any more
 
 
-async def test_the_home_screen_draws_the_line_and_lets_go_of_it_by_itself():
+async def test_the_home_screen_lists_them_and_lets_go_of_each_by_itself():
     from pathlib import Path
     js = (Path(__file__).resolve().parents[1] / "src" / "icloud_mcp" / "static" / "app" / "today.js").read_text()
-    assert "withdrawn by your assistant" in js and '"1 request was"' in js and "requests were" in js
-    assert 'class="notice"' in js and "setTimeout(() => this.render()" in js and "clearTimeout(this.letGoTimer)" in js
-    assert "data-close" not in js[js.index("const taken"):js.index("const hint")]       # nothing to click away
+    assert "Taken back by your assistant" in js and "Nothing was sent." in js and "withdrawn by your assistant" not in js
+    assert "setTimeout(() => this.render()" in js and "clearTimeout(this.letGoTimer)" in js
+    assert "icm:activity-focus" in js                                             # a row opens the entry in Activity
 
 
 # ------------------------------------------------------------------------------------------------ the tool itself
