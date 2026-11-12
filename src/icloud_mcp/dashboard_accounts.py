@@ -10,6 +10,8 @@ set up here; for one that is, what its page lists (Beeper: the networks it is si
 what its messages capability does. The page draws any plugin from this data; no plugin brings code of its own to the dashboard.
 A listing that cannot be read says why in `problem`, and the page stands either way.
 
+"Find servers" (discover.py) looks up the servers of another provider from an address and saves nothing.
+
 Changing accounts (connect, an area on or off, password, read only, disconnect, which calendars) needs the dashboard session and,
 on the same request, the owner's identity from Tailscale or Cloudflare Access (access_sso.py), as the /setup page did. Every
 change is checked by setup_page.connect, written to accounts.json, and then the server restarts (about half a minute). Saving
@@ -28,6 +30,7 @@ from starlette.responses import Response
 
 from . import access_sso
 from . import accounts as A
+from . import discover as D
 from .plugins import Plugin, enabled_plugins, load_plugins
 from . import setup_page as SP
 
@@ -179,6 +182,17 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         fields = body_fields(body, ("provider", "username", "password", "areas", "read_only", "email_address", "display_name",
                                     "imap", "smtp", "caldav", "carddav"))
         return await change(rec, fields, lambda a: f"Connected {A.PROVIDERS[a['provider']]['label']} for {SP.areas_text(a['areas'])}")
+
+    @mcp.custom_route("/dashboard/api/accounts/discover", methods=["POST"])
+    async def accounts_discover(request: Request) -> Response:
+        """The servers found for an address (discover.py), for the owner to review; nothing is saved."""
+        got = await guarded(request)
+        if isinstance(got, Response):
+            return got
+        try:
+            return d.api_ok(await D.discover(str(got[1].get("email", ""))))
+        except ValueError as e:
+            return d.api_err(str(e), 400)
 
     @mcp.custom_route("/dashboard/api/accounts/{acct}/change", methods=["POST"])
     async def accounts_change(request: Request) -> Response:

@@ -30,6 +30,7 @@ dependencies = [
     "httpx>=0.27",
     "pyjwt[crypto]>=2.8",   # verifies Cloudflare Access tokens for the optional owner SSO on /outbox
     "jsonschema>=4.20",     # checks the parameters of an action type (actions.py); `mcp` already requires it
+    "dnspython>=2.6",       # MX and SRV lookups when finding a provider's servers (discover.py); `caldav` already requires it
 ]
 
 [project.optional-dependencies]

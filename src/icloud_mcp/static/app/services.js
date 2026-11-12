@@ -220,6 +220,7 @@ class Connect extends HTMLElement {
 customElements.define("icm-connect", Connect);
 
 const APPLE = "https://account.apple.com";
+const SOURCE = { provider: "your provider's own settings", ispdb: "Thunderbird's provider database", mx: "your provider's mail host", dns: "DNS records" };
 const APPLE_HELP = "https://support.apple.com/en-us/102654";
 
 class ConnectForm extends HTMLElement {
@@ -246,11 +247,14 @@ class ConnectForm extends HTMLElement {
         <ion-select-option value="custom">Custom</ion-select-option>${this.r.connect.presets.map((p) =>
           `<ion-select-option value="${esc(p.id)}">${esc(p.label)}</ion-select-option>`).join("")}</ion-select></ion-item></ion-list>
         <p class="note">A preset fills in the servers under Advanced server settings. You can still change them.</p>`;
+    const find = icloud ? "" : `<div class="acts"><ion-button class="neutral" data-find>Find servers</ion-button></div>
+        <p class="note" style="padding-top:0">Uses the email address above. It asks your provider, Thunderbird's provider database (with the domain only) and DNS.</p>`;
     this.body.innerHTML = titleBlock(icloud ? "Connect iCloud" : "Connect other email & calendar",
       icloud ? "Your assistant can use the areas you choose below." : "Any provider with IMAP and SMTP, CalDAV or CardDAV.")
       + provider + (icloud ? prep : "") + `<div data-failure></div>`
       + section("Sign-in") + `<ion-list class="inset">${input("username", icloud ? "Apple Account email" : "Email address or user name", 'type="email" autocomplete="username"')}
         ${input("password", icloud ? "App-specific password" : "Password", `type="password" autocomplete="off" ${icloud ? 'placeholder="abcd-efgh-ijkl-mnop"' : ""}`)}</ion-list>`
+      + find
       + section("Use it for") + `<ion-list class="inset">${areas}
         <ion-item><ion-toggle data-f="read_only">Read only<br><small class="sub">Your assistant can read but not send or change anything here</small></ion-toggle></ion-item></ion-list>`
       + (icloud ? "" : prep)
@@ -259,11 +263,33 @@ class ConnectForm extends HTMLElement {
       + `<p class="note">The password stays on this server and is never shown; your assistant never sees it. The check signs in once and takes a few seconds.</p>
         <div class="acts"><ion-button data-go>Check and connect</ion-button></div>`;
     this.querySelector("[data-go]").addEventListener("click", () => this.send());
+    this.querySelector("[data-find]")?.addEventListener("click", () => this.find());
     this.querySelector("[data-preset]")?.addEventListener("ionChange", (e) => {
       const p = this.r.connect.presets.find((x) => x.id === e.detail.value);
       if (!p) return;                                        // Custom keeps what is there
       for (const k of ["imap", "smtp", "caldav", "carddav"]) this.querySelector(`[data-f="${k}"]`).value = p[k];
     });
+  }
+
+  // Find servers: fills in what was found and leaves the rest as it was; nothing is saved until Check and connect
+  async find() {
+    const btn = this.querySelector("[data-find]");
+    const email = (await this.value("username") || "").trim();
+    if (!email.includes("@")) { toast("Enter the email address first.", { bad: true }); return; }
+    btn.disabled = true; btn.textContent = "Looking…";
+    try {
+      const r = await post("/accounts/discover", { email });
+      if (!r.found) toast(["No servers found for this address. Enter them under Advanced server settings.", ...r.notes].join(" "), { duration: 7000 });
+      else {
+        for (const [k, v] of Object.entries(r.servers)) if (v) this.querySelector(`[data-f="${k}"]`).value = v;
+        if (r.username && r.username !== email) this.querySelector('[data-f="username"]').value = r.username;
+        const preset = this.querySelector("[data-preset]");
+        if (preset) preset.value = "custom";
+        const missing = ["caldav", "carddav"].filter((k) => !r.servers[k]).map((k) => (k === "caldav" ? "calendar" : "contacts"));
+        toast(`Found through ${SOURCE[r.source] || "DNS records"}. Check the servers below.${missing.length ? ` No ${missing.join(" or ")} server found.` : ""}`, { duration: 7000 });
+      }
+    } catch (e) { fail(e); }
+    btn.disabled = false; btn.textContent = "Find servers";
   }
 
   async value(name) {

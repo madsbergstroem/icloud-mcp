@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Find servers (fork).** The form for another provider has "Find servers": from the email address it looks up IMAP and SMTP
+  the way Thunderbird does (the provider's own autoconfig file, its `.well-known` address, Thunderbird's provider database with
+  the domain only, the domain's MX host), then DNS SRV records (RFC 6186, RFC 8314), and CalDAV and CardDAV through RFC 6764
+  (`caldav.discovery`, TLS and same-domain only). It takes only encrypted servers whose port matches how this server connects,
+  asks only public hosts, says so when a provider allows only its own login page (OAuth2), and saves nothing: the fields are
+  filled in for review, and Check and connect signs in as before. `dnspython` (already pulled in by `caldav`) is now a direct
+  dependency.
+
 - **Your assistant can read Beeper chats (fork).** `messages_list_chats`, `messages_read_chat` and `messages_search` now cover
   `beeper:` chats when you turn on Settings › Beeper › Reading › Read chats (`BEEPER_READ_CHATS`, off by default). Everything is
   read live through the gateway with the read key (`search_chats`, `get_chat`, `list_messages`, `search_messages` on
