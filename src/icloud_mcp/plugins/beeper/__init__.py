@@ -2,7 +2,8 @@
 
 It offers the `messages` capability for sending: a request to a `beeper:` chat is queued for the owner's approval, and after the
 approval the core calls this plugin's executor once (gateway.py has the client, the action type, the executor and the sender).
-Reading chats is planned and not built yet. Whoever runs the server sets it up with BEEPER_* in the environment. The owner sets
+Reading is the same capability's backend (reading.py): off until the owner turns it on, live through the read key, nothing
+stored, with the owner's lists, maximum age and service-sender rule as for iMessage. Whoever runs the server sets it up with BEEPER_* in the environment. The owner sets
 three rules on the dashboard, and a chat must pass all three: the list (BEEPER_SEND_ALLOWLIST, `*` for any chat), the networks
 (BEEPER_SEND_NETWORKS, `*` for all) and group chats (BEEPER_SEND_GROUPS, off by default; a group must be on the list by its id
 even then, `*` never covers one). The recipient picker names the chats on the list and finds new ones with the read key, on the
@@ -14,6 +15,7 @@ from typing import Any, Callable, Mapping
 
 from .. import Capabilities, ChatRef, Listing, MessagesCapability, Plugin
 from . import gateway as G
+from . import reading as R
 
 _STATES = {"no_read_key": "Accounts not readable: no read key", "unreachable": "Gateway not reachable",
            "refused": "Accounts not readable: the gateway refused the read key", "unreadable": "Accounts not readable: unexpected answer from Beeper"}
@@ -27,13 +29,20 @@ def _split(value: str) -> list[str]:
 
 
 def _settings_group() -> Any:
-    from ...settings import Group, Spec, _changed, _to_true
+    from ...settings import Group, Spec, _changed, _more_history, _removes_entry, _to_false, _to_true
     return Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
         Spec(ALLOW, "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat except groups.",
              loosens=_changed, section="Sending"),
         Spec(NETWORKS, "Networks that may be written to", "list", "Network names as Beeper shows them. * means every network, empty none.",
              default="*", loosens=_changed, section="Sending"),
         Spec(GROUPS, "Group chats", default="false", help="Only groups on the list by name; * never covers a group.", loosens=_to_true, section="Sending"),
+        Spec(R.READ, "Read chats", default="false", help="Off: your assistant sees no Beeper chats.", loosens=_to_true, section="Reading"),
+        Spec(R.VISIBLE, "Only these chats", "list", "Empty means every chat except the hidden ones.", loosens=_changed, section="Reading"),
+        Spec(R.HIDDEN, "Chats agents never see", "list", loosens=_removes_entry, section="Reading"),
+        Spec(R.MAX_AGE, "Only messages from the last", "int", "0 means the whole history.", default="0", min=0, max=36500,
+             unit_label="days", loosens=_more_history, section="Reading"),
+        Spec(R.SHORT_CODES, "Hide service senders", default="true", help="Chats named by a short number: banks, deliveries, codes.",
+             loosens=_to_false, section="Reading"),
     ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
                           else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
                           else "Nobody may be written to"))
@@ -114,7 +123,7 @@ def plugin() -> Plugin:
     return Plugin(
         id="beeper", name="Beeper",
         status="Set up by whoever runs this server",
-        limits="Reading chats is not built yet; your assistant can only ask to send.",
+        limits="Messages are read live and never stored. Attachments, reactions and edits are not shown.",
         description="Chat networks such as WhatsApp, Signal and Telegram.",
         capabilities=Capabilities(messages=MessagesCapability(
             prefix="beeper",
@@ -126,8 +135,10 @@ def plugin() -> Plugin:
             search_chats=_search, resolve=_resolve, networks=_networks,
             recipients_key=ALLOW, networks_key=NETWORKS, groups_key=GROUPS,
             sending_on=G.configured,
+            backend=R.backend, reading_on=R.reading_on,
+            reading_keys={"on": R.READ, "hidden": R.HIDDEN, "visible": R.VISIBLE, "max_age": R.MAX_AGE, "short_codes": R.SHORT_CODES},
         )),
-        settings_keys=frozenset({ALLOW, NETWORKS, GROUPS}),
+        settings_keys=frozenset({ALLOW, NETWORKS, GROUPS, R.READ, R.HIDDEN, R.VISIBLE, R.MAX_AGE, R.SHORT_CODES}),
         env_keys=frozenset({"BEEPER_READ_SERVER", "BEEPER_ACCOUNTS_TOOL"}),
         settings_group=_settings_group,
         enabled=lambda s: bool(s.beeper_gateway_url),

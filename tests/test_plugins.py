@@ -124,7 +124,7 @@ async def test_both_show_under_connected_services_and_on_connect(web, two_plugin
     assert (got["chatty"]["enabled"], got["mailbox"]["enabled"], got["beeper"]["enabled"]) == (True, True, False)
     assert got["chatty"]["listing"]["items"] == [{"title": "Garden club", "sub": "group of 4"}]
     assert got["chatty"]["messages"] == {"prefix": "chatty", "sending": True, "reading": True, "settings": "chatty", "picker": False,
-                                         "networks_key": "", "groups_key": ""}
+                                         "networks_key": "", "groups_key": "", "reading_keys": {}}
     assert got["mailbox"]["capabilities"] == ["mail"] and "messages" not in got["mailbox"]
     assert next(g for g in st["groups"] if g["slug"] == "chatty")["fields"][0]["value"] == "room-1"     # its settings, drawn by the core
 

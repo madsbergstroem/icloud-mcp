@@ -31,7 +31,7 @@ This chat is muted.
 
 def test_search_chats_text_is_read_as_beeper_writes_it():
     got = B._chats_of(B.Answer(False, None, SEARCH_TEXT))
-    assert got == [("!AbC123:beeper.local", B.Chat("Riverside climbing", "Signal", True, 3, "2026-11-12T08:41:38.000Z"))]
+    assert got == [("!AbC123:beeper.local", B.Chat("Riverside climbing", "Signal", True, 3, "2026-11-12T08:41:38.000Z", "signal-example-2"))]
     assert B._chats_of(B.Answer(False, None, "# Chats\n\nFound 0 chats\n\n# Using this information\n")) == []
     assert B._chats_of(B.Answer(True, None, SEARCH_TEXT)) is None
 

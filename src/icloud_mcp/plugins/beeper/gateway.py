@@ -73,6 +73,7 @@ class Chat:
     is_group: bool
     people: int | None
     last_activity: str = ""      # ISO time of the last message, when Beeper says
+    account: str = ""            # Beeper's id of the account the chat is on
 
 
 def _classify(sent: bool, statuses: list[int]) -> GatewayError:
@@ -154,7 +155,7 @@ def _chat_from_text(text: str, chat_id: str) -> Chat | None:
     net, at, people = _NETWORK_LINE.search(text), _ACTIVITY_LINE.search(text), _WITH.search(text)
     count = len([x for x in people["people"].split(", ") if x.strip()]) if people else None
     return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", count,
-                at["at"][:40] if at else "")
+                at["at"][:40] if at else "", net["account"][:200] if net else "")
 
 
 def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
@@ -175,7 +176,7 @@ def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
         items = parts.get("items") if isinstance(parts, Mapping) else None
         total = len(items) if isinstance(items, list) and items else None
     return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total,
-                str(d.get("lastActivity") or "")[:40])
+                str(d.get("lastActivity") or "")[:40], str(d.get("accountID") or "")[:200])
 
 
 # -- the networks behind Beeper, for the dashboard's account list --------------------------------------------------------------------
@@ -234,6 +235,11 @@ def _networks_of(answer: Answer) -> list[Network] | None:
     if got is None:
         return None
     return [n for n in got if n.account_id and n.network and n.account_id != _BEEPER_OWN]
+
+
+def read_gateway(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> "Gateway":
+    """The gateway with the read key, for reading chats (plugins/beeper/reading.py). Tests replace this."""
+    return Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 15.0), make_http=make_http)
 
 
 def read_tool(s: Settings, name: str) -> str:
