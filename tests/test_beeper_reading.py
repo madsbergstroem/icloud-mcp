@@ -181,6 +181,31 @@ def test_links_keep_their_address():
     assert R._plain("AT&T <3") == "AT&T <3"
 
 
+async def test_times_go_to_beeper_in_utc_with_z(web, hub, chats):
+    """Beeper's MCP takes only UTC with Z; the owner's age limit, a time with an offset and a bare date (local, as the tools say) all
+    go out so, and a value that does not read is refused before Beeper is asked."""
+    app, mcp, _src = reading(web, hub, BEEPER_MAX_AGE_DAYS="30")
+    await call(mcp, "messages_list_chats")
+    assert R.BEEPER_TIME_SHAPE.fullmatch(chats.search_calls[-1]["lastActivityAfter"])
+    app, mcp, _src = reading(web, hub, BEEPER_MAX_AGE_DAYS="0")
+    await call(mcp, "messages_list_chats", since="2026-11-12T09:30:00+01:00")
+    assert chats.search_calls[-1]["lastActivityAfter"] == "2026-11-12T08:30:00.000Z"
+    await call(mcp, "messages_search", query="rope", since="2020-01-01", before="2099-01-01T00:00:00Z")
+    after, until = chats.msearch_calls[-1]["dateAfter"], chats.msearch_calls[-1]["dateBefore"]
+    assert R.BEEPER_TIME_SHAPE.fullmatch(after) and after[:10] in ("2019-12-31", "2020-01-01") and until == "2099-01-01T00:00:00.000Z"
+    asked = len(chats.msearch_calls)
+    with pytest.raises(Exception, match="before is not an ISO 8601"):
+        await call(mcp, "messages_search", query="rope", before="next week")
+    assert len(chats.msearch_calls) == asked
+
+
+def test_beeper_time():
+    from datetime import datetime, timezone
+    assert R.beeper_time(datetime(2026, 10, 13, 12, 12, 23, 899774, tzinfo=timezone.utc)) == "2026-10-13T12:12:23.000Z"
+    assert R.beeper_time(R._when("2026-10-13T14:12:23+02:00", "since")) == "2026-10-13T12:12:23.000Z"
+    assert R.beeper_time(R._when("2026-10-13T12:12:23Z", "since")) == "2026-10-13T12:12:23.000Z"
+
+
 def test_short_codes():
     assert R.short_code("72345", "single") and R.short_code("+49 3322", "single")
     assert not R.short_code("72345", "group") and not R.short_code("+1 555 010 0123", "single") and not R.short_code("Example Bank", "single")

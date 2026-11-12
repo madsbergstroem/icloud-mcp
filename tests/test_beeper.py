@@ -3,6 +3,7 @@ real MCP server in this process with the two tools, a bearer key, and ways to fa
 reaches anything outside the process."""
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,15 @@ ACCOUNTS_TEXT = """# Accounts
 
 - Use the Account ID to scope searches to one network.
 """
+
+
+BEEPER_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z")   # the only time Beeper's MCP takes (live, 2026-11-12)
+
+
+def beeper_times(**dates: str) -> None:
+    """Beeper answers a time with an offset (+00:00) or a bare date with 400 Invalid input; so does this gateway."""
+    if any(v and not BEEPER_TIME.fullmatch(v) for v in dates.values()):
+        raise ToolError("MCPError: 400 Invalid input")
 
 
 PEOPLE = {GROUP: ["Jamie Rivera", "Sam Taylor", "Alex Example"], SINGLE: ["Example Person", "Alex Example"]}   # made up
@@ -127,7 +137,8 @@ class FakeGateway:
 
         @server.tool(name="beeper-search_chats")
         def search_chats(query: str = "", limit: int = 50, type: str = "", unreadOnly: bool = False, accountIDs: list[str] | None = None,
-                         lastActivityAfter: str = "") -> str:
+                         lastActivityAfter: str = "", lastActivityBefore: str = "") -> str:
+            beeper_times(lastActivityAfter=lastActivityAfter, lastActivityBefore=lastActivityBefore)
             asked = {"type": type, "unreadOnly": unreadOnly, "accountIDs": accountIDs, "lastActivityAfter": lastActivityAfter}
             self.search_calls.append({"query": query, "limit": limit, **{k: v for k, v in asked.items() if v}})
             hits = [c for c in self.chats.values() if (not query or query.lower() in c["title"].lower()) and (not type or c["type"] == type)
@@ -149,6 +160,7 @@ class FakeGateway:
         @server.tool(name="beeper-search_messages")
         def search_messages(query: str = "", chatIDs: list[str] | None = None, dateAfter: str = "", dateBefore: str = "",
                             limit: int = 20) -> str:
+            beeper_times(dateAfter=dateAfter, dateBefore=dateBefore)
             self.msearch_calls.append({"query": query, "chatIDs": chatIDs, "dateAfter": dateAfter, "dateBefore": dateBefore, "limit": limit})
             out = []
             for cid, msgs in self.messages.items():
