@@ -188,6 +188,11 @@ the Connect card are drawn from the plugin's data; plugins bring no JavaScript. 
 `Settings.plugin_value(key)`. `tests/test_plugins.py` loads two made-up plugins (Chatty with messages, Mailbox with mail) through
 the entry point and needs no core change; `dev/preview_dashboard.py --demo-plugins` shows them.
 
+A plugin that sends can offer the recipient picker (`MessagesCapability.search_chats`, `resolve`, `networks` and the settings keys
+for its list, networks and groups): Settings draws "Sending" (who it may write to by name, networks, group chats), "Who it may
+write to", "Add a chat" and "Networks" for it (`static/app/picker.js`, routes `/dashboard/api/plugins/<id>/recipients|find|resolve`),
+and greys out "Reading" while the plugin cannot read. Names are read live each time and never stored or logged.
+
 Beeper is the first plugin (`plugins/beeper`); `icloud_mcp.beeper` stays the same module under its old name. iMessage stays in the
 core for now (Mac helper); it could become a plugin the same way.
 

@@ -42,8 +42,8 @@ _dashboard_values: dict[str, str] = {}   # the dashboard's values while Settings
 
 
 def _plugin_keys() -> frozenset[str]:
-    from .plugins import settings_keys
-    return settings_keys()
+    from .plugins import env_keys, settings_keys
+    return settings_keys() | env_keys()
 
 
 def editable_keys() -> frozenset[str]:

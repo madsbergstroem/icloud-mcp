@@ -78,7 +78,7 @@ export const PAGES = {
 
 function owner(st, key) { return (st.groups.find((g) => g.fields.some((f) => f.key === key)) || {}).slug; }
 
-async function saveKeys(st, values) {
+export async function saveKeys(st, values) {
   // one request per group the keys belong to; a change that weakens protection asks to confirm first (api.js)
   const by = {};
   for (const [k, v] of Object.entries(values)) (by[owner(st, k)] = by[owner(st, k)] || {})[k] = v;

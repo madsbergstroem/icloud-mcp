@@ -5,6 +5,17 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Who Beeper may write to, by name (fork).** Settings › Beeper › Sending shows the chats on the list by name, the networks
+  ("1 of 2") and a Group chats switch. "Who it may write to" lists each chat with its network, one person or group with its size,
+  and the last message, read live with the read key; a chat Beeper no longer knows says "Chat not found" and can be removed.
+  "Add a chat" searches your chats by name or shows the recent ones; a group asks once more ("A message there reaches all N
+  people.") and turns group chats on. "Any chat" is a switch below the list. Reading is shown greyed as planned. Three rules,
+  checked when a request is queued and again when it is approved: the list (`BEEPER_SEND_ALLOWLIST`, `*` now covers single chats
+  only), the networks (`BEEPER_SEND_NETWORKS`, default all) and group chats (`BEEPER_SEND_GROUPS`, default off; a group must be on
+  the list by its id). Lists of single chats keep working unchanged. The picker is core UI on the plugin contract (search, resolve,
+  networks, the three keys); Beeper supplies it. The read tools are named after the gateway's server entry, `BEEPER_READ_SERVER`
+  (e.g. `beeper_alex`); `BEEPER_ACCOUNTS_TOOL` still wins where it is set. The read key reads and never sends.
+
 - **Service plugins (fork).** Services are now plugins of one kind (`icloud_mcp.plugins`), found through the Python entry point
   group `icloud_mcp.plugins`. A plugin declares its name, status line, limits, how it is connected, its settings as data, secrets,
   a health check, what its page lists and its capabilities (`messages` now; `mail`, `calendar` and `contacts` as interfaces).

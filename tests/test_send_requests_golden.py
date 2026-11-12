@@ -27,7 +27,9 @@ CHATS = {"chats": [{"chat_id": "chat900", "name": "Hiking crew", "group": True, 
                     "services": ["iMessage"]},
                    {"chat_id": "anna@example.org", "name": "", "group": False, "participants": ["anna@example.org"], "services": ["iMessage"]}]}
 ENV = dict(ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="anna@example.org,+31600000002",
-           IMESSAGE_NEVER_SEND="bot@example.org", BRIDGE_TOKEN="t" * 40, BEEPER_GATEWAY_URL=URL, BEEPER_EXEC_KEY=KEY, BEEPER_SEND_ALLOWLIST="*")
+           IMESSAGE_NEVER_SEND="bot@example.org", BRIDGE_TOKEN="t" * 40, BEEPER_GATEWAY_URL=URL, BEEPER_EXEC_KEY=KEY,
+           # since the group rule (plugins/beeper): * covers single chats only; the group the scenario writes to is listed by id, groups on
+           BEEPER_SEND_ALLOWLIST=f"*,{GROUP}", BEEPER_SEND_GROUPS="true")
 
 
 async def call(mcp, name, args):
