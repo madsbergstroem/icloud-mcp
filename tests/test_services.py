@@ -69,9 +69,12 @@ async def test_changing_needs_the_owners_tailscale_identity_on_the_request(web, 
     app, *_ = web(**SSO)
     async with client(app) as c:
         token = await signed_in(c)
-        assert (await c.get("/dashboard/api/accounts")).json()["connect"] == {
-            "allowed": False, "why": "Open the dashboard through Tailscale on your own device, so the server knows it is you.", "via": ""}
-        assert (await c.get("/dashboard/api/accounts", headers=OWNER)).json()["connect"] == {"allowed": True, "why": "", "via": "Tailscale"}
+        assert (await c.get("/dashboard/api/accounts")).json()["connect"]["why"] == \
+            "Open the dashboard through Tailscale on your own device, so the server knows it is you."
+        got = (await c.get("/dashboard/api/accounts", headers=OWNER)).json()["connect"]
+        assert (got["allowed"], got["why"], got["via"]) == (True, "", "Tailscale")
+        assert [(p["id"], p["label"], p["imap"]) for p in got["presets"]] == [
+            ("webde", "WEB.DE", "imap.web.de:993"), ("gmail", "Gmail (mail only)", "imap.gmail.com:993")]
         r = await c.post("/dashboard/api/accounts/env/change", headers=api(token), json={"areas": ["mail"]})
         assert r.status_code == 403 and "Tailscale" in r.json()["error"]
         r = await c.post("/dashboard/api/accounts/env/change", headers={**OWNER, "x-csrf": token}, json={"areas": ["mail"]})

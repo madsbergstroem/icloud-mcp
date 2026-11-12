@@ -149,6 +149,8 @@ ion-toggle::part(label) { white-space: normal; }
 .tiles ion-card { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: none; }
 .tiles ion-card-title { font-size: 17px; font-weight: 600; color: var(--text); }
 .tiles ion-card-content { color: var(--muted); font-size: 14px; line-height: 1.45; }
+.tiles ion-card-content .status { margin: 8px 0 0; color: var(--text); font-size: 13.5px; font-weight: 500; }
+.tiles ion-card[disabled] .status { color: var(--muted); }
 ol.steps { margin: 6px 0 0; padding-left: 20px; line-height: 1.5; font-size: 15px; }
 ol.steps li { margin: 3px 0; }
 ol.steps a { color: var(--accent-ink); font-weight: 500; text-decoration: none; }

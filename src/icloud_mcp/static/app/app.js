@@ -180,7 +180,11 @@ async function main() {
   }
   shell();
   startPolling();
-  window.addEventListener("hashchange", () => { const k = itemFromHash(); if (k) openItem(k); });
+  window.addEventListener("hashchange", () => {
+    const k = itemFromHash();
+    if (k) openItem(k);
+    else if (/^#\/(activity|settings|connect)$/.test(location.hash)) location.reload();   // the shell reads these when it starts
+  });
   window.addEventListener("icm:signed-out", () => location.reload());
   window.addEventListener("icm:changed", () => setTimeout(poll, 300));
   navigator.serviceWorker?.addEventListener("message", (e) => { if (e.data && e.data.open) openItem(e.data.open); });

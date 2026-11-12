@@ -33,16 +33,19 @@ PENDING_USERNAME = "pending@setup.invalid"   # what the server runs with before 
 CHECK_TIMEOUT = 25                           # seconds one sign-in check may take
 
 # Two kinds of account: iCloud with Apple's own servers (the upstream project's defaults, config.py), and any other provider whose
-# servers the person enters. Files saved before 2026-11 can still name "webde" or "gmail": they read as "other" with the servers
-# those presets used (LEGACY_ENDPOINTS), so nothing they run with changes.
+# servers the person enters. SERVER_PRESETS only fill in those servers on the connect form ("Provider"); the account is still
+# "other". Files saved before 2026-11 can name "webde" or "gmail" as the provider: they read as "other" with the preset's servers,
+# so nothing they run with changes. Sources: WEB.DE hilfe.web.de/pop-imap/imap/imap-serverdaten.html, CalDAV/CardDAV hosts as
+# tested by davx5.com; Gmail developers.google.com/workspace/gmail/imap/imap-smtp (calendar and contacts need Google sign-in).
 PROVIDERS: dict[str, dict[str, Any]] = {
     "icloud": {"label": "iCloud", "imap": "imap.mail.me.com:993", "smtp": "smtp.mail.me.com:587",
                "caldav": "https://caldav.icloud.com", "carddav": "https://contacts.icloud.com", "areas": AREAS},
     "other": {"label": "Other email & calendar", "imap": "", "smtp": "", "caldav": "", "carddav": "", "areas": AREAS},
 }
-LEGACY_ENDPOINTS: dict[str, dict[str, str]] = {
-    "webde": {"imap": "imap.web.de:993", "smtp": "smtp.web.de:587", "caldav": "https://caldav.web.de", "carddav": "https://carddav.web.de"},
-    "gmail": {"imap": "imap.gmail.com:993", "smtp": "smtp.gmail.com:465", "caldav": "", "carddav": ""},
+SERVER_PRESETS: dict[str, dict[str, str]] = {
+    "webde": {"label": "WEB.DE", "imap": "imap.web.de:993", "smtp": "smtp.web.de:587", "caldav": "https://caldav.web.de",
+              "carddav": "https://carddav.web.de"},
+    "gmail": {"label": "Gmail (mail only)", "imap": "imap.gmail.com:993", "smtp": "smtp.gmail.com:465", "caldav": "", "carddav": ""},
 }
 
 
@@ -51,7 +54,7 @@ def _as_known_provider(a: dict[str, Any]) -> dict[str, Any]:
     p = a.get("provider")
     if p in PROVIDERS:
         return a
-    ep = LEGACY_ENDPOINTS.get(p, {})
+    ep = SERVER_PRESETS.get(p, {})
     return dict(a, provider="other", **{k: str(a.get(k) or ep.get(k, "")) for k in ("imap", "smtp", "caldav", "carddav")})
 
 

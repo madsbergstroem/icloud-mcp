@@ -122,7 +122,9 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         beeper = await asyncio.to_thread(beeper_listing, d.s, reader)      # the gateway client runs a loop of its own
         why = await why_not(request)
         via = "" if why else (await owner(request) or ("", ""))[1]
-        return d.api_ok({"accounts": services(d.s), "beeper": beeper, "connect": {"allowed": not why, "why": why, "via": via}})
+        presets = [{"id": k, **v} for k, v in A.SERVER_PRESETS.items()]   # they only fill in the servers on the connect form
+        return d.api_ok({"accounts": services(d.s), "beeper": beeper, "connect": {"allowed": not why, "why": why, "via": via,
+                                                                                   "presets": presets}})
 
     async def guarded(request: Request) -> tuple[dict[str, Any], dict[str, Any]] | Response:
         got = await d.api_writer(request)

@@ -17,14 +17,18 @@ Update the Mac helper before the server whenever its version changes.
   network with your name there (the account ID opens on tap) and shows that sending needs your approval, who the assistant may
   write to (`BEEPER_SEND_ALLOWLIST`, which no page showed before) and that reading chats is not built yet.
 - **Connect a service in the dashboard, in English (fork).** The /setup assistant moved into Settings and uses the same Ionic
-  look. It offers iCloud and "Other email & calendar" (IMAP, SMTP, CalDAV, CardDAV); Beeper is shown as set up by whoever runs
-  the server. Connecting, changing and disconnecting need the dashboard sign-in and, on the same request, the owner's identity
+  look. It offers iCloud and "Other email & calendar" (IMAP, SMTP, CalDAV, CardDAV), each with a status line ("Available");
+  Beeper is shown as set up by whoever runs the server. In the form for another provider, "Provider" (Custom, WEB.DE, Gmail)
+  only fills in the servers, which stay editable under "Advanced server settings". Each service page names its limits in one
+  sentence: iCloud's reminders, notes, iCloud Drive and iMessage only through your Mac while it is on; no reminders or notes
+  with another provider. Connecting, changing and disconnecting need the dashboard sign-in and, on the same request, the owner's identity
   from Tailscale or Cloudflare Access, as /setup did. Every change is checked with the provider before it is saved, then the
   server restarts. Saving drops `ENABLE_MAIL`, `ENABLE_CALENDAR` and `ENABLE_CONTACTS` from the dashboard's own settings, so the
   connected services decide which areas are on. `/setup` now leads to `/dashboard#/connect`; the replaced app-password route
   `/dashboard/api/settings/accounts/app-password` is gone (the iCloud page's "Replace" goes through
   `/dashboard/api/accounts/<id>/change`).
-- **Only two providers (fork).** The WEB.DE and Gmail presets are gone. An `accounts.json` that still names `webde` or `gmail`
+- **Only two providers (fork).** WEB.DE and Gmail are no longer providers of their own, only server presets for "Other email &
+  calendar". An `accounts.json` that still names `webde` or `gmail`
   reads as "other" with the servers those presets used, so the server signs in where it always did; the dashboard lists such an
   account as "Other email & calendar" signed in with a password, and a waiting mail from it names no provider.
 

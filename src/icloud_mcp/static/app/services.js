@@ -84,13 +84,13 @@ class Service extends HTMLElement {
     const firstIcloud = r.accounts.find((x) => x.provider === "icloud");
     const mac = a.provider === "icloud" && firstIcloud.id === a.id
       ? section("Through your Mac", macAside(st.mac || {})) + `<ion-list class="inset">${macRows(st)}</ion-list>
-        <p class="note">These run on your Mac and only work while it is on and connected.</p>` : "";
+        <p class="note">Reminders, notes, iCloud Drive and iMessage work only through your Mac, while it is on and connected.</p>` : "";
     const servers = a.servers ? section("Servers") + `<ion-list class="inset">${[["imap", "Incoming mail (IMAP)"], ["smtp", "Outgoing mail (SMTP)"],
       ["caldav", "Calendar (CalDAV)"], ["carddav", "Contacts (CardDAV)"]].map(([k, l]) => row({ title: l, note: esc(a.servers[k] || "not set") })).join("")}</ion-list>` : "";
     const icloud = a.provider === "icloud";
     this.body.innerHTML = titleBlock(a.name, `${esc(a.address)} · ${SIGN_IN[a.provider] || ""}`)
       + restartNotice(st)
-      + section("Used for") + `<ion-list class="inset">${used}</ion-list><p class="note">${ONE_EACH}</p>`
+      + section("Used for") + `<ion-list class="inset">${used}</ion-list><p class="note">${ONE_EACH}${a.provider === "other" ? " Reminders and notes are not available with this kind of service." : ""}</p>`
       + (can ? "" : `<div class="notice pause"><span>${esc(r.connect.why)}</span></div>`)
       + (settingsRows ? section("Settings") + `<ion-list class="inset">${settingsRows}</ion-list>` : "")
       + mac + servers
@@ -184,13 +184,16 @@ class Connect extends HTMLElement {
     let r;
     try { r = await get("/accounts"); } catch (e) { fail(e); return; }
     const can = r.connect.allowed;
-    const tile = (key, title, text, on) => `<ion-card ${on ? `button data-provider="${key}"` : 'disabled="true"'}>
-      <ion-card-header><ion-card-title>${title}</ion-card-title></ion-card-header><ion-card-content>${text}</ion-card-content></ion-card>`;
+    // each choice ends with one plain line on whether it can be connected here
+    const tile = (key, title, text, on, status) => `<ion-card ${on ? `button data-provider="${key}"` : 'disabled="true"'}>
+      <ion-card-header><ion-card-title>${title}</ion-card-title></ion-card-header>
+      <ion-card-content>${text}<p class="status">${status}</p></ion-card-content></ion-card>`;
+    const here = can ? "Available" : "Needs your sign-in through Tailscale";
     body.innerHTML = titleBlock("Connect a service", can ? `You are signed in through ${esc(r.connect.via)}, so the server knows it is you.` : "")
       + (can ? "" : `<div class="notice pause"><span>${esc(r.connect.why)}</span></div>`)
-      + `<div class="tiles">${tile("icloud", "iCloud", "Mail, calendar and contacts. With your Mac also reminders, notes, iCloud Drive and iMessage.", can)}
-        ${tile("other", "Other email &amp; calendar", "Any provider with IMAP and SMTP, and CalDAV or CardDAV if it has them. You enter the servers and a password.", can)}
-        ${tile("beeper", "Beeper", "Chat networks. Whoever runs this server sets it up; you cannot connect it here yet.", false)}</div>`
+      + `<div class="tiles">${tile("icloud", "iCloud", "Mail, calendar and contacts. With your Mac also reminders, notes, iCloud Drive and iMessage.", can, here)}
+        ${tile("other", "Other email &amp; calendar", "Any provider with IMAP and SMTP, and CalDAV or CardDAV if it has them. You enter the servers and a password.", can, here)}
+        ${tile("beeper", "Beeper", "Chat networks such as WhatsApp, Signal and Telegram.", false, "Set up by whoever runs this server")}</div>`
       + `<p class="note">Mail, calendar and contacts each come from one service. You can connect a second mail service, but only one is used for mail at a time.</p>`;
     this.querySelectorAll("[data-provider]").forEach((n) => n.addEventListener("click", () => push(this, "icm-connect-form", { provider: n.dataset.provider })));
   }
@@ -211,7 +214,7 @@ class ConnectForm extends HTMLElement {
         <li>Under Sign-In and Security, choose App-Specific Passwords.</li>
         <li>Generate one, name it for example “Assistant”, and copy it.</li></ol></ion-label></ion-item></ion-list>
         <p class="note">Apple gives app-specific passwords only to accounts with two-factor authentication. <a href="${APPLE_HELP}" target="_blank" rel="noopener noreferrer">Apple's guide</a></p>`
-      : section("Servers") + `<ion-list class="inset">${input("imap", "Incoming mail (IMAP)", 'placeholder="imap.example.org:993" autocomplete="off"')}
+      : section("Advanced server settings") + `<ion-list class="inset">${input("imap", "Incoming mail (IMAP)", 'placeholder="imap.example.org:993" autocomplete="off"')}
         ${input("smtp", "Outgoing mail (SMTP)", 'placeholder="smtp.example.org:587" autocomplete="off"')}
         ${input("caldav", "Calendar (CalDAV)", 'type="url" placeholder="https://dav.example.org/" autocomplete="off"')}
         ${input("carddav", "Contacts (CardDAV)", 'type="url" placeholder="https://dav.example.org/" autocomplete="off"')}</ion-list>
@@ -219,18 +222,29 @@ class ConnectForm extends HTMLElement {
     const holder = (k) => this.r.accounts.find((x) => x.uses.includes(k));
     const areas = AREAS.map(([k, label]) => `<ion-item><ion-toggle data-area="${k}" ${holder(k) ? "" : "checked"}>${label}${holder(k)
       ? `<br><small class="sub">Now from ${esc(holder(k).name)}. Turn on to move it here.</small>` : ""}</ion-toggle></ion-item>`).join("");
+    // another provider: a preset only fills in the servers, which stay editable below
+    const provider = icloud ? "" : `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-select data-preset label="Provider" interface="action-sheet" value="custom">
+        <ion-select-option value="custom">Custom</ion-select-option>${this.r.connect.presets.map((p) =>
+          `<ion-select-option value="${esc(p.id)}">${esc(p.label)}</ion-select-option>`).join("")}</ion-select></ion-item></ion-list>
+        <p class="note">A preset fills in the servers under Advanced server settings. You can still change them.</p>`;
     this.body.innerHTML = titleBlock(icloud ? "Connect iCloud" : "Connect other email & calendar",
       icloud ? "Your assistant can use the areas you choose below." : "Any provider with IMAP and SMTP, CalDAV or CardDAV.")
-      + prep + `<div data-failure></div>`
+      + provider + (icloud ? prep : "") + `<div data-failure></div>`
       + section("Sign-in") + `<ion-list class="inset">${input("username", icloud ? "Apple Account email" : "Email address or user name", 'type="email" autocomplete="username"')}
         ${input("password", icloud ? "App-specific password" : "Password", `type="password" autocomplete="off" ${icloud ? 'placeholder="abcd-efgh-ijkl-mnop"' : ""}`)}</ion-list>`
       + section("Use it for") + `<ion-list class="inset">${areas}
         <ion-item><ion-toggle data-f="read_only">Read only<br><small class="sub">Your assistant can read but not send or change anything here</small></ion-toggle></ion-item></ion-list>`
+      + (icloud ? "" : prep)
       + section("Sender (optional)") + `<ion-list class="inset">${input("email_address", "Send as", 'type="email" placeholder="Leave empty to use the address above"')}
         ${input("display_name", "Your name in mail", 'autocomplete="name"')}</ion-list>`
       + `<p class="note">The password stays on this server and is never shown; your assistant never sees it. The check signs in once and takes a few seconds.</p>
         <div class="acts"><ion-button data-go>Check and connect</ion-button></div>`;
     this.querySelector("[data-go]").addEventListener("click", () => this.send());
+    this.querySelector("[data-preset]")?.addEventListener("ionChange", (e) => {
+      const p = this.r.connect.presets.find((x) => x.id === e.detail.value);
+      if (!p) return;                                        // Custom keeps what is there
+      for (const k of ["imap", "smtp", "caldav", "carddav"]) this.querySelector(`[data-f="${k}"]`).value = p[k];
+    });
   }
 
   async value(name) {
