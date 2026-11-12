@@ -127,7 +127,8 @@ async def test_search_finds_messages_in_the_chats_that_may_be_seen(web, hub, cha
     assert got["notice"] == NOTICE
     assert {m["chat_id"] for m in got["matches"]} == {f"beeper:{GROUP}"}              # not the hidden chat, not the code sender
     rope = next(m for m in got["matches"] if "rope" in m["text"])
-    assert (rope["chat_title"], rope["type"], rope["message_id"], rope["text"]) == ("Example Club", "group", "gro-1", "Bring the blue rope & chalk")
+    assert (rope["chat_title"], rope["type"], rope["message_id"], rope["text"]) == ("Example Club", "group", "sortkey:000001", "Bring the blue rope & chalk")
+    assert rope["at"].endswith("Z") and rope["at"][:16] == chats.messages[GROUP][0]["timestamp"][:16]
     assert rope["sender"] == {"handle": "", "name": "Jamie Rivera"}
     on_it = next(m for m in got["matches"] if m["text"] == "On it")
     assert on_it["from_me"] is True
@@ -140,27 +141,44 @@ async def test_search_in_one_chat_and_within_the_age(web, hub, chats):
 
 
 def test_search_text_is_read_as_beeper_writes_it():
-    text = """Found 2+ messages across 1 chat (showing 2)
-Next page (older): cursor='eyJ0', direction='before'
+    """The shape of the owner's gateway (2026-11-12), names and texts made up."""
+    text = """Found 3+ messages across 1 chat (showing 3)
+Next page (older): cursor='1794480212730:4711', direction='before'
+Previous page (newer): cursor='1794481382000:4720', direction='after'
+⚠️ Filtered results: only showing messages matching your search criteria.
 
-# Assistant [2 messages]
-# Assistant (chatID: !AbC123:beeper.local)
-Chat on Telegram (telegram-example-1) with Assistant Bot, Alex Example.
+# Assistant [3 messages]
 
-## 2026-11-12 (Thursday)
-**Alex Example (You)** (09:14): Remind me about the rope ([Open at 09:14](/chats/!AbC123:beeper.local/$m1))
-**Assistant Bot** (09:15): Noted.
-Second line of it ([Open at 09:15](/chats/!AbC123:beeper.local/$m2))
+# Assistant (chatID: 329)
+Chat on Telegram (telegram.1000000001) with Assistant Bot, Alex Example.
+
+## Today (2026-11-12)
+
+**Alex Example (You)** (10:43): we take the blue rope ([open at sort key](/open/329/201814))
+
+**Assistant Bot** (10:44): The shop has it: <a href="https://shop.example.org/rope" rel="noopener">blue rope</a><br><br>Order it? ([open at sort key](/open/329/201818))
+
+**Assistant Bot** (11:03): Noted.
+Second line of it ([open at sort key](/open/329/201823))
 
 # Using this information
 - Use get_chat.
 """
     hits, more = R._search_hits(text)
     assert more is True
-    assert [(h["chat"]["id"], h["mine"], h["name"], h["at"], h["text"], h["id"]) for h in hits] == [
-        ("!AbC123:beeper.local", True, "", "2026-11-12T09:14:00", "Remind me about the rope", "$m1"),
-        ("!AbC123:beeper.local", False, "Assistant Bot", "2026-11-12T09:15:00", "Noted.\nSecond line of it", "$m2")]
-    assert hits[0]["chat"]["account"] == "telegram-example-1"
+    assert [(h["chat"]["id"], h["mine"], h["name"], h["at"], h["id"]) for h in hits] == [
+        ("329", True, "", "2026-11-12T10:43:00Z", "sortkey:201814"),
+        ("329", False, "Assistant Bot", "2026-11-12T10:44:00Z", "sortkey:201818"),
+        ("329", False, "Assistant Bot", "2026-11-12T11:03:00Z", "sortkey:201823")]
+    assert R._plain(hits[1]["text"]) == "The shop has it: blue rope (https://shop.example.org/rope)\n\nOrder it?"
+    assert hits[2]["text"] == "Noted.\nSecond line of it" and hits[0]["chat"]["account"] == "telegram.1000000001"
+    assert R._search_hits(text.replace("## Today (2026-11-12)", "## 2026-11-12 (Thursday)"))[0][0]["at"] == "2026-11-12T10:43:00Z"
+
+
+def test_links_keep_their_address():
+    assert R._plain('<a href="https://example.org/a">https://example.org/a</a>') == "https://example.org/a"
+    assert R._plain('See <a href="https://example.org/b" target="_blank"><strong>the list</strong></a>') == "See the list (https://example.org/b)"
+    assert R._plain("AT&T <3") == "AT&T <3"
 
 
 def test_short_codes():

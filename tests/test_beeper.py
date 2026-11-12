@@ -160,10 +160,10 @@ class FakeGateway:
                 c = self.chats[cid]
                 out.append(f"# {c['title']} [{len(hits)} messages]\n# {c['title']} (chatID: {cid})\n"
                            f"Chat on {c['network']} ({c['accountID']}) with {', '.join(PEOPLE.get(cid, ['Someone', 'Alex Example']))}.\n")
-                for x in hits:
+                for x in hits:   # as Beeper's MCP writes them: the day and time in UTC, the link to the sort key, not the id
                     day, clock = x["timestamp"][:10], x["timestamp"][11:16]
                     who = "Alex Example (You)" if x["isSender"] else x["senderName"]
-                    out.append(f"## {day} (Thursday)\n**{who}** ({clock}): {x['text']} ([Open at {clock}](/chats/{cid}/{x['id']}))\n")
+                    out.append(f"## Today ({day})\n**{who}** ({clock}): {x['text']} ([open at sort key](/open/{cid}/{x['sortKey']}))\n")
             n = sum(t.count("**") // 2 for t in out)
             return (f"Found {n} messages across {len(out)} chats (showing {n})\n\n" + "\n".join(out)
                     + "\n# Using this information\n\n- Use get_chat for details.\n")

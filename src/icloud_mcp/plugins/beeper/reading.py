@@ -99,7 +99,15 @@ def _plain(text: str) -> str:
     if "<" not in text:
         return text
     text = re.sub(r"<br\s*/?>|</p>\s*<p[^>]*>", "\n", text, flags=re.I)
+    text = _ANCHOR.sub(lambda m: m["url"] if _bare(m["label"]) in (m["url"], "") else f"{m['label']} ({m['url']})", text)
     return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+_ANCHOR = re.compile(r"""<a\s[^>]*?href=["'](?P<url>[^"']+)["'][^>]*>(?P<label>.*?)</a>""", re.I | re.S)
+
+
+def _bare(label: str) -> str:
+    return re.sub(r"<[^>]+>", "", label).strip()
 
 
 # -- our cursor: where Beeper's page started, and how many of its newest messages were already given --------------------------------
@@ -123,10 +131,19 @@ def _cursor_in(cursor: str) -> tuple[str | None, int]:
 _S_CHAT = re.compile(r"^# (?P<title>.+) \(chatID: (?P<id>[^)]+)\)\s*$")
 _S_NET = re.compile(r"^Chat on .+? \((?P<account>\S+)\)(?: with (?P<people>.+?))?\.?\s*$")
 _S_TYPE = re.compile(r"^\*\*Type\*\*: (?P<type>single|group)\s*$")
-_S_DAY = re.compile(r"^## (?P<day>\d{4}-\d{2}-\d{2})\b")
+_S_DAY = re.compile(r"^## .*?(?P<day>\d{4}-\d{2}-\d{2})")          # "## 2026-11-12 (Thursday)" or "## Today (2026-11-12)"
 _S_MSG = re.compile(r"^\*\*(?P<name>.+?)\*\* \((?P<time>\d{1,2}:\d{2}(?::\d{2})?)\): ?(?P<text>.*)$")
-_S_LINK = re.compile(r"\s*\(\[Open at[^\]]*\]\((?P<link>[^)\s]*)\)\)\s*$")
+_S_LINK = re.compile(r"\s*\(\[open at[^\]]*\]\((?P<link>[^)\s]*)\)\)\s*$", re.I)   # "([open at sort key](/open/<chat>/<sort key>))"
 _S_MORE = re.compile(r"^(?:Next page|Found \d+\+)", re.M)
+
+
+def _ref(link: str) -> str:
+    """A search hit's reference from its link. Beeper's MCP links `/open/<chat>/<sort key>`: no message id, so it is given as
+    `sortkey:<n>` (unique in the chat, not the message_id messages_read_chat shows). A `/chats/<chat>/<id>` link gives the id."""
+    parts = [x for x in link.split("/") if x]
+    if len(parts) >= 3 and parts[0] == "open":
+        return f"sortkey:{parts[-1]}"[:300]
+    return parts[-1][:300] if parts else ""
 
 
 def _search_hits(text: str) -> tuple[list[dict[str, Any]], bool]:
@@ -162,8 +179,9 @@ def _search_hits(text: str) -> tuple[list[dict[str, Any]], bool]:
             name = m["name"].strip()
             mine = name.endswith("(You)")
             time_ = m["time"] if m["time"].count(":") == 2 else m["time"] + ":00"
-            ref = link["link"].rstrip("/").rsplit("/", 1)[-1] if link else ""
-            open_msg = {"chat": chat, "name": "" if mine else name[:200], "mine": mine, "at": f"{day}T{time_.zfill(8)}" if day else None,
+            ref = _ref(link["link"]) if link else ""
+            # Beeper writes the day and the time in UTC (10:43 for 10:43:32Z)
+            open_msg = {"chat": chat, "name": "" if mine else name[:200], "mine": mine, "at": f"{day}T{time_.zfill(8)}Z" if day else None,
                         "text": body, "id": ref, "linked": bool(link)}
             hits.append(open_msg)
             continue
@@ -171,7 +189,7 @@ def _search_hits(text: str) -> tuple[list[dict[str, Any]], bool]:
             link = _S_LINK.search(line)
             open_msg["text"] += "\n" + (line[:link.start()] if link else line)
             if link:
-                open_msg["id"], open_msg["linked"] = link["link"].rstrip("/").rsplit("/", 1)[-1], True
+                open_msg["id"], open_msg["linked"] = _ref(link["link"]), True
     return hits, more
 
 
@@ -330,7 +348,7 @@ class BeeperBackend:
                     continue
                 cid = make_id(PREFIX, c["id"])
                 sender = None if h["mine"] else Person("", h["name"])
-                found.append(Match(Message(h["id"] or f"{h['at']}", cid, h["at"], sender, h["mine"], _plain(h["text"].strip())), c["title"], kind))
+                found.append(Match(Message(h["id"] or f"at:{h['at']}", cid, h["at"], sender, h["mine"], _plain(h["text"].strip())), c["title"], kind))
             return Matches(tuple(found), None, not more)
         return self._logged("search", run, lambda m: len(m.found))
 
