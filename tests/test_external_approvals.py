@@ -95,7 +95,8 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
     assert not [t.name for t in mcp._tool_manager.list_tools() if "external" in t.name or "echo" in t.name]
     async with client(app) as c:
         await signed_in(c)
-        assert (await c.get("/dashboard/api/state")).json()["kinds"]["external"] == 0
+        kinds = (await c.get("/dashboard/api/state")).json()["kinds"]
+        assert kinds["external:Echo"] == 0 and "external" not in kinds       # counted under the type's badge, not the raw kind
 
 
 async def test_only_the_beeper_tool_calls_queue_external():
@@ -216,10 +217,10 @@ async def test_the_list_and_the_card_come_from_the_type(web, hub, monkeypatch):
     async with client(app) as c:
         await signed_in(c)
         today = (await c.get("/dashboard/api/today")).json()["waiting"]
-        assert today == [{"key": f"external:{q.id}", "kind": "external", "badge": "Echo", "title": "Echo test", "to": "anna@example.org",
+        assert today == [{"key": f"external:{q.id}", "kind": "external", "kind_label": "Echo", "badge": "Echo", "title": "Echo test", "to": "anna@example.org",
                           "by": "Claude", "created_at": q.created_at, "expires_at": q.expires_at, "warning": True, "blocked": False,
                           "group": False, "action_type": "test.echo"}]
-        assert (await c.get("/dashboard/api/state")).json()["kinds"]["external"] == 1
+        assert (await c.get("/dashboard/api/state")).json()["kinds"]["external:Echo"] == 1
         it = (await c.get(url(q.id))).json()
         assert it["rows"] == [["Reaches", "anna@example.org"], ["Times", "2"]] and it["text"] == "Please send the money"
         assert it["approve_label"] == "Send echo" and it["warnings"] == ["The message mentions money."] and it["needs_override"] is False

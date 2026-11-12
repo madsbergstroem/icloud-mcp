@@ -56,6 +56,18 @@ class ExternalApprovals(ApprovalSource):
         type_id, params = A.read(q.raw)
         return self.registry.get(type_id), type_id, params
 
+    def kind_label(self, q: QueuedMessage) -> str:
+        """What the dashboard calls this request where it names kinds: the badge of its action type ('Beeper'), else 'Other'."""
+        try:
+            reg = self._entry(q)[0]
+        except A.ExternalError:
+            return "Other"
+        return reg.action_type.badge if reg is not None else "Other"
+
+    def kind_labels(self) -> list[str]:
+        """The badges of every type this server takes, so a kind with nothing waiting still has its line."""
+        return list(dict.fromkeys(t.badge for t in self.registry.types()))
+
     def describe(self, q, context=None):
         try:
             reg, type_id, params = self._entry(q)

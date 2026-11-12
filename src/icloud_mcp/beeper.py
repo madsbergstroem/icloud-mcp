@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -166,6 +167,109 @@ def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
         items = parts.get("items") if isinstance(parts, Mapping) else None
         total = len(items) if isinstance(items, list) and items else None
     return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total)
+
+
+# -- the networks behind Beeper, for the dashboard's account list --------------------------------------------------------------------
+@dataclass(frozen=True)
+class Network:
+    network: str        # 'WhatsApp', 'Signal'
+    user: str           # the owner's display name on that network
+    account_id: str     # Beeper's id of the account
+
+
+_SECTION = re.compile(r"^## (?P<network>.+?)\s*$", re.M)
+_ACCOUNT_ID_LINE = re.compile(r"^\*\*Account ID\*\*: `?(?P<id>[^`\n]+?)`?\s*$", re.M)
+_USER_LINE = re.compile(r"^\*\*User\*\*: (?P<user>.+?)\s*$", re.M)
+_BEEPER_OWN = "matrix"      # Beeper's own account (`## Beeper`): the place the networks live in, not a network
+
+
+def _clean(value: Any, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _networks_from_text(text: str) -> list[Network] | None:
+    """Beeper's MCP answers get_accounts as text: `# Accounts`, then per account `## <network>`, `**Account ID**: `<id>``,
+    `**User**: <name>` and lines with the address and the number, which are never read here. None when this is no such answer."""
+    if not re.search(r"^# Accounts\s*$", text, re.M):
+        return None
+    text = re.split(r"^# (?!Accounts\s*$)", text, maxsplit=1, flags=re.M)[0]      # `# Using this information` and after: not accounts
+    heads = list(_SECTION.finditer(text))
+    out = []
+    for i, h in enumerate(heads):
+        block = text[h.end():heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        aid, user = _ACCOUNT_ID_LINE.search(block), _USER_LINE.search(block)
+        if aid is None:
+            continue
+        out.append(Network(_clean(h["network"], 100), _clean(user["user"], 200) if user else "", _clean(aid["id"], 200)))
+    return out
+
+
+def _networks_of(answer: Answer) -> list[Network] | None:
+    """The accounts as Beeper lists them, Beeper's own left out: from its text answer, or from structured data (a list of accounts
+    with `accountID`, `network` and `user.fullName`) when a gateway passes that on. None when the answer is not such a list."""
+    if answer.is_error:
+        return None
+    d = answer.data
+    if isinstance(d, Mapping):
+        d = d.get("accounts", d.get("items", d))
+    if isinstance(d, list) and all(isinstance(x, Mapping) for x in d):
+        nets = []
+        for x in d:
+            user = x.get("user") if isinstance(x.get("user"), Mapping) else {}
+            name = user.get("fullName") or user.get("displayText") or ""
+            nets.append(Network(_clean(x.get("network"), 100), _clean(name, 200), _clean(x.get("accountID"), 200)))
+        got: list[Network] | None = nets
+    else:
+        text = answer.text or (d.get("result") if isinstance(d, Mapping) and isinstance(d.get("result"), str) else "")
+        got = _networks_from_text(text) if text else None
+    if got is None:
+        return None
+    return [n for n in got if n.account_id and n.network and n.account_id != _BEEPER_OWN]
+
+
+class AccountsReader:
+    """Reads Beeper's accounts through the gateway with the read key, for the dashboard. Kept in memory a short while, never on disk;
+    the log has the outcome only. `read()` never raises: it answers {'state', 'networks'} with state 'ok', 'no_read_key',
+    'unreachable', 'refused' or 'unreadable'."""
+
+    KEEP_SECONDS = 180          # an answer
+    KEEP_FAILURE_SECONDS = 30   # a failure, so a broken gateway is not asked on every page view
+
+    def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
+        self.tool = s.beeper_accounts_tool
+        self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
+        self._lock = threading.Lock()
+        self._kept: tuple[float, dict[str, Any]] | None = None
+
+    def read(self) -> dict[str, Any]:
+        if self.gateway is None:
+            return {"state": "no_read_key", "networks": []}
+        with self._lock:
+            if self._kept is not None and time.monotonic() < self._kept[0]:
+                return self._kept[1]
+            got = self._ask()
+            self._kept = (time.monotonic() + (self.KEEP_SECONDS if got["state"] == "ok" else self.KEEP_FAILURE_SECONDS), got)
+            return got
+
+    def _ask(self) -> dict[str, Any]:
+        try:
+            nets = _networks_of(self.gateway.call(self.tool, {}))
+        except GatewayError as e:
+            state = "refused" if e.kind == "auth" else "unreachable" if e.kind == "unreachable" else "unreadable"
+            log.info("beeper accounts: %s", state)
+            return {"state": state, "networks": []}
+        except Exception as e:  # noqa: BLE001  -- the dashboard page must stand whatever happens here
+            log.warning("beeper accounts: unreadable (%s)", type(e).__name__)
+            return {"state": "unreadable", "networks": []}
+        if nets is None:
+            log.info("beeper accounts: unreadable")
+            return {"state": "unreadable", "networks": []}
+        log.info("beeper accounts: ok (%d networks)", len(nets))
+        return {"state": "ok", "networks": [{"network": n.network, "user": n.user, "account_id": n.account_id} for n in nets]}
+
+
+def accounts_reader(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> AccountsReader:
+    return AccountsReader(s, make_http)
 
 
 class BeeperError(Exception):

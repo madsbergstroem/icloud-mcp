@@ -147,8 +147,9 @@ the other side), with the same rule: `failed` only when no connection was made, 
 
 Where the seam is not general yet:
 
-- The kind tables in `static/app` have no entry for `external`, so a card's tag shows the raw kind, and the "not sure it
-  arrived" notice talks about a conversation.
+- A card's tag and the side list's "Waiting by kind" name an `external` request by its type's badge ("Beeper"), or "Other"
+  when the type is gone (`ExternalApprovals.kind_label`; `/state` counts them as `external:<badge>`). The "not sure it arrived"
+  notice still talks about a conversation.
 - `approval_withdraw` words its log line from a switch on the kind, so a withdrawn external request is logged without a title.
 - A source's outbox is found by probing for `mail`, `cal` or `box` on it (in `dashboard.py` and `textedit.py`).
 - `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
@@ -180,6 +181,14 @@ own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is w
 - `request_id` is the key of `queue_external`: the same key with the same request returns the first entry.
 - Log, audit and push carry the kind, the id, the outcome and the time. The card's title is always "Beeper message". The text,
   the chat's name and its id appear only in the entry itself, which is removed with it.
+
+Settings › Accounts lists the networks Beeper is signed in to, below the accounts of /setup: network, the owner's name there and
+Beeper's account id, read live with `get_accounts` through the gateway. That takes a key of its own, `BEEPER_READ_KEY` (the
+execution key has no grant for it), and the tool name `BEEPER_ACCOUNTS_TOOL`. The answer is kept in memory for three minutes, a
+failure for 30 seconds; nothing is written to disk, and the log has the outcome only. The address and the phone number in Beeper's
+answer are never read, and Beeper's own account (`matrix`) is not a network. Without the key, when the gateway cannot be reached or
+refuses the key, or when the answer is not a list of accounts, one row "Beeper" says which. Each network is marked as coming
+through Beeper and set in the server's environment, with "Sends after your approval" when sending is on, and "Reading: not yet".
 
 Not built yet: choosing a chat by name on the dashboard, the last messages of a chat on the card (another person's words, so a
 switch of its own), and an instance for a second owner, who would have to agree first.

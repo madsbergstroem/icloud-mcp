@@ -2,7 +2,7 @@
 (mail, iMessage, a group chat, a calendar invitation) and one request the assistant took back (Home says so for a day, Activity
 keeps it). Nothing here reaches a real account.
 
-    PYTHONPATH=src python dev/preview_dashboard.py [--port 8765] [--data DIR] [--arrive SECONDS]
+    PYTHONPATH=src python dev/preview_dashboard.py [--port 8765] [--data DIR] [--arrive SECONDS] [--beeper ok|no-key|down|refused|none]
 
 Open http://localhost:8765/dashboard and sign in with the owner password printed at start. Words in a message steer the fake Mac:
 [unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
@@ -24,6 +24,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8765)
 ap.add_argument("--data", default="")
 ap.add_argument("--arrive", type=int, default=0)
+ap.add_argument("--beeper", choices=["ok", "no-key", "down", "refused", "none"], default="ok")
 args = ap.parse_args()
 PORT = args.port
 DATA = args.data or tempfile.mkdtemp(prefix="icloud-mcp-preview-")
@@ -39,6 +40,12 @@ os.environ.update(
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
     DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*",
     BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400")
+# Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
+# gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
+if args.beeper != "none":
+    from test_beeper import KEY as BEEPER_KEY, READ_KEY as BEEPER_READ, URL as BEEPER_URL  # noqa: E402  (the made-up keys of the tests)
+    os.environ.update(BEEPER_GATEWAY_URL=BEEPER_URL, BEEPER_EXEC_KEY=BEEPER_KEY, BEEPER_SEND_ALLOWLIST="*",
+                      **({} if args.beeper == "no-key" else {"BEEPER_READ_KEY": BEEPER_READ[::-1] if args.beeper == "refused" else BEEPER_READ}))
 
 import uvicorn  # noqa: E402
 
@@ -62,6 +69,14 @@ def fake_imap(self):
 MailService.imap = fake_imap
 MailService.resolve_folder = lambda self, c, name: {"sent": "Sent Messages", "drafts": "Drafts"}.get(name.lower(), name)
 MailService._smtp_send = lambda self, msg, rcpts: sent.append((msg, list(rcpts))) or {}
+
+from icloud_mcp import beeper as B  # noqa: E402
+from test_beeper import FakeGateway  # noqa: E402
+
+gw = FakeGateway()
+gw.mode = "down" if args.beeper == "down" else None
+B.connect = lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=gw.make_http), s.beeper_chat_tool, s.beeper_send_tool)
+B.accounts_reader = lambda s: B.AccountsReader(s, make_http=gw.make_http)
 
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
@@ -129,6 +144,12 @@ cal.outbox.add(c.to_ical(), ["jana@example.org", "tom@example.net"],
                {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Home", "uid": "preview-1@example.org",
                 "summary": "Dinner with the Okafors", "start": "2026-11-14T19:00:00+01:00", "end": None, "location": "Harbour Street 4",
                 "description": "Table for four at 19:00. Bring the wine list.", "organizer": None, "href": None, "etag": None})
+
+if args.beeper in ("ok", "no-key", "refused"):              # a Beeper message to a made-up chat, through the real tool
+    asyncio.run(mcp.call_tool("messages_send_request", {"chat_id": "beeper:!single:beeper.test", "text": "See you at the north gate at nine."}))
+if "external" in d.sources:                                  # and a request whose type this server no longer has: "Other"
+    from icloud_mcp import actions as AT
+    d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")
 
 d.audit.record("signin.password", actor="owner", via="password", summary="Signed in with the owner password")
 # One request the assistant queued and then took back, through the real tool, so Home and Activity show what a withdrawal leaves.
