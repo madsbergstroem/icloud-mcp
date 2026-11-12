@@ -5,6 +5,7 @@
 import { get, post } from "./api.js";
 import { esc, toast, fail, ask, section, titleBlock, row } from "./ui.js";
 import { page, macRows, macAside, wireSwitches } from "./settings.js";
+import { sendingSection, readingSection, wireSending } from "./picker.js";
 
 const AREAS = [["mail", "Mail"], ["calendar", "Calendar"], ["contacts", "Contacts"]];
 const AREA_NAME = Object.fromEntries(AREAS);
@@ -71,7 +72,12 @@ class Service extends HTMLElement {
     if (this.sid.startsWith("plugin:") && !this.r) this.body.innerHTML = titleBlock("", "Loading…") + `<div class="empty"><ion-spinner></ion-spinner></div>`;
     try { [r, st] = await Promise.all([get("/accounts"), get("/settings")]); } catch (e) { fail(e); return; }
     this.r = r; this.st = st;
-    if (this.sid.startsWith("plugin:")) return this.plugin((r.plugins || []).find((p) => "plugin:" + p.id === this.sid && p.enabled));
+    if (this.sid.startsWith("plugin:")) {
+      const p = (r.plugins || []).find((x) => "plugin:" + x.id === this.sid && x.enabled);
+      // who it may write to is read live from the service, by name: the page waits for it rather than redrawing
+      this.rec = p && p.messages && p.messages.picker ? await get(`/plugins/${encodeURIComponent(p.id)}/recipients`).catch(() => null) : null;
+      return this.plugin(p);
+    }
     const a = r.accounts.find((x) => "acct:" + x.id === this.sid);
     if (!a) { this.body.innerHTML = titleBlock("Not connected", "This service is no longer connected."); return; }
     this.account(a);
@@ -167,7 +173,8 @@ class Service extends HTMLElement {
     const allow = m && m.settings ? (st.groups.find((x) => x.slug === m.settings) || {}).summary || "" : "";
     this.body.innerHTML = titleBlock(p.name, `${esc(p.description)} ${esc(p.status)}.`) + restartNotice(st)
       + (l ? section(l.label || "Accounts") + `<ion-list class="inset">${items}</ion-list>` + (l.note ? `<p class="note">${esc(l.note)}</p>` : "") : "")
-      + (m ? section("What your assistant may do") + `<ion-list class="inset">
+      + (m && m.picker ? sendingSection(p, this.rec) + (m.reading ? "" : readingSection(p))
+        : m ? section("What your assistant may do") + `<ion-list class="inset">
         ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: m.sending ? "On" : "Off", noteClass: m.sending ? "state-on" : "state-off" })}
         ${m.settings ? row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" }) : ""}
         ${row({ title: "Read chats", note: m.reading ? "On" : "Not built yet" })}</ion-list>` : "")
@@ -181,6 +188,7 @@ class Service extends HTMLElement {
       al.present();
     }));
     this.querySelector("[data-allow]")?.addEventListener("click", () => push(this, "icm-group", { page: m.settings, title: "Who it may write to" }));
+    if (m && m.picker) wireSending(this, p, st, () => this.load());
     wireRestart(this);
   }
 }

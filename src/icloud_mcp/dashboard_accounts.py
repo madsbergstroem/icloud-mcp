@@ -93,7 +93,8 @@ def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
     if m is not None:
         group = p.settings_group() if p.settings_group is not None else None
         out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(s) and m.action_type is not None),
-                           "reading": m.backend is not None, "settings": group.slug if group is not None else ""}
+                           "reading": m.backend is not None, "settings": group.slug if group is not None else "",
+                           "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key}
     return out
 
 
@@ -237,3 +238,79 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         if before == "env":                                    # the deployment's own account gets a real id once it is saved
             data = A.put(data, dict(acct), "env")
         return save(data, rec, f"Chose {len(chosen)} calendar{'s' if len(chosen) != 1 else ''} for the assistant")
+
+
+# -- the recipient picker, for any plugin that sends messages --------------------------------------------------------------------
+def _split(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def _rules(s: Any, m: Any) -> dict[str, Any]:
+    """A plugin's rules as they stand in Settings now (saved values win over the environment; they apply after a restart)."""
+    from .settings import SettingsStore, current
+    stored = SettingsStore(s.data_dir).read()
+    value = lambda key, dflt="": current(key, stored)[0] if key else dflt      # noqa: E731
+    allow = _split(value(m.recipients_key))
+    return {"ids": [x for x in allow if x != "*"], "any": "*" in allow,
+            "networks": _split(value(m.networks_key, "*")) if m.networks_key else ["*"],
+            "groups": value(m.groups_key, "false").strip().lower() in ("1", "true", "yes", "on") if m.groups_key else False,
+            "keys": {"recipients": m.recipients_key, "networks": m.networks_key, "groups": m.groups_key}}
+
+
+def _wire(c: Any, added: set[str] | None = None) -> dict[str, Any]:
+    out = {"id": c.id, "title": c.title, "network": c.network, "group": c.group, "people": c.people,
+           "last_activity": c.last_activity, "found": c.found}
+    if added is not None:
+        out["added"] = c.id.casefold() in added
+    return out
+
+
+def register_picker_api(mcp: Any, d: Any) -> None:
+    """GET /dashboard/api/plugins/<id>/recipients: the chats on the plugin's list by name (a chat its service no longer knows says so),
+    with the network and group rules and the networks to choose from. GET .../find?q=: chats found by name, or the most recent,
+    each marked when it is on the list. GET .../resolve?id=: one chat, checked before it is added. Read only: the page changes the
+    rules through /dashboard/api/settings/<group> like every other setting. Nothing here is stored, and names are never logged."""
+    here = {p.id: p for p in enabled_plugins(d.s) if p.capabilities.messages is not None and p.capabilities.messages.recipients_key}
+
+    def found(request: Request) -> Any:
+        p = here.get(request.path_params["pid"])
+        return (p, p.capabilities.messages) if p is not None else (None, None)
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/recipients", methods=["GET"])
+    async def picker_recipients(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        rules = _rules(d.s, m)
+        (state, chats), nets = await asyncio.gather(asyncio.to_thread(m.resolve, d.s, rules["ids"]), asyncio.to_thread(m.networks, d.s))
+        return d.api_ok({**rules, "state": state, "chats": [_wire(c) for c in chats], "all_networks": nets, "name": p.name})
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/find", methods=["GET"])
+    async def picker_find(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        q = str(request.query_params.get("q", "")).strip()[:100]
+        state, chats = await asyncio.to_thread(m.search_chats, d.s, q)
+        on = {x.casefold() for x in _rules(d.s, m)["ids"]}
+        return d.api_ok({"state": state, "query": q, "chats": [_wire(c, on) for c in chats]})
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/resolve", methods=["GET"])
+    async def picker_resolve(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        cid = str(request.query_params.get("id", "")).strip()[:300]
+        state, chats = await asyncio.to_thread(m.resolve, d.s, [cid] if cid else [])
+        if state != "ok" or not chats or not chats[0].found:
+            return d.api_err("That chat cannot be found any more. Nothing was added.", 404, state=state)
+        return d.api_ok({"chat": _wire(chats[0])})

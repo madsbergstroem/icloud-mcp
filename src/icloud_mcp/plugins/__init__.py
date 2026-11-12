@@ -90,7 +90,11 @@ class MessagesCapability:
     - action_type, executor(s): what is queued, and what carries it out after the owner approved; the core calls it once
     - allowed(s): the owner's list of who may be reached (`*` for anyone), checked at queue and at approval
     - policy(s): further rules on the parameters (a reason a request is not permitted, or None), checked the same way
-    - search_chats(s, query) / resolve(s, ids): the picker; they never raise
+    - search_chats(s, query) / resolve(s, ids): the recipient picker, as (state, chats): state "ok" or why nothing could be read
+      ("no_read_key", "unreachable" ...); they never raise. An empty query gives the most recent chats.
+    - networks(s): the networks the picker offers for the network rule (names as the chats carry them)
+    - recipients_key / networks_key / groups_key: the plugin's settings the core's picker edits (its allowlist, `*` for any chat;
+      the networks that may be written to, `*` for all; whether group chats may be written to). Empty: that part is not offered.
     - sending_on(s): whether sending is set up at all
     """
     prefix: str
@@ -100,8 +104,12 @@ class MessagesCapability:
     backend: Callable[[Any], Any] | None = None
     allowed: Callable[[Any], Iterable[str]] = lambda s: ()
     policy: Callable[[Any], Callable[[Mapping[str, Any]], str | None] | None] = lambda s: None
-    search_chats: Callable[[Any, str], list[ChatRef]] = lambda s, q: []
-    resolve: Callable[[Any, list[str]], list[ChatRef]] = lambda s, ids: [ChatRef(i, found=False) for i in ids]
+    search_chats: Callable[[Any, str], tuple[str, list[ChatRef]]] = lambda s, q: ("ok", [])
+    resolve: Callable[[Any, list[str]], tuple[str, list[ChatRef]]] = lambda s, ids: ("ok", [ChatRef(i, found=False) for i in ids])
+    networks: Callable[[Any], list[str]] = lambda s: []
+    recipients_key: str = ""
+    networks_key: str = ""
+    groups_key: str = ""
     sending_on: Callable[[Any], bool] = lambda s: False
 
 
@@ -154,6 +162,7 @@ class Plugin:
     connection: Connection = field(default_factory=Connection)
     capabilities: Capabilities = field(default_factory=Capabilities)
     settings_keys: frozenset[str] = frozenset()     # the environment names the owner may change on the dashboard
+    env_keys: frozenset[str] = frozenset()          # names only whoever runs the server sets; read like settings_keys, never editable
     settings_group: Callable[[], Any] | None = None  # a settings.Group, built when Settings asks
     enabled: Callable[[Any], bool] = lambda s: False   # whether it is set up on this server
     secrets: Callable[[Any], Iterable[str]] = lambda s: ()
@@ -206,6 +215,10 @@ def enabled_plugins(s: Any) -> list[Plugin]:
         except Exception as e:  # noqa: BLE001
             log.warning("plugin %s: could not tell whether it is set up (%s)", p.id, type(e).__name__)
     return out
+
+
+def env_keys() -> frozenset[str]:
+    return frozenset(k for p in load_plugins() for k in p.env_keys)
 
 
 def settings_keys() -> frozenset[str]:

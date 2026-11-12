@@ -72,6 +72,7 @@ class Chat:
     network: str
     is_group: bool
     people: int | None
+    last_activity: str = ""      # ISO time of the last message, when Beeper says
 
 
 def _classify(sent: bool, statuses: list[int]) -> GatewayError:
@@ -139,16 +140,21 @@ def _answer(result: Any) -> Answer:
 _TITLE_LINE = re.compile(r"^## (?P<title>.+) \(chatID: (?P<id>[^)]+)\)\s*$", re.M)
 _NETWORK_LINE = re.compile(r"^Chat on (?P<network>.+?) \((?P<account>\S+)\)", re.M)
 _TYPE_LINE = re.compile(r"^\*\*Type\*\*: (?P<type>single|group)\s*$", re.M)
+_ACTIVITY_LINE = re.compile(r"^\*\*Last Activity\*\*: (?P<at>\S+)\s*$", re.M)
+_WITH = re.compile(r"^Chat on .+? \(\S+\) with (?P<people>.+?)\.?\s*$", re.M)
 
 
 def _chat_from_text(text: str, chat_id: str) -> Chat | None:
-    """Beeper's MCP answers get_chat as text: `## <title> (chatID: <id>)`, `Chat on <network> (<account>)`, `**Type**: single|group`.
-    With no participants asked for there is no count. The id in the answer must be the one asked for."""
+    """Beeper's MCP answers get_chat as text: `## <title> (chatID: <id>)`, `Chat on <network> (<account>)` (followed by `with A, B, C.`
+    when participants were asked for), `**Type**: single|group`, `**Last Activity**: <time>`. The names are only counted, never kept;
+    with none asked for there is no count. The id in the answer must be the one asked for."""
     title, kind = _TITLE_LINE.search(text), _TYPE_LINE.search(text)
     if title is None or kind is None or title["id"].strip() != chat_id.strip():
         return None
-    net = _NETWORK_LINE.search(text)
-    return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", None)
+    net, at, people = _NETWORK_LINE.search(text), _ACTIVITY_LINE.search(text), _WITH.search(text)
+    count = len([x for x in people["people"].split(", ") if x.strip()]) if people else None
+    return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", count,
+                at["at"][:40] if at else "")
 
 
 def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
@@ -168,7 +174,8 @@ def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
     if not isinstance(total, int) or isinstance(total, bool):
         items = parts.get("items") if isinstance(parts, Mapping) else None
         total = len(items) if isinstance(items, list) and items else None
-    return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total)
+    return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total,
+                str(d.get("lastActivity") or "")[:40])
 
 
 # -- the networks behind Beeper, for the dashboard's account list --------------------------------------------------------------------
@@ -229,6 +236,15 @@ def _networks_of(answer: Answer) -> list[Network] | None:
     return [n for n in got if n.account_id and n.network and n.account_id != _BEEPER_OWN]
 
 
+def read_tool(s: Settings, name: str) -> str:
+    """The gateway's name of one of Beeper's read tools for the read key: `<BEEPER_READ_SERVER>-<name>` ("beeper_michel-search_chats").
+    BEEPER_ACCOUNTS_TOOL, where set, still names get_accounts; without a read server the old default names stay."""
+    server = s.plugin_value("BEEPER_READ_SERVER").strip()
+    if name == "get_accounts" and (s.plugin_value("BEEPER_ACCOUNTS_TOOL").strip() or not server):
+        return s.beeper_accounts_tool
+    return f"{server or 'beeper'}-{name}"
+
+
 class AccountsReader:
     """Reads Beeper's accounts through the gateway with the read key, for the dashboard. Kept in memory a short while, never on disk;
     the log has the outcome only. `read()` never raises: it answers {'state', 'networks'} with state 'ok', 'no_read_key',
@@ -238,7 +254,7 @@ class AccountsReader:
     KEEP_FAILURE_SECONDS = 30   # a failure, so a broken gateway is not asked on every page view
 
     def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
-        self.tool = s.beeper_accounts_tool
+        self.tool = read_tool(s, "get_accounts")
         self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
         self._lock = threading.Lock()
         self._kept: tuple[float, dict[str, Any]] | None = None
@@ -272,6 +288,111 @@ class AccountsReader:
 
 def accounts_reader(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> AccountsReader:
     return AccountsReader(s, make_http)
+
+
+# -- the chats on the owner's list, by name, and finding one to add -----------------------------------------------------------------
+_CHAT_HEAD = re.compile(r"^## .+ \(chatID: [^)]+\)\s*$", re.M)
+PEOPLE_COUNTED = 100           # a group with more shows as 100+
+
+
+def _chats_of(answer: Answer) -> list[tuple[str, Chat]] | None:
+    """The chats of a search_chats answer as (id, chat): blocks like get_chat's in text, or a list of chats in structured data
+    (`items` or `chats`, each with `id`). None when the answer is not a list of chats."""
+    if answer.is_error:
+        return None
+    d = answer.data
+    if isinstance(d, Mapping) and isinstance(d.get("items", d.get("chats")), list):
+        out = []
+        for x in d.get("items", d.get("chats")):
+            if isinstance(x, Mapping) and isinstance(x.get("id"), str) and (c := _chat_of(Answer(False, x, ""), x["id"])):
+                out.append((x["id"], c))
+        return out
+    text = answer.text or (d.get("result") if isinstance(d, Mapping) and isinstance(d.get("result"), str) else "")
+    if not text:
+        return None
+    text = re.split(r"^# Using this information", text, maxsplit=1, flags=re.M)[0]      # what follows is advice, not chats
+    heads = list(_CHAT_HEAD.finditer(text))
+    out = []
+    for i, h in enumerate(heads):
+        block = text[h.start():heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        chat_id = _TITLE_LINE.search(block)["id"].strip()
+        if (c := _chat_from_text(block, chat_id)) is not None:
+            out.append((chat_id, c))
+    return out
+
+
+def _row(chat_id: str, c: Chat) -> dict[str, Any]:
+    return {"id": chat_id, "title": c.title, "network": c.network, "group": c.is_group, "people": c.people, "last_activity": c.last_activity}
+
+
+class ChatsReader:
+    """Reads chats through the gateway with the read key, for the dashboard: each chat on the list by id (`get_chat`) and a search by
+    name (`search_chats`), on the server entry BEEPER_READ_SERVER. A chat is kept in memory a short while, never on disk; the log
+    has the outcome only, never a title or an id. The methods never raise: a failure is a `state` the page shows."""
+
+    KEEP_SECONDS = 120
+    STATES = {"auth": "refused", "unreachable": "unreachable"}
+
+    def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
+        self.chat_tool, self.search_tool = read_tool(s, "get_chat"), read_tool(s, "search_chats")
+        self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
+        self._lock = threading.Lock()
+        self._kept: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+    def _one(self, chat_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            hit = self._kept.get(chat_id)
+            if hit is not None and time.monotonic() < hit[0]:
+                return hit[1]
+        # people are asked for only to count them (a group's size); the names are not kept
+        answer = self.gateway.call(self.chat_tool, {"chatID": chat_id, "maxParticipantCount": PEOPLE_COUNTED})
+        c = _chat_of(answer, chat_id)
+        row = _row(chat_id, c) if c is not None else None          # None: Beeper does not know this chat (any more)
+        with self._lock:
+            self._kept[chat_id] = (time.monotonic() + self.KEEP_SECONDS, row)
+        return row
+
+    def chats(self, ids: list[str]) -> dict[str, Any]:
+        """{"state", "chats": [{id, title, network, group, people, last_activity, found}]} for the ids on the list, in its order."""
+        if self.gateway is None:
+            return {"state": "no_read_key", "chats": []}
+        out, missing = [], 0
+        try:
+            for chat_id in ids:
+                row = self._one(chat_id)
+                missing += row is None
+                out.append({**row, "found": True} if row else {"id": chat_id, "found": False})
+        except GatewayError as e:
+            log.info("beeper chats: %s", self.STATES.get(e.kind, "unreadable"))
+            return {"state": self.STATES.get(e.kind, "unreadable"), "chats": []}
+        except Exception as e:  # noqa: BLE001  -- the page must stand whatever happens here
+            log.warning("beeper chats: unreadable (%s)", type(e).__name__)
+            return {"state": "unreadable", "chats": []}
+        log.info("beeper chats: ok (%d on the list, %d not found)", len(ids), missing)
+        return {"state": "ok", "chats": out}
+
+    def search(self, query: str, limit: int = 20) -> dict[str, Any]:
+        """{"state", "chats": [...]}: chats whose title matches `query` (Beeper's own search), or the most recent ones without it."""
+        if self.gateway is None:
+            return {"state": "no_read_key", "chats": []}
+        args: dict[str, Any] = {"limit": limit, **({"query": query} if query else {})}
+        try:
+            got = _chats_of(self.gateway.call(self.search_tool, args))
+        except GatewayError as e:
+            log.info("beeper chat search: %s", self.STATES.get(e.kind, "unreadable"))
+            return {"state": self.STATES.get(e.kind, "unreadable"), "chats": []}
+        except Exception as e:  # noqa: BLE001
+            log.warning("beeper chat search: unreadable (%s)", type(e).__name__)
+            return {"state": "unreadable", "chats": []}
+        if got is None:
+            log.info("beeper chat search: unreadable")
+            return {"state": "unreadable", "chats": []}
+        log.info("beeper chat search: ok (%d chats)", len(got))
+        return {"state": "ok", "chats": [_row(i, c) for i, c in got]}
+
+
+def chats_reader(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> ChatsReader:
+    return ChatsReader(s, make_http)
 
 
 class BeeperError(Exception):

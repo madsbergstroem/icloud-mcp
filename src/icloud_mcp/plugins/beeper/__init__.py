@@ -2,25 +2,38 @@
 
 It offers the `messages` capability for sending: a request to a `beeper:` chat is queued for the owner's approval, and after the
 approval the core calls this plugin's executor once (gateway.py has the client, the action type, the executor and the sender).
-Reading chats is planned and not built yet. Whoever runs the server sets it up with BEEPER_* in the environment; the owner changes
-only who may be written to (BEEPER_SEND_ALLOWLIST) on the dashboard.
+Reading chats is planned and not built yet. Whoever runs the server sets it up with BEEPER_* in the environment. The owner sets
+three rules on the dashboard, and a chat must pass all three: the list (BEEPER_SEND_ALLOWLIST, `*` for any chat), the networks
+(BEEPER_SEND_NETWORKS, `*` for all) and group chats (BEEPER_SEND_GROUPS, off by default; a group must be on the list by its id
+even then, `*` never covers one). The recipient picker names the chats on the list and finds new ones with the read key, on the
+gateway's server entry BEEPER_READ_SERVER; nothing of it is stored, and the read key never sends.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Mapping
 
-from .. import Capabilities, Listing, MessagesCapability, Plugin
+from .. import Capabilities, ChatRef, Listing, MessagesCapability, Plugin
 from . import gateway as G
 
 _STATES = {"no_read_key": "Accounts not readable: no read key", "unreachable": "Gateway not reachable",
            "refused": "Accounts not readable: the gateway refused the read key", "unreadable": "Accounts not readable: unexpected answer from Beeper"}
 
 
+ALLOW, NETWORKS, GROUPS = "BEEPER_SEND_ALLOWLIST", "BEEPER_SEND_NETWORKS", "BEEPER_SEND_GROUPS"
+
+
+def _split(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
 def _settings_group() -> Any:
-    from ...settings import Group, Spec, _changed
+    from ...settings import Group, Spec, _changed, _to_true
     return Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
-        Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat.",
+        Spec(ALLOW, "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat except groups.",
              loosens=_changed, section="Sending"),
+        Spec(NETWORKS, "Networks that may be written to", "list", "Network names as Beeper shows them. * means every network, empty none.",
+             default="*", loosens=_changed, section="Sending"),
+        Spec(GROUPS, "Group chats", default="false", help="Only groups on the list by name; * never covers a group.", loosens=_to_true, section="Sending"),
     ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
                           else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
                           else "Nobody may be written to"))
@@ -47,6 +60,56 @@ def _health(s: Any) -> dict[str, Any]:
 
 
 
+def _policy(s: Any) -> Callable[[Mapping[str, Any]], str | None]:
+    """Beyond the list (the core checks that): the chat's network must be allowed, and a group needs group chats on and its own id
+    on the list. Read when a request is queued and again when it is approved; the answer is written for the agent."""
+    nets = {x.casefold() for x in _split(s.plugin_value(NETWORKS, "*"))}
+    groups_on = s.plugin_value(GROUPS, "false").strip().lower() in ("1", "true", "yes", "on")
+    listed = {x.casefold() for x in s.beeper_send_allowlist}
+
+    def check(p: Mapping[str, Any]) -> str | None:
+        network = str(p.get("network") or "")
+        if "*" not in nets and network.casefold() not in nets:
+            return (f"Not permitted: writing on {network or 'this network'} is off. Tell the owner; only the owner can choose the networks "
+                    "that may be written to.")
+        if p.get("is_group"):
+            if not groups_on:
+                return "Not permitted: group chats are off. Tell the owner; only the owner can turn group chats on."
+            if str(p.get("chat_id", "")).strip().casefold() not in listed:
+                return "Not permitted: a group chat must be on the owner's list by name. Tell the owner; only the owner can add it."
+        return None
+    return check
+
+
+_readers: dict[int, tuple[Any, Any]] = {}       # one chats reader per server (its answers are kept a short while)
+
+
+def _chats(s: Any) -> Any:
+    got = _readers.get(id(s))
+    if got is None or got[0] is not s:
+        got = _readers[id(s)] = (s, G.chats_reader(s))
+    return got[1]
+
+
+def _ref(row: Mapping[str, Any]) -> ChatRef:
+    return ChatRef(row["id"], row.get("title", ""), row.get("network", ""), bool(row.get("group")), row.get("people"),
+                   row.get("last_activity", ""), bool(row.get("found", True)))
+
+
+def _search(s: Any, query: str) -> tuple[str, list[ChatRef]]:
+    got = _chats(s).search(query, 20 if query else 10)
+    return got["state"], [_ref(r) for r in got["chats"]]
+
+
+def _resolve(s: Any, ids: list[str]) -> tuple[str, list[ChatRef]]:
+    got = _chats(s).chats(ids)
+    return got["state"], [_ref(r) for r in got["chats"]]
+
+
+def _networks(s: Any) -> list[str]:
+    return list(dict.fromkeys(n["network"] for n in G.accounts_reader(s).read()["networks"]))
+
+
 def plugin() -> Plugin:
     return Plugin(
         id="beeper", name="Beeper",
@@ -59,9 +122,13 @@ def plugin() -> Plugin:
             executor=lambda s: G.BeeperExecutor(G.connect(s)),
             sender=lambda s, external: G.BeeperSender(G.connect(s), external, s),
             allowed=lambda s: s.beeper_send_allowlist,
+            policy=_policy,
+            search_chats=_search, resolve=_resolve, networks=_networks,
+            recipients_key=ALLOW, networks_key=NETWORKS, groups_key=GROUPS,
             sending_on=G.configured,
         )),
-        settings_keys=frozenset({"BEEPER_SEND_ALLOWLIST"}),
+        settings_keys=frozenset({ALLOW, NETWORKS, GROUPS}),
+        env_keys=frozenset({"BEEPER_READ_SERVER", "BEEPER_ACCOUNTS_TOOL"}),
         settings_group=_settings_group,
         enabled=lambda s: bool(s.beeper_gateway_url),
         secrets=lambda s: (s.beeper_exec_key, s.beeper_read_key),
