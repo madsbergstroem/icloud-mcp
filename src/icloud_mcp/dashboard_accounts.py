@@ -5,10 +5,10 @@ GET /dashboard/api/accounts shows each account's provider, address, areas, wheth
 provider only) and which areas it is the default account of, and whether this request may connect or change accounts. No
 password or token leaves this route.
 
-Where the Beeper gateway is set up, `beeper` lists the networks Beeper is signed in to (network, the owner's name there, Beeper's
-account id), read live with the read key and kept in memory a few minutes (beeper.AccountsReader). Addresses and phone numbers in
-Beeper's answer are never read. Without the read key, or when the gateway does not answer, `beeper.state` says why and the list
-is empty; the page stands either way. Beeper is set up by whoever runs the server, not from here.
+`plugins` lists every service plugin (plugins/__init__.py): its name, status line, limits, Connect card text and whether it is
+set up here; for one that is, what its page lists (Beeper: the networks it is signed in to, read live and kept a few minutes) and
+what its messages capability does. The page draws any plugin from this data; no plugin brings code of its own to the dashboard.
+A listing that cannot be read says why in `problem`, and the page stands either way.
 
 "Find servers" (discover.py) looks up the servers of another provider from an address and saves nothing.
 
@@ -30,8 +30,8 @@ from starlette.responses import Response
 
 from . import access_sso
 from . import accounts as A
-from . import beeper as B
 from . import discover as D
+from .plugins import Plugin, enabled_plugins, load_plugins
 from . import setup_page as SP
 
 log = logging.getLogger(__name__)
@@ -79,17 +79,28 @@ def services(s: Any) -> list[dict[str, Any]]:
     return out
 
 
-_BEEPER_STATES = {"no_read_key": "Accounts not readable: no read key", "unreachable": "Gateway not reachable",
-                  "refused": "Accounts not readable: the gateway refused the read key", "unreadable": "Accounts not readable: unexpected answer from Beeper"}
-
-
-def beeper_listing(s: Any, reader: B.AccountsReader | None) -> dict[str, Any] | None:
-    """The Beeper part of the list, or None where the gateway is not set up at all."""
-    if reader is None or not s.beeper_gateway_url:
-        return None
-    got = reader.read()
-    return {"state": got["state"], "problem": _BEEPER_STATES.get(got["state"], ""), "networks": got["networks"],
-            "sending": B.configured(s), "reading": False}       # reading Beeper chats here is not built yet
+def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
+    """A plugin as Settings draws it. `listing` is the function its accounts() built for this server (or None)."""
+    m = p.capabilities.messages
+    out: dict[str, Any] = {"id": p.id, "name": p.name, "status": p.status, "limits": p.limits, "description": p.description,
+                           "connection": p.connection.kind, "enabled": on, "capabilities": p.capabilities.names()}
+    if not on:
+        return out
+    if listing is not None:
+        try:
+            got = listing()
+            out["listing"] = {"label": got.label, "items": got.items, "problem": got.problem, "note": got.note, "state": got.state}
+        except Exception as e:  # noqa: BLE001  -- the page must stand whatever a plugin does
+            log.warning("plugin %s: listing failed (%s)", p.id, type(e).__name__)
+            out["listing"] = {"label": "", "items": [], "problem": "Could not be read just now.", "note": "", "state": "unreadable"}
+    if m is not None:
+        group = p.settings_group() if p.settings_group is not None else None
+        out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(s) and m.action_type is not None),
+                           "reading": m.backend is not None and (m.reading_on is None or bool(m.reading_on(s))),
+                           "settings": group.slug if group is not None else "",
+                           "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key,
+                           "reading_keys": dict(m.reading_keys)}
+    return out
 
 
 def mail_account(s: Any) -> str:
@@ -101,7 +112,11 @@ def mail_account(s: Any) -> str:
 
 
 def register_accounts_api(mcp: Any, d: Any) -> None:
-    reader = B.accounts_reader(d.s) if d.s.beeper_gateway_url else None
+    here = {p.id for p in enabled_plugins(d.s)}
+    listings = {p.id: p.accounts(d.s) for p in load_plugins() if p.id in here and p.accounts is not None}   # built once per server
+
+    def plugins() -> list[dict[str, Any]]:
+        return [plugin_listing(d.s, p, listings.get(p.id), p.id in here) for p in load_plugins()]
     access = access_sso.from_settings(d.s)
 
     async def owner(request: Request) -> tuple[str, str] | None:
@@ -122,11 +137,11 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         got = d.api_reader(request)
         if isinstance(got, Response):
             return got
-        beeper = await asyncio.to_thread(beeper_listing, d.s, reader)      # the gateway client runs a loop of its own
+        listed = await asyncio.to_thread(plugins)       # a plugin's client may run a loop of its own
         why = await why_not(request)
         via = "" if why else (await owner(request) or ("", ""))[1]
         presets = [{"id": k, **v} for k, v in A.SERVER_PRESETS.items()]   # they only fill in the servers on the connect form
-        return d.api_ok({"accounts": services(d.s), "beeper": beeper, "connect": {"allowed": not why, "why": why, "via": via,
+        return d.api_ok({"accounts": services(d.s), "plugins": listed, "connect": {"allowed": not why, "why": why, "via": via,
                                                                                    "presets": presets}})
 
     async def guarded(request: Request) -> tuple[dict[str, Any], dict[str, Any]] | Response:
@@ -239,3 +254,96 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         if before == "env":                                    # the deployment's own account gets a real id once it is saved
             data = A.put(data, dict(acct), "env")
         return save(data, rec, f"Chose {len(chosen)} calendar{'s' if len(chosen) != 1 else ''} for the assistant")
+
+
+# -- the recipient picker, for any plugin that sends messages --------------------------------------------------------------------
+def _split(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+LISTS = ("recipients", "hidden", "visible")       # the chat lists the picker edits: who may be written to; chats never read; only these
+
+
+def _list_key(m: Any, which: str) -> str:
+    return m.recipients_key if which == "recipients" else m.reading_keys.get(which, "")
+
+
+def _rules(s: Any, m: Any, which: str = "recipients") -> dict[str, Any]:
+    """A plugin's rules as they stand in Settings now (saved values win over the environment; they apply after a restart). `which`
+    picks the chat list: the recipients, or a reading list (hidden, visible), which has no `*`."""
+    from .settings import SettingsStore, current
+    stored = SettingsStore(s.data_dir).read()
+    value = lambda key, dflt="": current(key, stored)[0] if key else dflt      # noqa: E731
+    allow = _split(value(_list_key(m, which)))
+    return {"list": which, "ids": [x for x in allow if x != "*"], "any": which == "recipients" and "*" in allow,
+            "networks": _split(value(m.networks_key, "*")) if m.networks_key else ["*"],
+            "groups": value(m.groups_key, "false").strip().lower() in ("1", "true", "yes", "on") if m.groups_key else False,
+            "keys": {"recipients": _list_key(m, which), "networks": m.networks_key, "groups": m.groups_key}}
+
+
+def _wire(c: Any, added: set[str] | None = None) -> dict[str, Any]:
+    out = {"id": c.id, "title": c.title, "network": c.network, "group": c.group, "people": c.people,
+           "last_activity": c.last_activity, "found": c.found}
+    if added is not None:
+        out["added"] = c.id.casefold() in added
+    return out
+
+
+def register_picker_api(mcp: Any, d: Any) -> None:
+    """GET /dashboard/api/plugins/<id>/recipients: the chats on the plugin's list by name (a chat its service no longer knows says so),
+    with the network and group rules and the networks to choose from. GET .../find?q=: chats found by name, or the most recent,
+    each marked when it is on the list. GET .../resolve?id=: one chat, checked before it is added. Read only: the page changes the
+    rules through /dashboard/api/settings/<group> like every other setting. Nothing here is stored, and names are never logged."""
+    here = {p.id: p for p in enabled_plugins(d.s) if p.capabilities.messages is not None and p.capabilities.messages.recipients_key}
+
+    def found(request: Request) -> Any:
+        p = here.get(request.path_params["pid"])
+        return (p, p.capabilities.messages) if p is not None else (None, None)
+
+    def which(request: Request, m: Any) -> str | None:
+        """?list=: recipients (the default), hidden or visible; None for a list this plugin does not have."""
+        w = str(request.query_params.get("list", "recipients"))
+        return w if w in LISTS and _list_key(m, w) else None
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/recipients", methods=["GET"])
+    async def picker_recipients(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        if (w := which(request, m)) is None:
+            return d.api_err("No such list here.", 404)
+        rules = _rules(d.s, m, w)
+        (state, chats), nets = await asyncio.gather(asyncio.to_thread(m.resolve, d.s, rules["ids"]), asyncio.to_thread(m.networks, d.s))
+        return d.api_ok({**rules, "state": state, "chats": [_wire(c) for c in chats], "all_networks": nets, "name": p.name})
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/find", methods=["GET"])
+    async def picker_find(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        q = str(request.query_params.get("q", "")).strip()[:100]
+        state, chats = await asyncio.to_thread(m.search_chats, d.s, q)
+        if (w := which(request, m)) is None:
+            return d.api_err("No such list here.", 404)
+        on = {x.casefold() for x in _rules(d.s, m, w)["ids"]}
+        return d.api_ok({"state": state, "query": q, "chats": [_wire(c, on) for c in chats]})
+
+    @mcp.custom_route("/dashboard/api/plugins/{pid}/resolve", methods=["GET"])
+    async def picker_resolve(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        p, m = found(request)
+        if p is None:
+            return d.api_err("No such service here.", 404)
+        cid = str(request.query_params.get("id", "")).strip()[:300]
+        state, chats = await asyncio.to_thread(m.resolve, d.s, [cid] if cid else [])
+        if state != "ok" or not chats or not chats[0].found:
+            return d.api_err("That chat cannot be found any more. Nothing was added.", 404, state=state)
+        return d.api_ok({"chat": _wire(chats[0])})

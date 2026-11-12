@@ -4,6 +4,7 @@ reaches anything outside the process."""
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx2
 import pytest
@@ -48,6 +49,28 @@ ACCOUNTS_TEXT = """# Accounts
 """
 
 
+PEOPLE = {GROUP: ["Jamie Rivera", "Sam Taylor", "Alex Example"], SINGLE: ["Example Person", "Alex Example"]}   # made up
+SHORT = "!sms-72345:beeper.test"     # a service sender: a one-to-one chat named by a short number
+
+
+def ago(**kw) -> str:
+    return (datetime.now(timezone.utc) - timedelta(**kw)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def made_up_messages() -> dict[str, list[dict]]:
+    """Messages as list_messages gives them (values made up): 45 in the single chat an hour apart, three in the group, one code."""
+    def m(chat, i, at, text, sender=("p-1", "Example Person"), mine=False, **kw):
+        return {"id": f"{chat[1:4]}-{i}", "chatID": chat, "accountID": "wa", "senderID": sender[0], "senderName": sender[1], "timestamp": at,
+                "sortKey": f"{i:06d}", "type": "TEXT", "text": text, "isSender": mine, "isDeleted": False, "linkedMessageID": None,
+                "mentions": [], "links": [], "seen": True, "isUnread": False, **kw}
+    single = [m(SINGLE, i, ago(hours=i), f"Message number {i}", mine=i % 3 == 0) for i in range(45)]
+    group = [m(GROUP, 1, ago(days=2), "<p>Bring the <b>blue</b> rope &amp; chalk</p>", ("p-2", "Jamie Rivera")),
+             m(GROUP, 2, ago(days=2, hours=-1), "On it", ("me", "Alex Example"), mine=True, linkedMessageID="gro-1"),
+             m(GROUP, 3, ago(days=40), "The old plan from autumn", ("p-3", "Sam Taylor"))]
+    code = [m(SHORT, 1, ago(hours=1), "Your code is 123456", ("sms", "72345"))]
+    return {SINGLE: single, GROUP: group, SHORT: code}
+
+
 class FakeGateway:
     """A gateway with Beeper behind it. `mode` makes it fail: 'refuse' (401 for everything), 'forbid' (403 for everything),
     'forbid_call' (403 only for a tool call: the session starts, the call is turned away), 'down' (no connection), 'lose' (the send
@@ -59,16 +82,20 @@ class FakeGateway:
         self.chat_calls: list[dict] = []
         self.seen_keys: list[str] = []
         self.chats = {
-            SINGLE: {"id": SINGLE, "title": "Example Person", "type": "single", "network": "WhatsApp", "accountID": "wa",
+            SINGLE: {"id": SINGLE, "title": "Example Person", "type": "single", "network": "WhatsApp", "accountID": "wa-example-1",
                      "participants": {"items": [], "hasMore": False, "total": 2}},
-            GROUP: {"id": GROUP, "title": "Example Club", "type": "group", "network": "Signal", "accountID": "sg",
+            GROUP: {"id": GROUP, "title": "Example Club", "type": "group", "network": "Signal", "accountID": "signal-example-2",
                     "participants": {"items": [], "hasMore": False, "total": 12}},
         }
         self.send_error = False
         self.slow = 0.0
         self.structured = False          # False: get_chat answers as Beeper's MCP does, in text; True: as structured data
         self.accounts_calls = 0
+        self.search_calls: list[dict] = []
         self.accounts_answer = ACCOUNTS_TEXT  # what get_accounts answers, as Beeper's MCP does: text
+        self.messages = made_up_messages()
+        self.list_calls: list[dict] = []
+        self.msearch_calls: list[dict] = []
 
     def new_app(self):
         """A fresh MCP server: the client of beeper.py runs every call in an event loop of its own, and a server's session manager
@@ -89,9 +116,57 @@ class FakeGateway:
             @server.tool(name="beeper-get_chat")
             def get_chat(chatID: str, maxParticipantCount: int = -1) -> str:
                 c = look(chatID, maxParticipantCount)
-                return (f"\n## {c['title']} (chatID: {c['id']})\nChat on {c['network']} ({c['accountID']}).\n**Type**: {c['type']}\n"
-                        "**Last Activity**: 2026-11-11T18:22:38.000Z\nThis chat is pinned.\n\n# Using this information\n\n"
-                        "- Use search_messages to find specific content in this chat.\n")
+                return f"\n{block(c, maxParticipantCount)}\n# Using this information\n\n- Use search_messages to find specific content in this chat.\n"
+
+        def block(c: dict, people: int) -> str:
+            # as Beeper's MCP writes a chat (shape from the owner's gateway, values made up): the people only when asked for
+            names = PEOPLE.get(c["id"], [])[:people] if people else []
+            with_ = f" with {', '.join(names)}." if names else "."
+            return (f"## {c['title']} (chatID: {c['id']})\nChat on {c['network']} ({c['accountID']}){with_}\n**Type**: {c['type']}\n"
+                    "**Last Activity**: 2026-11-11T18:22:38.000Z\nThis chat is pinned.\n")
+
+        @server.tool(name="beeper-search_chats")
+        def search_chats(query: str = "", limit: int = 50, type: str = "", unreadOnly: bool = False, accountIDs: list[str] | None = None,
+                         lastActivityAfter: str = "") -> str:
+            asked = {"type": type, "unreadOnly": unreadOnly, "accountIDs": accountIDs, "lastActivityAfter": lastActivityAfter}
+            self.search_calls.append({"query": query, "limit": limit, **{k: v for k, v in asked.items() if v}})
+            hits = [c for c in self.chats.values() if (not query or query.lower() in c["title"].lower()) and (not type or c["type"] == type)
+                    and (not accountIDs or c["accountID"] in accountIDs)][:limit]
+            return ("# Chats\n\n" + f"Found {len(hits)}+ chats (showing {len(hits)})\nNext page (older): cursor='eyJ0', direction='before'\n\n"
+                    + "\n".join(block(c, 100) for c in hits) + "\n# Using this information\n\n- Use the chatID to read messages.\n")
+
+        @server.tool(name="beeper-list_messages")
+        def list_messages(chatID: str, cursor: str = "", direction: str = "before") -> str:
+            # 20 a page, newest first, as JSON in text (Beeper's MCP does so); the cursor here is how many were given before
+            self.list_calls.append({"chatID": chatID, "cursor": cursor, "direction": direction})
+            if chatID not in self.chats:
+                raise ToolError("Chat not found")
+            items = sorted(self.messages.get(chatID, []), key=lambda x: x["timestamp"], reverse=True)
+            start = int(cursor or 0)
+            page = items[start:start + 20]
+            return json.dumps({"items": page, "hasMore": start + 20 < len(items), "oldestCursor": str(start + 20), "newestCursor": str(start)})
+
+        @server.tool(name="beeper-search_messages")
+        def search_messages(query: str = "", chatIDs: list[str] | None = None, dateAfter: str = "", dateBefore: str = "",
+                            limit: int = 20) -> str:
+            self.msearch_calls.append({"query": query, "chatIDs": chatIDs, "dateAfter": dateAfter, "dateBefore": dateBefore, "limit": limit})
+            out = []
+            for cid, msgs in self.messages.items():
+                if chatIDs and cid not in chatIDs:
+                    continue
+                hits = [x for x in msgs if query.lower() in x["text"].lower() and (not dateAfter or x["timestamp"] >= dateAfter)]
+                if not hits:
+                    continue
+                c = self.chats[cid]
+                out.append(f"# {c['title']} [{len(hits)} messages]\n# {c['title']} (chatID: {cid})\n"
+                           f"Chat on {c['network']} ({c['accountID']}) with {', '.join(PEOPLE.get(cid, ['Someone', 'Alex Example']))}.\n")
+                for x in hits:
+                    day, clock = x["timestamp"][:10], x["timestamp"][11:16]
+                    who = "Alex Example (You)" if x["isSender"] else x["senderName"]
+                    out.append(f"## {day} (Thursday)\n**{who}** ({clock}): {x['text']} ([Open at {clock}](/chats/{cid}/{x['id']}))\n")
+            n = sum(t.count("**") // 2 for t in out)
+            return (f"Found {n} messages across {len(out)} chats (showing {n})\n\n" + "\n".join(out)
+                    + "\n# Using this information\n\n- Use get_chat for details.\n")
 
         @server.tool(name="beeper-get_accounts")
         def get_accounts() -> str:
@@ -125,8 +200,12 @@ class FakeGateway:
             m = await receive()
             body, more = body + m.get("body", b""), m.get("more_body", False)
         is_call = b'"tools/call"' in body
-        # the exec key may not read accounts, the read key may do nothing else: as the gateway's grants are set up
-        wrong_grant = is_call and ((key == f"Bearer {KEY}") == (b"beeper-get_accounts" in body))
+        # the grants as the gateway has them: the exec key sends and reads a chat's details; the read key reads accounts and chats
+        # and can never send
+        grants = {f"Bearer {KEY}": (b"beeper_send-send_message", b'"beeper-get_chat"'),
+                  f"Bearer {READ_KEY}": (b"beeper-get_accounts", b'"beeper-get_chat"', b"beeper-search_chats", b"beeper-list_messages",
+                                         b"beeper-search_messages")}
+        wrong_grant = is_call and not any(g in body for g in grants.get(key, ()))
         status = 401 if self.mode == "refuse" or key not in (f"Bearer {KEY}", f"Bearer {READ_KEY}") \
             else 403 if self.mode == "forbid" or (self.mode == "forbid_call" and is_call) or wrong_grant else None
         if status:
@@ -160,6 +239,8 @@ def gateway(monkeypatch):
     monkeypatch.setattr(B, "connect", lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=g.make_http),
                                                          s.beeper_chat_tool, s.beeper_send_tool))
     monkeypatch.setattr(B, "accounts_reader", lambda s: B.AccountsReader(s, make_http=g.make_http))
+    monkeypatch.setattr(B, "chats_reader", lambda s: B.ChatsReader(s, make_http=g.make_http))
+    monkeypatch.setattr(B, "read_gateway", lambda s, make_http=None: B.Gateway(s.beeper_gateway_url, s.beeper_read_key, 5, make_http=g.make_http))
     return g
 
 
@@ -171,6 +252,7 @@ def hub(monkeypatch):
 
 
 def launch(web, hub, *, allow=f"{SINGLE},{GROUP}", **env):
+    env.setdefault("BEEPER_SEND_GROUPS", "true")          # most tests use the group on the list; the defaults have tests of their own
     app, mcp, _p, _sent = web(BEEPER_GATEWAY_URL=URL, BEEPER_EXEC_KEY=KEY, BEEPER_SEND_ALLOWLIST=allow, **env)
     return app, mcp, mcp._icloud_dashboard.sources["external"]
 
@@ -237,12 +319,14 @@ async def test_a_gateway_that_passes_structured_data_gives_the_size_too(web, hub
 def test_beepers_text_answer_is_read_as_it_comes():
     text = ("\n## Example Club (chatID: !g:beeper.test)\nChat on Signal (signal.1000000001).\n**Type**: group\n"
             "**Last Activity**: 2026-11-11T12:18:36.000Z\nThis chat is muted.\n\n# Using this information\n\n- Use search_messages.\n")
-    assert B._chat_of(B.Answer(False, None, text), "!g:beeper.test") == B.Chat("Example Club", "Signal", True, None)
+    assert B._chat_of(B.Answer(False, None, text), "!g:beeper.test") == B.Chat("Example Club", "Signal", True, None, "2026-11-11T12:18:36.000Z",
+                                                                                   "signal.1000000001")
     assert B._chat_of(B.Answer(False, None, text), "!other:beeper.test") is None            # the answer is for another chat
     assert B._chat_of(B.Answer(True, None, text), "!g:beeper.test") is None                 # an error is no chat
     assert B._chat_of(B.Answer(False, None, "No such chat."), "!g:beeper.test") is None
     two_words = text.replace("Example Club (chatID: !g:beeper.test)", "Club (Berlin) (chatID: !g:beeper.test)").replace("Signal (", "Facebook Messenger (")
-    assert B._chat_of(B.Answer(False, None, two_words), "!g:beeper.test") == B.Chat("Club (Berlin)", "Facebook Messenger", True, None)
+    assert B._chat_of(B.Answer(False, None, two_words), "!g:beeper.test") == B.Chat("Club (Berlin)", "Facebook Messenger", True, None,
+                                                                                    "2026-11-11T12:18:36.000Z", "signal.1000000001")
 
 
 async def test_what_the_agent_says_about_the_chat_is_not_taken(web, hub, gateway):
@@ -263,9 +347,11 @@ async def test_a_chat_outside_the_owners_list_is_refused_and_empty_means_nobody(
         await ask(mcp, SINGLE)
 
 
-async def test_a_star_lets_any_chat_through(web, hub, gateway):
+async def test_a_star_lets_any_single_chat_through_but_never_a_group(web, hub, gateway):
     app, mcp, src = launch(web, hub, allow="*")
-    assert (await ask(mcp, GROUP))["status"] == "queued_for_owner_approval"
+    assert (await ask(mcp, SINGLE))["status"] == "queued_for_owner_approval"
+    with pytest.raises(Exception, match="must be on the owner's list by name"):
+        await ask(mcp, GROUP)                                  # groups on, but * does not cover a group
 
 
 async def test_a_chat_beeper_does_not_know_queues_nothing(web, hub, gateway):

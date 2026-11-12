@@ -890,6 +890,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     from .textedit import register_text_api
     register_text_api(mcp, d, audit)
     register_accounts_api(mcp, d)
+    from .dashboard_accounts import register_picker_api
+    register_picker_api(mcp, d)
     return d
 
 

@@ -14,12 +14,24 @@ from test_dashboard import client, signed_in, web  # noqa: F401  (web is a fixtu
 PRIVATE = ("alex@example.org", "+15550100", "+15550199")          # what Beeper's answer holds and must never leave
 
 
+def beeper_of(r: dict) -> dict | None:
+    """The Beeper plugin's entry in the list (plugins/beeper), in the shape these tests have always read: state, problem, sending,
+    reading and the networks with their account ids. None where the plugin is not set up."""
+    p = next((x for x in r["plugins"] if x["id"] == "beeper" and x["enabled"]), None)
+    if p is None:
+        return None
+    lst = p["listing"]
+    return {"state": lst["state"], "problem": lst["problem"] if lst["state"] != "ok" else "", "sending": p["messages"]["sending"],
+            "reading": p["messages"]["reading"], "networks": [{"network": i["title"], "user": i["sub"], "account_id": i["detail"].removeprefix("Account ID ")}
+                                                            for i in lst["items"]]}
+
+
 async def accounts(app) -> dict:
     async with client(app) as c:
         await signed_in(c)
         r = await c.get("/dashboard/api/accounts")
     assert r.status_code == 200, r.text
-    return r.json()
+    return {**r.json(), "beeper": beeper_of(r.json())}
 
 
 # -- the networks -----------------------------------------------------------------------------------------------------------------

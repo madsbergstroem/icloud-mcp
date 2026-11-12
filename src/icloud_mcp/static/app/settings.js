@@ -72,14 +72,13 @@ export const PAGES = {
   contacts: { slug: "contacts", title: "Contacts" },
   messages: { slug: "helper", title: "Messages", lead: "ENABLE_IMESSAGE", leadLabel: "Agents can read Messages", sections: ["Messages"] },
   helper: { slug: "helper", title: "Mac helper", sections: ["Shortcuts and timing"] },
-  beeper: { slug: "beeper", title: "Who it may write to" },
   tools: { slug: "areas", title: "Only these tools", keys: ["TOOLS"] },
   log: { slug: "dashboard", title: "Activity log", sections: ["Activity log", "Sign-in"], hide: ["OWNER_PASSWORD_LOGIN"] },
 };
 
 function owner(st, key) { return (st.groups.find((g) => g.fields.some((f) => f.key === key)) || {}).slug; }
 
-async function saveKeys(st, values) {
+export async function saveKeys(st, values) {
   // one request per group the keys belong to; a change that weakens protection asks to confirm first (api.js)
   const by = {};
   for (const [k, v] of Object.entries(values)) (by[owner(st, k)] = by[owner(st, k)] || {})[k] = v;
@@ -191,7 +190,7 @@ class Group extends HTMLElement {
     const body = page(this, "", "Settings");
     let st;
     try { st = await get("/settings"); } catch (e) { fail(e); return; }
-    const cfg = PAGES[this.page] || { slug: this.page };
+    const cfg = { ...(PAGES[this.page] || { slug: this.page }), ...(this.title ? { title: this.title } : {}) };   // a plugin's group names its page
     const g = st.groups.find((x) => x.slug === cfg.slug);
     if (!g) { body.innerHTML = titleBlock("Not found", "There is no such settings page."); return; }
     this.st = st; this.changed = {};

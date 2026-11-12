@@ -12,6 +12,37 @@ Update the Mac helper before the server whenever its version changes.
   asks only public hosts, says so when a provider allows only its own login page (OAuth2), and saves nothing: the fields are
   filled in for review, and Check and connect signs in as before. `dnspython` (already pulled in by `caldav`) is now a direct
   dependency.
+
+- **Your assistant can read Beeper chats (fork).** `messages_list_chats`, `messages_read_chat` and `messages_search` now cover
+  `beeper:` chats when you turn on Settings › Beeper › Reading › Read chats (`BEEPER_READ_CHATS`, off by default). Everything is
+  read live through the gateway with the read key (`search_chats`, `get_chat`, `list_messages`, `search_messages` on
+  `BEEPER_READ_SERVER`); nothing is stored. The filters are the iMessage ones: hidden chats (`BEEPER_HIDDEN_CHATS`), only these
+  chats (`BEEPER_VISIBLE_CHATS`), a maximum age (`BEEPER_MAX_AGE_DAYS`, 0 = everything) and service senders hidden
+  (`BEEPER_HIDE_SHORT_CODES`, on; a one-to-one chat named by a number under nine digits). Hidden chats and Only these chats use the
+  same chat picker as Who it may write to. Every answer carries the notice that the texts are other people's. Each read writes one
+  log line with the tool, the backend, a hash of the filters, the count and the result, never a title, chat id, name or text.
+  Formatting in Beeper's text is turned into plain text; attachments, reactions and edits are not shown.
+
+- **Who Beeper may write to, by name (fork).** Settings › Beeper › Sending shows the chats on the list by name, the networks
+  ("1 of 2") and a Group chats switch. "Who it may write to" lists each chat with its network, one person or group with its size,
+  and the last message, read live with the read key; a chat Beeper no longer knows says "Chat not found" and can be removed.
+  "Add a chat" searches your chats by name or shows the recent ones; a group asks once more ("A message there reaches all N
+  people.") and turns group chats on. "Any chat" is a switch below the list. Reading is shown greyed as planned. Three rules,
+  checked when a request is queued and again when it is approved: the list (`BEEPER_SEND_ALLOWLIST`, `*` now covers single chats
+  only), the networks (`BEEPER_SEND_NETWORKS`, default all) and group chats (`BEEPER_SEND_GROUPS`, default off; a group must be on
+  the list by its id). Lists of single chats keep working unchanged. The picker is core UI on the plugin contract (search, resolve,
+  networks, the three keys); Beeper supplies it. The read tools are named after the gateway's server entry, `BEEPER_READ_SERVER`
+  (e.g. `beeper_alex`); `BEEPER_ACCOUNTS_TOOL` still wins where it is set. The read key reads and never sends.
+
+- **Service plugins (fork).** Services are now plugins of one kind (`icloud_mcp.plugins`), found through the Python entry point
+  group `icloud_mcp.plugins`. A plugin declares its name, status line, limits, how it is connected, its settings as data, secrets,
+  a health check, what its page lists and its capabilities (`messages` now; `mail`, `calendar` and `contacts` as interfaces).
+  Beeper is the first plugin and moved to `icloud_mcp/plugins/beeper`; `icloud_mcp.beeper` still imports. Settings, the service
+  page, Connect a service, the chat tools, the approval of a send and icloud_check_health handle any plugin from its data. The
+  chat tools (`messages_list_chats`, `messages_read_chat`, `messages_search`) now exist whenever any channel can be read, not
+  only with iMessage. Nothing changes for the owner: same tools, same `BEEPER_*` settings, same pages. A plugin can add rules
+  beyond the allowlist (`policy`), checked when a request is queued and again when it is approved.
+
 - **Home, reworked (fork).** With nothing waiting, a wide screen shows Home in one column instead of an empty right half;
   when something waits, the request still opens beside the list. "1 request was withdrawn by your assistant." becomes a section
   "Taken back by your assistant" with one row per request withdrawn in the last 24 hours: title, kind and first recipient, time,

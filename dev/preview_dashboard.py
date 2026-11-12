@@ -11,7 +11,8 @@ seconds, to watch a new request show up without a reload. With --owner yes (the 
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
 password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
 one column with what was taken back and what was sent today. "Find servers" finds made-up servers for an address at example.net
-and nothing for any other. Account changes are checked against made-up servers (a password starting with "wron" is refused)
+and nothing for any other. --demo-plugins adds two made-up service plugins (Chatty with messages, Mailbox with mail), loaded
+the way an installed plugin is. Account changes are checked against made-up servers (a password starting with "wron" is refused)
 and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
 import argparse
 import asyncio
@@ -32,6 +33,7 @@ ap.add_argument("--data", default="")
 ap.add_argument("--arrive", type=int, default=0)
 ap.add_argument("--beeper", choices=["ok", "no-key", "down", "refused", "none"], default="ok")
 ap.add_argument("--owner", choices=["yes", "no"], default="yes")
+ap.add_argument("--demo-plugins", action="store_true")
 ap.add_argument("--nothing-waits", action="store_true")
 args = ap.parse_args()
 PORT = args.port
@@ -53,8 +55,13 @@ os.environ.update(
 # gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
 if args.beeper != "none":
     from test_beeper import KEY as BEEPER_KEY, READ_KEY as BEEPER_READ, URL as BEEPER_URL  # noqa: E402  (the made-up keys of the tests)
-    os.environ.update(BEEPER_GATEWAY_URL=BEEPER_URL, BEEPER_EXEC_KEY=BEEPER_KEY, BEEPER_SEND_ALLOWLIST="*",
+    os.environ.update(BEEPER_GATEWAY_URL=BEEPER_URL, BEEPER_EXEC_KEY=BEEPER_KEY, BEEPER_SEND_ALLOWLIST="!single:beeper.test,!gone:beeper.test",
                       **({} if args.beeper == "no-key" else {"BEEPER_READ_KEY": BEEPER_READ[::-1] if args.beeper == "refused" else BEEPER_READ}))
+
+if args.demo_plugins:                     # two made-up service plugins from tests/test_plugins.py, found as entry points would be
+    from icloud_mcp import plugins as _P  # noqa: E402
+    _P.entry_points = lambda: [("chatty", "test_plugins:chatty_plugin"), ("mailbox", "test_plugins:mailbox_plugin")]
+    os.environ["CHATTY_SEND_ALLOWLIST"] = "room-1"
 
 import uvicorn  # noqa: E402
 
@@ -86,6 +93,11 @@ gw = FakeGateway()
 gw.mode = "down" if args.beeper == "down" else None
 B.connect = lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=gw.make_http), s.beeper_chat_tool, s.beeper_send_tool)
 B.accounts_reader = lambda s: B.AccountsReader(s, make_http=gw.make_http)
+B.chats_reader = lambda s: B.ChatsReader(s, make_http=gw.make_http)
+B.read_gateway = lambda s, make_http=None: B.Gateway(s.beeper_gateway_url, s.beeper_read_key, 5, make_http=gw.make_http)
+# more made-up chats to find and add: a person on Telegram and a group of three on Signal; "!gone" on the list is a chat Beeper lost
+gw.chats.update({"!morgan:beeper.test": {"id": "!morgan:beeper.test", "title": "Morgan Lee", "type": "single", "network": "Telegram", "accountID": "telegram-example-1",
+                                          "participants": {"items": [], "total": 2}}})
 
 # The owner's Tailscale identity on every request (--owner yes), as tailscale serve would add it: the dashboard signs the owner in
 # on the way, as it does behind tailscale serve
