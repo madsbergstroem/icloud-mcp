@@ -9,7 +9,8 @@ Open http://localhost:8765/dashboard and sign in with the owner password printed
 [unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
 seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
-password and Settings shows why services cannot be connected or changed. Account changes are checked against made-up servers (a password starting with "wron" is refused)
+password and Settings shows why services cannot be connected or changed. "Find servers" finds made-up servers for an address at example.net and
+nothing for any other. Account changes are checked against made-up servers (a password starting with "wron" is refused)
 and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
 import argparse
 import asyncio
@@ -107,6 +108,23 @@ async def _check(_s, acct, areas=None):
 
 
 A.check = _check
+
+
+# "Find servers" without the internet: an address at example.net finds made-up servers, any other finds nothing
+from icloud_mcp import discover as D  # noqa: E402
+
+
+async def _discover(address):
+    if "@" not in address:
+        raise ValueError("Enter a full email address first, like alex@example.org.")
+    await asyncio.sleep(1.0)
+    if not address.lower().endswith("example.net"):
+        return {"found": False, "source": "", "servers": {"imap": "", "smtp": "", "caldav": "", "carddav": ""}, "username": address, "notes": []}
+    return {"found": True, "source": "provider", "username": address, "notes": [],
+            "servers": {"imap": "mail.example.net:993", "smtp": "mail.example.net:587", "caldav": "https://dav.example.net/", "carddav": ""}}
+
+
+D.discover = _discover
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)

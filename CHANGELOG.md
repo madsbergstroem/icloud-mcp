@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Find servers (fork).** The form for another provider has "Find servers": from the email address it looks up IMAP and SMTP
+  the way Thunderbird does (the provider's own autoconfig file, its `.well-known` address, Thunderbird's provider database with
+  the domain only, the domain's MX host), then DNS SRV records (RFC 6186, RFC 8314), and CalDAV and CardDAV through RFC 6764
+  (`caldav.discovery`, TLS and same-domain only). It takes only encrypted servers whose port matches how this server connects,
+  asks only public hosts, says so when a provider allows only its own login page (OAuth2), and saves nothing: the fields are
+  filled in for review, and Check and connect signs in as before. `dnspython` (already pulled in by `caldav`) is now a direct
+  dependency.
+
 - **Settings by connected service (fork).** Settings has two parts. General holds Sign-in and security, Safety, and Activity
   and server. Connected services lists each service with its address (iCloud, another email and calendar provider, Beeper with
   its number of networks), followed by "Connect a service". The Accounts page, the iCloud and Your Mac sections and "Account and
