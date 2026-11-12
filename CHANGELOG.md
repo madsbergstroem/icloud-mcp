@@ -5,6 +5,11 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Beeper reading, checked against the live gateway (fork).** Search hits read Beeper's real answer: the day heading
+  `Today (YYYY-MM-DD)` as well as `YYYY-MM-DD (Weekday)`, times in UTC, and the link `/open/<chat>/<sort key>`, so a hit's
+  `message_id` is `sortkey:<n>` (Beeper's search names no message id). Links in formatted messages keep their address
+  ("the list (https://…)") instead of losing it.
+
 - **Find servers (fork).** The form for another provider has "Find servers": from the email address it looks up IMAP and SMTP
   the way Thunderbird does (the provider's own autoconfig file, its `.well-known` address, Thunderbird's provider database with
   the domain only, the domain's MX host), then DNS SRV records (RFC 6186, RFC 8314), and CalDAV and CardDAV through RFC 6764
