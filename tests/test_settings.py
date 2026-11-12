@@ -141,8 +141,6 @@ async def test_view_only_shows_but_does_not_change(web):  # noqa: F811
         assert r.status_code == 403
         r = await c.post("/dashboard/api/settings/mail/reset", headers=api(token), json={"key": "MAX_RECIPIENTS"})
         assert r.status_code == 404
-        r = await c.post("/dashboard/api/settings/accounts/app-password", headers=api(token), json={"password": "abcd-efgh-ijkl-mnop"})
-        assert r.status_code == 403
     assert not path.exists()
 
 

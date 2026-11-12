@@ -5,7 +5,7 @@ import { esc, icon, fail, root, titleBlock, wide } from "./ui.js";
 import { app } from "./state.js";
 import "./today.js";
 import { SECTIONS } from "./settings.js";
-import "./accounts.js";
+import { serviceEntries } from "./services.js";
 
 const KIND_NAMES = { mail: "Mail", imessage: "iMessage", calendar: "Calendar" };
 // a request of the external source counts under its action type's badge ("external:Beeper"); an unknown type under "Other"
@@ -53,8 +53,10 @@ function shell() {
       <div class="foot" data-foot></div></nav>
     <nav class="side setnav" aria-label="Settings sections">
       <ion-item button detail="false" lines="none" data-back>${icon("chevron-back-outline")}<ion-label style="margin-left:10px">Back to app</ion-label></ion-item>
-      <div class="lbl">Settings</div>
+      <div class="lbl">General</div>
       ${SECTIONS.map(([id, label]) => `<ion-item button detail="false" lines="none" data-section="${id}"><ion-label>${esc(label)}</ion-label></ion-item>`).join("")}
+      <div class="lbl">Connected services</div><div data-services></div>
+      <ion-item button detail="false" lines="none" data-section="connect"><ion-label color="primary">Connect a service</ion-label></ion-item>
     </nav>
     <ion-tabs>
       ${tabs.map(([t]) => `<ion-tab tab="${t}"><ion-nav root="icm-${t}"></ion-nav></ion-tab>`).join("")}
@@ -75,20 +77,41 @@ function shell() {
   }));
   root().querySelector("[data-back]").addEventListener("click", () => t.select("today"));
   const setNav = () => root().querySelector('ion-tab[tab="settings"] ion-nav');
-  const markSection = (id) => root().querySelectorAll("[data-section]").forEach((n) => n.classList.toggle("on", n.dataset.section === id));
-  root().querySelectorAll("[data-section]").forEach((n) => n.addEventListener("click", async () => {
-    const id = n.dataset.section;
-    await (id === "accounts" ? setNav().setRoot("icm-accounts", {}, { animated: false }) : setNav().setRoot("icm-settings", { section: id }, { animated: false }));
+  let current = SECTIONS[0][0];
+  const markSection = (id) => { current = id; root().querySelectorAll("[data-section]").forEach((n) => n.classList.toggle("on", n.dataset.section === id)); };
+  // a general group, a service ("acct:<id>", "beeper") or "connect" becomes the root of Settings
+  const openSection = async (id) => {
+    const [tag, props] = id === "connect" ? ["icm-connect", { asRoot: true }]
+      : id === "beeper" || id.startsWith("acct:") ? ["icm-service", { sid: id, asRoot: true }] : ["icm-settings", { section: id }];
+    await setNav().setRoot(tag, props, { animated: false });
     markSection(id);
-  }));
+  };
+  const wireSection = (n) => n.addEventListener("click", () => openSection(n.dataset.section));
+  root().querySelectorAll("[data-section]").forEach(wireSection);
+  // the services in the side list follow what is connected
+  const fillServices = async () => {
+    let r;
+    try { r = await get("/accounts"); } catch (e) { return; }
+    const box = root().querySelector("[data-services]");
+    box.innerHTML = serviceEntries(r).map((x) => `<ion-item button detail="false" lines="none" data-section="${esc(x.key)}">
+      <ion-label>${esc(x.title)}<p>${esc(x.sub)}</p></ion-label></ion-item>`).join("");
+    box.querySelectorAll("[data-section]").forEach(wireSection);
+    markSection(current);
+  };
+  fillServices();
+  window.addEventListener("icm:settings", fillServices);
   markSection(SECTIONS[0][0]);
   root().querySelector("[data-pause]").addEventListener("click", async () => {
     try { await post("/server/pause", { paused: !app.paused }); window.dispatchEvent(new Event("icm:changed")); } catch (e) { fail(e); }
   });
   const item = itemFromHash();
-  const tab = /^#\/(activity|settings)$/.exec(location.hash);
+  const tab = /^#\/(activity|settings|connect)$/.exec(location.hash);
   if (tab) history.replaceState(null, "", location.pathname);
-  t.select(tab ? tab[1] : "today").then(() => mark(tab ? tab[1] : "today"));
+  const first = tab ? (tab[1] === "connect" ? "settings" : tab[1]) : "today";
+  t.select(first).then(() => {
+    mark(first);
+    if (tab && tab[1] === "connect") wide() ? openSection("connect") : setNav().push("icm-connect");   // the old /setup address
+  });
   renderSide();
   if (item) openItem(item);
 }

@@ -5,6 +5,29 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Settings by connected service (fork).** Settings has two parts. General holds Sign-in and security, Safety, and Activity
+  and server. Connected services lists each service with its address (iCloud, another email and calendar provider, Beeper with
+  its number of networks), followed by "Connect a service". The Accounts page, the iCloud and Your Mac sections and "Account and
+  server" are gone, and so are the pills and the "Set in the server's environment" line on every row. Each service has one page.
+  iCloud and another provider show what they are used for (mail, calendar, contacts; turning one on moves the area there from
+  the service that had it), the settings of those areas, the servers (another provider), the password, read only and
+  Disconnect. A service whose last area is turned off stays connected. Only the iCloud page has "Through your Mac" (the Mac
+  helper, reminders, notes, iCloud Drive, Maps, Health, iMessage). The Mail page also holds the sender (from address, name,
+  signature), and "Calendars your assistant sees" moved from /setup to the calendar service's page. The Beeper page lists each
+  network with your name there (the account ID opens on tap) and shows that sending needs your approval, who the assistant may
+  write to (`BEEPER_SEND_ALLOWLIST`, which no page showed before) and that reading chats is not built yet.
+- **Connect a service in the dashboard, in English (fork).** The /setup assistant moved into Settings and uses the same Ionic
+  look. It offers iCloud and "Other email & calendar" (IMAP, SMTP, CalDAV, CardDAV); Beeper is shown as set up by whoever runs
+  the server. Connecting, changing and disconnecting need the dashboard sign-in and, on the same request, the owner's identity
+  from Tailscale or Cloudflare Access, as /setup did. Every change is checked with the provider before it is saved, then the
+  server restarts. Saving drops `ENABLE_MAIL`, `ENABLE_CALENDAR` and `ENABLE_CONTACTS` from the dashboard's own settings, so the
+  connected services decide which areas are on. `/setup` now leads to `/dashboard#/connect`; the replaced app-password route
+  `/dashboard/api/settings/accounts/app-password` is gone (the iCloud page's "Replace" goes through
+  `/dashboard/api/accounts/<id>/change`).
+- **Only two providers (fork).** The WEB.DE and Gmail presets are gone. An `accounts.json` that still names `webde` or `gmail`
+  reads as "other" with the servers those presets used, so the server signs in where it always did; the dashboard lists such an
+  account as "Other email & calendar" signed in with a password, and a waiting mail from it names no provider.
+
 - **Beeper's networks in Settings › Accounts (fork).** With `BEEPER_READ_KEY` set (a gateway key that may call Beeper's
   `get_accounts`; `BEEPER_ACCOUNTS_TOOL` names the tool, default `beeper-get_accounts`), the list shows each network Beeper is
   signed in to, with your name there and Beeper's account id, below the accounts of the setup assistant. Without the key, or when
