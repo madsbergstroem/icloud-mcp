@@ -625,6 +625,10 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         if app_dir.is_dir() else "0"
     types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".html": "text/html"}
     app_csp = _HEADERS["Content-Security-Policy"] + "; frame-src 'self'"
+    from . import feedbackkit
+    feedback = feedbackkit.from_settings(s)     # fork: FeedbackKit's button on the app page when FEEDBACKKIT_URL and _PROJECT are set
+    if feedback:
+        app_csp = feedback.csp(app_csp)
 
     def static_file(base: Path, rel: str, cache: str) -> Response:
         """A file under base, by a relative path that cannot leave it; anything else is a 404."""
@@ -664,6 +668,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         # (tailscale serve, Cloudflare Access) would answer that with its own page
         html_ = ((app_dir / "index.html").read_text().replace("{{v}}", app_v).replace("{{asset_v}}", _ASSET_VERSION)
                  .replace("{{apple_icon}}", _APPLE_ICON).replace("{{favicon}}", _FAVICON))
+        if feedback:
+            html_ = html_.replace("</head>", feedback.snippet() + "\n</head>", 1)
         return HTMLResponse(html_, headers={**_HEADERS, "Content-Security-Policy": app_csp})
 
     @mcp.custom_route("/dashboard", methods=["GET"])
