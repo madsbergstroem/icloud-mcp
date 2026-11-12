@@ -1,5 +1,6 @@
-// Connected services: one page per service (iCloud, another email and calendar provider, Beeper), "Connect a service" with its
-// two forms, and the calendar choice. Changes to an account go to /accounts/... and restart the server; Beeper is set up by
+// Connected services: one page per service (iCloud, another email and calendar provider, and every service plugin such as
+// Beeper, drawn from the plugin's data), "Connect a service" with its two forms, and the calendar choice. Changes to an account
+// go to /accounts/... and restart the server; a plugin set up by
 // whoever runs the server, so its page only shows the networks and edits who it may write to.
 import { get, post } from "./api.js";
 import { esc, toast, fail, ask, section, titleBlock, row } from "./ui.js";
@@ -10,12 +11,18 @@ const AREA_NAME = Object.fromEntries(AREAS);
 const ONE_EACH = "Mail, calendar and contacts each come from one service. Turning one on here turns it off where it was before.";
 const SIGN_IN = { icloud: "signed in with an app-specific password", other: "other email and calendar, signed in with a password" };
 
-// The services as Settings lists them: [{key, title, sub}], the accounts first, then Beeper
+// "2 networks", "1 network": the count of what a plugin's page lists
+function counted(listing) {
+  const n = listing.items.length, label = (listing.label || "").toLowerCase();
+  return `${n} ${n === 1 ? label.replace(/s$/, "") : label}`;
+}
+
+// The services as Settings lists them: [{key, title, sub}], the accounts first, then the plugins set up here
 export function serviceEntries(r) {
   const out = r.accounts.map((a) => ({ key: "acct:" + a.id, title: a.name, sub: a.address }));
-  if (r.beeper) {
-    const n = r.beeper.networks.length;
-    out.push({ key: "beeper", title: "Beeper", sub: r.beeper.problem ? "Networks not readable" : `${n} network${n === 1 ? "" : "s"}` });
+  for (const p of (r.plugins || []).filter((x) => x.enabled)) {
+    const l = p.listing;
+    out.push({ key: "plugin:" + p.id, title: p.name, sub: !l ? p.status : l.problem && !l.items.length ? `${l.label || "List"} not readable` : counted(l) });
   }
   return out;
 }
@@ -60,11 +67,11 @@ class Service extends HTMLElement {
 
   async load() {
     let r, st;
-    // Beeper's networks come live from the gateway, which can take a few seconds: say so instead of an empty page
-    if (this.sid === "beeper" && !this.r) this.body.innerHTML = titleBlock("Beeper", "Asking Beeper for its networks…") + `<div class="empty"><ion-spinner></ion-spinner></div>`;
+    // a plugin's page can come live from its service (Beeper's gateway), which can take a few seconds: say so instead of an empty page
+    if (this.sid.startsWith("plugin:") && !this.r) this.body.innerHTML = titleBlock("", "Loading…") + `<div class="empty"><ion-spinner></ion-spinner></div>`;
     try { [r, st] = await Promise.all([get("/accounts"), get("/settings")]); } catch (e) { fail(e); return; }
     this.r = r; this.st = st;
-    if (this.sid === "beeper") return this.beeper(r.beeper);
+    if (this.sid.startsWith("plugin:")) return this.plugin((r.plugins || []).find((p) => "plugin:" + p.id === this.sid && p.enabled));
     const a = r.accounts.find((x) => "acct:" + x.id === this.sid);
     if (!a) { this.body.innerHTML = titleBlock("Not connected", "This service is no longer connected."); return; }
     this.account(a);
@@ -151,29 +158,29 @@ class Service extends HTMLElement {
     try { restarting(await post(`/accounts/${encodeURIComponent(a.id)}/change`, { password: data.values.password || "" })); } catch (e) { fail(e); }
   }
 
-  beeper(b) {
-    if (!b) { this.body.innerHTML = titleBlock("Beeper", "Beeper is not set up on this server."); return; }
-    const st = this.st;
-    const allow = (st.groups.find((x) => x.slug === "beeper") || {}).summary || "";
-    const nets = b.problem || !b.networks.length
-      ? row({ title: esc(b.problem || "Beeper lists no connected network.") })
-      : b.networks.map((n, i) => row({ title: esc(n.network), sub: esc(n.user), button: true, attrs: `data-net="${i}"` })).join("");
-    this.body.innerHTML = titleBlock("Beeper", "Chat networks through Beeper. Whoever runs this server sets it up.") + restartNotice(st)
-      + section("Networks") + `<ion-list class="inset">${nets}</ion-list>`
-      + `<p class="note">${b.networks.length ? "Tap a network to see its account ID. " : ""}New networks are added in the Beeper app.</p>`
-      + section("What your assistant may do") + `<ion-list class="inset">
-        ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: b.sending ? "On" : "Off", noteClass: b.sending ? "state-on" : "state-off" })}
-        ${row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" })}
-        ${row({ title: "Read chats", note: "Not built yet" })}</ion-list>`;
-    this.querySelectorAll("[data-net]").forEach((n) => n.addEventListener("click", () => {
-      const net = b.networks[Number(n.dataset.net)];
+  // A service plugin's page, from its data: what it lists, what it may do, its limits
+  plugin(p) {
+    if (!p) { this.body.innerHTML = titleBlock("Not set up", "This service is not set up on this server."); return; }
+    const st = this.st, l = p.listing, m = p.messages;
+    const items = !l ? "" : l.problem && !l.items.length ? row({ title: esc(l.problem) })
+      : l.items.map((x, i) => row({ title: esc(x.title), sub: esc(x.sub || ""), button: !!x.detail, attrs: x.detail ? `data-item="${i}"` : "" })).join("");
+    const allow = m && m.settings ? (st.groups.find((x) => x.slug === m.settings) || {}).summary || "" : "";
+    this.body.innerHTML = titleBlock(p.name, `${esc(p.description)} ${esc(p.status)}.`) + restartNotice(st)
+      + (l ? section(l.label || "Accounts") + `<ion-list class="inset">${items}</ion-list>` + (l.note ? `<p class="note">${esc(l.note)}</p>` : "") : "")
+      + (m ? section("What your assistant may do") + `<ion-list class="inset">
+        ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: m.sending ? "On" : "Off", noteClass: m.sending ? "state-on" : "state-off" })}
+        ${m.settings ? row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" }) : ""}
+        ${row({ title: "Read chats", note: m.reading ? "On" : "Not built yet" })}</ion-list>` : "")
+      + (p.limits ? `<p class="note">${esc(p.limits)}</p>` : "");
+    this.querySelectorAll("[data-item]").forEach((n) => n.addEventListener("click", () => {
+      const x = l.items[Number(n.dataset.item)];
       const al = document.createElement("ion-alert");
-      Object.assign(al, { header: net.network, subHeader: net.user, message: `Account ID ${net.account_id}`, buttons: ["Done"] });   // Ionic shows these as text
+      Object.assign(al, { header: x.title, subHeader: x.sub || "", message: x.detail, buttons: ["Done"] });   // Ionic shows these as text
       al.addEventListener("didDismiss", () => al.remove());
       document.querySelector("ion-app").appendChild(al);
       al.present();
     }));
-    this.querySelector("[data-allow]").addEventListener("click", () => push(this, "icm-group", { page: "beeper" }));
+    this.querySelector("[data-allow]")?.addEventListener("click", () => push(this, "icm-group", { page: m.settings, title: "Who it may write to" }));
     wireRestart(this);
   }
 }
@@ -195,7 +202,8 @@ class Connect extends HTMLElement {
       + (can ? "" : `<div class="notice pause"><span>${esc(r.connect.why)}</span></div>`)
       + `<div class="tiles">${tile("icloud", "iCloud", "Mail, calendar and contacts. With your Mac also reminders, notes, iCloud Drive and iMessage.", can, here)}
         ${tile("other", "Other email &amp; calendar", "Any provider with IMAP and SMTP, and CalDAV or CardDAV if it has them. You enter the servers and a password.", can, here)}
-        ${tile("beeper", "Beeper", "Chat networks such as WhatsApp, Signal and Telegram.", false, "Set up by whoever runs this server")}</div>`
+        ${(r.plugins || []).map((p) => tile("plugin:" + p.id, esc(p.name), esc(p.description), false,
+          p.connection === "operator" ? esc(p.status) : "Not available here yet")).join("")}</div>`
       + `<p class="note">Mail, calendar and contacts each come from one service. You can connect a second mail service, but only one is used for mail at a time.</p>`;
     this.querySelectorAll("[data-provider]").forEach((n) => n.addEventListener("click", () => push(this, "icm-connect-form", { provider: n.dataset.provider })));
   }

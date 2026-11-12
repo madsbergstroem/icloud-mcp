@@ -46,6 +46,10 @@ icloud-mcp = "icloud_mcp.server:main"
 icloud-mcp-server = "icloud_mcp.server:main"          # so `uvx icloud-mcp-server` finds a command of the same name
 icloud-mcp-selftest = "icloud_mcp.selftest:main"
 
+# Service plugins (src/icloud_mcp/plugins): one group for any service. A plugin package adds its own entry under this group.
+[project.entry-points."icloud_mcp.plugins"]
+beeper = "icloud_mcp.plugins.beeper:plugin"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

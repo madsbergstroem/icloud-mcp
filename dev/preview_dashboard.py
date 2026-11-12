@@ -10,7 +10,8 @@ Open http://localhost:8765/dashboard and sign in with the owner password printed
 seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
 password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
-one column with what was taken back and what was sent today. Account changes are checked against made-up servers (a password starting with "wron" is refused)
+one column with what was taken back and what was sent today. --demo-plugins adds two made-up service plugins (Chatty with
+messages, Mailbox with mail), loaded the way an installed plugin is. Account changes are checked against made-up servers (a password starting with "wron" is refused)
 and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
 import argparse
 import asyncio
@@ -31,6 +32,7 @@ ap.add_argument("--data", default="")
 ap.add_argument("--arrive", type=int, default=0)
 ap.add_argument("--beeper", choices=["ok", "no-key", "down", "refused", "none"], default="ok")
 ap.add_argument("--owner", choices=["yes", "no"], default="yes")
+ap.add_argument("--demo-plugins", action="store_true")
 ap.add_argument("--nothing-waits", action="store_true")
 args = ap.parse_args()
 PORT = args.port
@@ -54,6 +56,11 @@ if args.beeper != "none":
     from test_beeper import KEY as BEEPER_KEY, READ_KEY as BEEPER_READ, URL as BEEPER_URL  # noqa: E402  (the made-up keys of the tests)
     os.environ.update(BEEPER_GATEWAY_URL=BEEPER_URL, BEEPER_EXEC_KEY=BEEPER_KEY, BEEPER_SEND_ALLOWLIST="*",
                       **({} if args.beeper == "no-key" else {"BEEPER_READ_KEY": BEEPER_READ[::-1] if args.beeper == "refused" else BEEPER_READ}))
+
+if args.demo_plugins:                     # two made-up service plugins from tests/test_plugins.py, found as entry points would be
+    from icloud_mcp import plugins as _P  # noqa: E402
+    _P.entry_points = lambda: [("chatty", "test_plugins:chatty_plugin"), ("mailbox", "test_plugins:mailbox_plugin")]
+    os.environ["CHATTY_SEND_ALLOWLIST"] = "room-1"
 
 import uvicorn  # noqa: E402
 

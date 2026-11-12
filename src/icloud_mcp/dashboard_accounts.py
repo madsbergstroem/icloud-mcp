@@ -5,10 +5,10 @@ GET /dashboard/api/accounts shows each account's provider, address, areas, wheth
 provider only) and which areas it is the default account of, and whether this request may connect or change accounts. No
 password or token leaves this route.
 
-Where the Beeper gateway is set up, `beeper` lists the networks Beeper is signed in to (network, the owner's name there, Beeper's
-account id), read live with the read key and kept in memory a few minutes (beeper.AccountsReader). Addresses and phone numbers in
-Beeper's answer are never read. Without the read key, or when the gateway does not answer, `beeper.state` says why and the list
-is empty; the page stands either way. Beeper is set up by whoever runs the server, not from here.
+`plugins` lists every service plugin (plugins/__init__.py): its name, status line, limits, Connect card text and whether it is
+set up here; for one that is, what its page lists (Beeper: the networks it is signed in to, read live and kept a few minutes) and
+what its messages capability does. The page draws any plugin from this data; no plugin brings code of its own to the dashboard.
+A listing that cannot be read says why in `problem`, and the page stands either way.
 
 Changing accounts (connect, an area on or off, password, read only, disconnect, which calendars) needs the dashboard session and,
 on the same request, the owner's identity from Tailscale or Cloudflare Access (access_sso.py), as the /setup page did. Every
@@ -28,7 +28,7 @@ from starlette.responses import Response
 
 from . import access_sso
 from . import accounts as A
-from . import beeper as B
+from .plugins import Plugin, enabled_plugins, load_plugins
 from . import setup_page as SP
 
 log = logging.getLogger(__name__)
@@ -76,17 +76,25 @@ def services(s: Any) -> list[dict[str, Any]]:
     return out
 
 
-_BEEPER_STATES = {"no_read_key": "Accounts not readable: no read key", "unreachable": "Gateway not reachable",
-                  "refused": "Accounts not readable: the gateway refused the read key", "unreadable": "Accounts not readable: unexpected answer from Beeper"}
-
-
-def beeper_listing(s: Any, reader: B.AccountsReader | None) -> dict[str, Any] | None:
-    """The Beeper part of the list, or None where the gateway is not set up at all."""
-    if reader is None or not s.beeper_gateway_url:
-        return None
-    got = reader.read()
-    return {"state": got["state"], "problem": _BEEPER_STATES.get(got["state"], ""), "networks": got["networks"],
-            "sending": B.configured(s), "reading": False}       # reading Beeper chats here is not built yet
+def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
+    """A plugin as Settings draws it. `listing` is the function its accounts() built for this server (or None)."""
+    m = p.capabilities.messages
+    out: dict[str, Any] = {"id": p.id, "name": p.name, "status": p.status, "limits": p.limits, "description": p.description,
+                           "connection": p.connection.kind, "enabled": on, "capabilities": p.capabilities.names()}
+    if not on:
+        return out
+    if listing is not None:
+        try:
+            got = listing()
+            out["listing"] = {"label": got.label, "items": got.items, "problem": got.problem, "note": got.note, "state": got.state}
+        except Exception as e:  # noqa: BLE001  -- the page must stand whatever a plugin does
+            log.warning("plugin %s: listing failed (%s)", p.id, type(e).__name__)
+            out["listing"] = {"label": "", "items": [], "problem": "Could not be read just now.", "note": "", "state": "unreadable"}
+    if m is not None:
+        group = p.settings_group() if p.settings_group is not None else None
+        out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(s) and m.action_type is not None),
+                           "reading": m.backend is not None, "settings": group.slug if group is not None else ""}
+    return out
 
 
 def mail_account(s: Any) -> str:
@@ -98,7 +106,11 @@ def mail_account(s: Any) -> str:
 
 
 def register_accounts_api(mcp: Any, d: Any) -> None:
-    reader = B.accounts_reader(d.s) if d.s.beeper_gateway_url else None
+    here = {p.id for p in enabled_plugins(d.s)}
+    listings = {p.id: p.accounts(d.s) for p in load_plugins() if p.id in here and p.accounts is not None}   # built once per server
+
+    def plugins() -> list[dict[str, Any]]:
+        return [plugin_listing(d.s, p, listings.get(p.id), p.id in here) for p in load_plugins()]
     access = access_sso.from_settings(d.s)
 
     async def owner(request: Request) -> tuple[str, str] | None:
@@ -119,11 +131,11 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         got = d.api_reader(request)
         if isinstance(got, Response):
             return got
-        beeper = await asyncio.to_thread(beeper_listing, d.s, reader)      # the gateway client runs a loop of its own
+        listed = await asyncio.to_thread(plugins)       # a plugin's client may run a loop of its own
         why = await why_not(request)
         via = "" if why else (await owner(request) or ("", ""))[1]
         presets = [{"id": k, **v} for k, v in A.SERVER_PRESETS.items()]   # they only fill in the servers on the connect form
-        return d.api_ok({"accounts": services(d.s), "beeper": beeper, "connect": {"allowed": not why, "why": why, "via": via,
+        return d.api_ok({"accounts": services(d.s), "plugins": listed, "connect": {"allowed": not why, "why": why, "via": via,
                                                                                    "presets": presets}})
 
     async def guarded(request: Request) -> tuple[dict[str, Any], dict[str, Any]] | Response:

@@ -51,6 +51,10 @@
 !src/
 !src/icloud_mcp/
 !src/icloud_mcp/*.py
+!src/icloud_mcp/plugins/
+!src/icloud_mcp/plugins/*.py
+!src/icloud_mcp/plugins/*/
+!src/icloud_mcp/plugins/*/*.py
 !src/icloud_mcp/static/
 !src/icloud_mcp/static/README.md
 !src/icloud_mcp/static/favicon.ico

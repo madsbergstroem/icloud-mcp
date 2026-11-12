@@ -78,10 +78,10 @@ function shell() {
   const setNav = () => root().querySelector('ion-tab[tab="settings"] ion-nav');
   let current = SECTIONS[0][0];
   const markSection = (id) => { current = id; root().querySelectorAll("[data-section]").forEach((n) => n.classList.toggle("on", n.dataset.section === id)); };
-  // a general group, a service ("acct:<id>", "beeper") or "connect" becomes the root of Settings
+  // a general group, a service ("acct:<id>", "plugin:<id>") or "connect" becomes the root of Settings
   const openSection = async (id) => {
     const [tag, props] = id === "connect" ? ["icm-connect", { asRoot: true }]
-      : id === "beeper" || id.startsWith("acct:") ? ["icm-service", { sid: id, asRoot: true }] : ["icm-settings", { section: id }];
+      : id.startsWith("plugin:") || id.startsWith("acct:") ? ["icm-service", { sid: id, asRoot: true }] : ["icm-settings", { section: id }];
     await setNav().setRoot(tag, props, { animated: false });
     markSection(id);
   };
