@@ -310,35 +310,6 @@ def test_the_original_text_survives_a_restart_and_a_file_added_later(tmp_path):
     assert "edited_from" not in plain.to_json()
 
 
-# -- connected accounts ----------------------------------------------------------------------------------------------------------------
-async def test_the_accounts_list_shows_what_setup_saved_and_never_a_password(web, tmp_path):
-    from icloud_mcp import accounts as A
-    app, mcp, *_ = web()
-    async with client(app) as c:
-        assert (await c.get("/dashboard/api/accounts")).status_code == 401
-        await signed_in(c)
-        r = (await c.get("/dashboard/api/accounts")).json()
-        assert r["setup_url"] == "" and [(a["label"], a["address"], a["areas"], a["from_environment"]) for a in r["accounts"]] == \
-            [("iCloud", "me@icloud.com", ["Mail", "Calendar", "Contacts"], True)]
-        A.save(str(tmp_path), {"accounts": [
-            {"id": "a1", "provider": "icloud", "username": "alex@example.org", "password": "abcd-efgh-ijkl-mnop", "areas": ["calendar", "mail"]},
-            {"id": "a2", "provider": "webde", "username": "alex@example.net", "password": "secret-pass-word", "areas": ["mail"], "read_only": True}],
-            "calendars_visible": []})
-        text = (await c.get("/dashboard/api/accounts")).text
-        assert "secret-pass-word" not in text and "abcd-efgh" not in text and '"password"' not in text
-        got = json.loads(text)["accounts"]
-        assert [(a["label"], a["address"], a["areas"], a["read_only"], a["from_environment"], a["sign_in"]) for a in got] == \
-            [("iCloud", "alex@example.org", ["Mail", "Calendar"], False, False, "App-specific password"),
-             ("WEB.DE", "alex@example.net", ["Mail"], True, False, "Password")]
-
-
-async def test_the_setup_link_is_there_only_where_the_setup_assistant_is(web):
-    app, mcp, *_ = web(OWNER_TAILSCALE_LOGINS="owner@example.org", TRUSTED_PROXY_IPS="127.0.0.1")
-    async with client(app) as c:
-        await signed_in(c)
-        assert (await c.get("/dashboard/api/accounts")).json()["setup_url"] == "/setup"
-
-
 # -- approval_status reads through an edit --------------------------------------------------------------------------------------
 async def test_approval_status_is_not_disturbed_by_edit_entries_in_the_log(web):
     app, mcp, *_ = web()

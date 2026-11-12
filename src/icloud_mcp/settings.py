@@ -13,7 +13,6 @@ settings.json altogether.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import os
@@ -127,8 +126,8 @@ class Group:
 
 
 GROUPS: list[Group] = [
-    Group("accounts", "Account", "The Apple Account this server signs in to, and how your mail is signed.", [
-        Spec("ICLOUD_EMAIL_ADDRESS", "From address", "text", "Your iCloud address or an alias; mail you send comes from it.",
+    Group("accounts", "Sender", "Who your mail comes from and how it is signed.", [
+        Spec("ICLOUD_EMAIL_ADDRESS", "From address", "text", "Your address or an alias; mail you send comes from it.",
              loosens=_changed),
         Spec("ICLOUD_DISPLAY_NAME", "Sender name", "text", "The name recipients see."),
         Spec("EMAIL_SIGNATURE", "Signature", "textarea", "Plain text added to the end of mail your agents send."),
@@ -202,7 +201,7 @@ GROUPS: list[Group] = [
                                                                        ("Drive", "ENABLE_DRIVE"), ("Maps", "ENABLE_MAPS"),
                                                                        ("Messages", "ENABLE_IMESSAGE"), ("Health", "ENABLE_HEALTH"))
                                                     if _on(v(k))) or "Nothing") + " on"),
-    Group("beeper", "Beeper", "Messages on WhatsApp, Signal, Telegram and more, sent after your approval. Needs BEEPER_GATEWAY_URL and BEEPER_EXEC_KEY in the environment.", [
+    Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
         Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat.",
              loosens=_changed, section="Sending"),
     ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
@@ -445,32 +444,6 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         log.warning("Owner asked for a restart from the dashboard")
         threading.Timer(0.7, d.exit_fn).start()
         return d.api_ok({"note": "Restarting. The server is back in about half a minute."})
-
-    @mcp.custom_route("/dashboard/api/settings/accounts/app-password", methods=["POST"])
-    async def api_app_password(request: Request) -> Response:
-        got = await d.api_writer(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, body = got
-        if not editable:
-            return d.api_err("These settings cannot be changed here.", 403)
-        if not d.recent(rec):
-            return d.api_need_confirm()
-        value = str(body.get("password", "")).replace(" ", "").replace("-", "")
-        if len(value) != 16:
-            return d.api_err("An app-specific password has 16 letters, like abcd-efgh-ijkl-mnop.", 400)
-        value = "-".join(value[i:i + 4] for i in range(0, 16, 4))
-        from .mail import MailService
-        try:
-            c = await asyncio.to_thread(MailService(dataclasses.replace(s, app_password=value))._login)
-            await asyncio.to_thread(c.logout)
-        except Exception:  # noqa: BLE001 - the reason can quote the account; say only that it failed
-            return d.api_err("iCloud did not accept this password. Nothing was changed.", 400)
-        from .admin import save_override
-        save_override(s.data_dir, "icloud_app_password", value)
-        state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary="Replaced the iCloud app-specific password")
-        return d.api_ok({"note": "Saved. It applies after a restart.", "restart_needed": True})
 
     @mcp.custom_route("/dashboard/api/settings/{slug}", methods=["POST"])
     async def api_save(request: Request) -> Response:

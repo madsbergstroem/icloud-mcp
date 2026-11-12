@@ -2,7 +2,9 @@
 
 tests/fixtures/accounts_v1_golden.json holds accounts.json files in the first layout and what the code before this change made of
 them (env_overlay, Settings.from_env, the dashboard's list). Those numbers came from that code, not from the current one, so a
-change in how a saved setup is read shows up here as a difference.
+change in how a saved setup is read shows up here as a difference. One change is on purpose: since 2026-11 there are only the
+providers iCloud and "Other email & calendar", so the list names a WEB.DE or Gmail account "other" (signed in with a password) and
+the From line of a waiting mail names no provider for it. What the server runs with (env_overlay, settings) is unchanged.
 """
 from __future__ import annotations
 
@@ -247,7 +249,7 @@ def test_the_list_marks_the_default_account_of_each_area(env):
     _write(env, _two("m1"))
     rows = {r["id"]: r for r in listing(Settings.from_env())}
     assert rows["m1"]["default_for"] == ["Mail"] and rows["m2"]["default_for"] == ["Calendar"]
-    assert mail_account(Settings.from_env()) == "WEB.DE"
+    assert mail_account(Settings.from_env()) == ""                       # a WEB.DE file reads as another provider
     _write(env, _two("m2"))
     rows = {r["id"]: r for r in listing(Settings.from_env())}
     assert rows["m1"]["default_for"] == [] and rows["m2"]["default_for"] == ["Mail", "Calendar"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 
 import pytest
 
@@ -55,17 +56,48 @@ def test_read_only_per_area_removes_only_that_areas_write_tools(env):
     assert "calendar_create_event" not in names and not any(n.startswith("contacts_") for n in names)
 
 
-def test_gmail_is_mail_only_and_passwords_are_normalised(env):
-    acct = {"provider": "gmail", "username": "x@gmail.com"}
-    assert accounts.possible_areas(acct) == ("mail",)
-    assert accounts.normalise_password("gmail", "abcd efgh ijkl mnop") == ("abcdefghijklmnop", None)
+def test_passwords_are_normalised_and_other_servers_decide_the_areas(env):
     assert accounts.normalise_password("icloud", "ABCD-efgh ijkl-mnop")[0] == "abcd-efgh-ijkl-mnop"
     assert accounts.normalise_password("icloud", "abcd-efgh")[1]
-    assert accounts.normalise_password("webde", "  Ein Pass 1  ") == ("Ein Pass 1", None)
+    assert accounts.normalise_password("other", "  Ein Pass 1  ") == ("Ein Pass 1", None)
+    assert accounts.normalise_password("other", "")[1] == "Enter the password."
     other = {"provider": "other", "imap": "imap.example.org", "smtp": "smtp.example.org:465", "caldav": "https://dav.example.org/"}
     assert accounts.possible_areas(other) == ("mail", "calendar")
     t = accounts.trial_settings(Settings.from_env(), dict(other, username="x@example.org", password="p"))
     assert (t.smtp_port, t.smtp_security, t.imap_port, t.imap_security) == (465, "ssl", 993, "ssl")
+
+
+def test_only_icloud_and_other_are_offered():
+    assert set(accounts.PROVIDERS) == {"icloud", "other"} and accounts.PROVIDERS["other"]["label"] == "Other email & calendar"
+
+
+@pytest.mark.parametrize("old, servers, areas", [
+    ("webde", ("imap.web.de:993", "smtp.web.de:587", "https://caldav.web.de", "https://carddav.web.de"), ("mail", "calendar", "contacts")),
+    ("gmail", ("imap.gmail.com:993", "smtp.gmail.com:465", "", ""), ("mail",))])
+def test_a_saved_webde_or_gmail_account_loads_as_other_with_its_servers(env, old, servers, areas):
+    """Files saved while /setup still offered WEB.DE and Gmail keep working: the account reads as "other" with the servers the
+    preset had, so the server signs in where it always did, and a later save writes them out."""
+    (env / accounts.ACCOUNTS_FILE).write_text(json.dumps({"accounts": [
+        {"id": "x1", "provider": old, "username": "her@example.net", "password": "app-pass-1", "areas": ["mail"]}]}))
+    acct = accounts.load(str(env))["accounts"][0]
+    assert acct["provider"] == "other" and tuple(accounts.endpoints(acct).values()) == servers
+    assert accounts.possible_areas(acct) == areas
+    s = Settings.from_env()
+    assert f"{s.imap_host}:{s.imap_port}" == servers[0] and f"{s.smtp_host}:{s.smtp_port}" == servers[1]
+    accounts.save(str(env), accounts.load(str(env)))
+    stored = json.loads((env / accounts.ACCOUNTS_FILE).read_text())["accounts"][0]
+    assert stored["provider"] == "other" and (stored["imap"], stored["smtp"]) == servers[:2]
+
+
+def test_an_account_with_no_area_stays_connected(env):
+    """Turning off the last area of a service keeps it connected (Settings › its page › Used for); it serves nothing."""
+    _save(env, [{"id": "a", "provider": "icloud", "username": "her@example.com", "password": "bbbb-cccc-dddd-eeee", "areas": ["mail"]},
+                {"id": "b", "provider": "other", "username": "her@example.net", "password": "pw", "areas": ["contacts"],
+                 "imap": "imap.example.net", "smtp": "smtp.example.net", "carddav": "https://dav.example.net/"}])
+    data = accounts.put(accounts.load(str(env)), dict(accounts.load(str(env))["accounts"][0], areas=["mail", "contacts"]), "a")
+    assert [(a["id"], a["areas"]) for a in data["accounts"]] == [("a", ["mail", "contacts"]), ("b", [])]
+    accounts.save(str(env), data)
+    assert [a["id"] for a in accounts.load(str(env))["accounts"]] == ["a", "b"] and accounts.load(str(env))["defaults"] == {"mail": "a", "contacts": "a"}
 
 
 class _Cal:

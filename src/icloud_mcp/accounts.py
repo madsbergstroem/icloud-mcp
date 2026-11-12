@@ -1,13 +1,14 @@
-"""The accounts a person connects on the /setup page: which provider serves mail, calendar and contacts, with whose sign-in.
+"""The accounts a person connects in the dashboard (Settings › Connected services): which provider serves mail, calendar and
+contacts, with whose sign-in.
 
 They live in DATA_DIR/accounts.json (mode 600). Several accounts can hold the same area (mail, calendar, contacts); one of them is
-the default account of that area (`defaults`), and the server runs with the defaults. /setup still offers one account per area, so
-mail can be a WEB.DE or Gmail mailbox while calendar and contacts stay in iCloud. env_overlay() turns the file into environment
+the default account of that area (`defaults`), and the server runs with the defaults. The dashboard still offers one account per
+area, so mail can come from another provider while calendar and contacts stay in iCloud. env_overlay() turns the file into environment
 settings that Settings.from_env reads in place of the deployment's own, so the rest of the server needs no second code path.
 Without the file nothing changes. Passwords stay on this server and are never logged or shown.
 
 The file has a `version`. A file without one (the first layout) is read as version 2 in memory and rewritten only when the owner
-saves something on /setup; nothing is copied or backed up. Older servers read a version 2 file too (they ignore what they do not
+saves something in the dashboard; nothing is copied or backed up. Older servers read a version 2 file too (they ignore what they do not
 know and take the account listed last for an area).
 """
 from __future__ import annotations
@@ -31,19 +32,30 @@ DEFAULT_AUTH = "app_password"
 PENDING_USERNAME = "pending@setup.invalid"   # what the server runs with before anyone connected an account
 CHECK_TIMEOUT = 25                           # seconds one sign-in check may take
 
-# Server addresses, from each provider's own documentation:
-#   iCloud  the upstream project's own defaults (config.py)
-#   WEB.DE  hilfe.web.de/pop-imap/imap/imap-serverdaten.html; CalDAV/CardDAV hosts as tested by davx5.com
-#   Gmail   developers.google.com/workspace/gmail/imap/imap-smtp; calendar and contacts need Google sign-in (OAuth) instead
+# Two kinds of account: iCloud with Apple's own servers (the upstream project's defaults, config.py), and any other provider whose
+# servers the person enters. SERVER_PRESETS only fill in those servers on the connect form ("Provider"); the account is still
+# "other". Files saved before 2026-11 can name "webde" or "gmail" as the provider: they read as "other" with the preset's servers,
+# so nothing they run with changes. Sources: WEB.DE hilfe.web.de/pop-imap/imap/imap-serverdaten.html, CalDAV/CardDAV hosts as
+# tested by davx5.com; Gmail developers.google.com/workspace/gmail/imap/imap-smtp (calendar and contacts need Google sign-in).
 PROVIDERS: dict[str, dict[str, Any]] = {
     "icloud": {"label": "iCloud", "imap": "imap.mail.me.com:993", "smtp": "smtp.mail.me.com:587",
                "caldav": "https://caldav.icloud.com", "carddav": "https://contacts.icloud.com", "areas": AREAS},
-    "webde": {"label": "WEB.DE", "imap": "imap.web.de:993", "smtp": "smtp.web.de:587",
-              "caldav": "https://caldav.web.de", "carddav": "https://carddav.web.de", "areas": AREAS},
-    "gmail": {"label": "Gmail", "imap": "imap.gmail.com:993", "smtp": "smtp.gmail.com:465", "caldav": "", "carddav": "",
-              "areas": ("mail",)},
-    "other": {"label": "Anderer Anbieter", "imap": "", "smtp": "", "caldav": "", "carddav": "", "areas": AREAS},
+    "other": {"label": "Other email & calendar", "imap": "", "smtp": "", "caldav": "", "carddav": "", "areas": AREAS},
 }
+SERVER_PRESETS: dict[str, dict[str, str]] = {
+    "webde": {"label": "WEB.DE", "imap": "imap.web.de:993", "smtp": "smtp.web.de:587", "caldav": "https://caldav.web.de",
+              "carddav": "https://carddav.web.de"},
+    "gmail": {"label": "Gmail (mail only)", "imap": "imap.gmail.com:993", "smtp": "smtp.gmail.com:465", "caldav": "", "carddav": ""},
+}
+
+
+def _as_known_provider(a: dict[str, Any]) -> dict[str, Any]:
+    """An account under a provider this code knows: an old preset becomes "other" with that preset's servers written out."""
+    p = a.get("provider")
+    if p in PROVIDERS:
+        return a
+    ep = SERVER_PRESETS.get(p, {})
+    return dict(a, provider="other", **{k: str(a.get(k) or ep.get(k, "")) for k in ("imap", "smtp", "caldav", "carddav")})
 
 
 def endpoints(acct: dict[str, Any]) -> dict[str, str]:
@@ -78,15 +90,10 @@ def normalise_password(provider: str, raw: str) -> tuple[str, str | None]:
     if provider == "icloud":
         letters = value.replace(" ", "").replace("-", "")
         if len(letters) != 16 or not letters.isalpha():
-            return "", "Ein App-Passwort von Apple hat 16 Buchstaben, etwa abcd-efgh-ijkl-mnop."
+            return "", "An app-specific password from Apple has 16 letters, like abcd-efgh-ijkl-mnop."
         return "-".join(letters[i:i + 4] for i in range(0, 16, 4)).lower(), None
-    if provider == "gmail":
-        letters = value.replace(" ", "")
-        if len(letters) != 16 or not letters.isalpha():
-            return "", "Ein App-Passwort von Google hat 16 Buchstaben."
-        return letters.lower(), None
     if not value or len(value) > 200:
-        return "", "Bitte das Passwort eintragen."
+        return "", "Enter the password."
     return value, None
 
 
@@ -121,15 +128,16 @@ def _complete(data: dict[str, Any]) -> dict[str, Any]:
 
 def normalise(raw: Any) -> dict[str, Any] | None:
     """What a parsed accounts file holds, as the current layout (None when it is not an accounts file). Accounts that cannot work
-    (no address, no password, no known area) are left out; an account without a usable id gets a fresh one. Nothing is written."""
+    (no address, no password, only areas this code does not know) are left out; an account saved with no area at all stays, it
+    serves nothing until the owner turns an area on for it. An account without a usable id gets a fresh one. Nothing is written."""
     if not isinstance(raw, dict) or not isinstance(raw.get("accounts"), list):
         return None
     accts = []
     for a in raw["accounts"]:
         if isinstance(a, dict) and a.get("username") and a.get("password") and isinstance(a.get("areas"), list):
-            a = dict(a, areas=[x for x in a["areas"] if x in AREAS])
-            if a["areas"]:
-                accts.append(a)
+            known = [x for x in a["areas"] if x in AREAS]
+            if known or not a["areas"]:
+                accts.append(dict(_as_known_provider(a), areas=known))
     seen: set[str] = set()
     for a in accts:
         if not isinstance(a.get("id"), str) or not a["id"] or a["id"] in seen:
@@ -184,7 +192,7 @@ def problems(data: dict[str, Any]) -> list[str]:
 
 
 def load(data_dir: str) -> dict[str, Any] | None:
-    """The saved accounts in the current layout, or None when the /setup page has not saved any yet (or the file cannot be read)."""
+    """The saved accounts in the current layout, or None when none were saved yet (or the file cannot be read)."""
     try:
         with open(os.path.join(data_dir, ACCOUNTS_FILE)) as f:
             raw = json.load(f)
@@ -201,6 +209,32 @@ def save(data_dir: str, data: dict[str, Any]) -> None:
         raise ValueError("accounts do not hold together: " + "; ".join(bad))
     from .admin import _write_private
     _write_private(os.path.join(data_dir, ACCOUNTS_FILE), json.dumps(model, indent=2, ensure_ascii=False) + "\n")
+
+
+def put(data: dict[str, Any], acct: dict[str, Any], before_id: str = "") -> dict[str, Any]:
+    """The accounts with `acct` saved (it gets its id here). It takes its areas from every other account; one left with no area
+    stays connected and serves nothing. An edited account (before_id) keeps its place in the list; a new one goes first. The same sign-in at the
+    same provider replaces that account instead of adding a second copy. The deployment's own account ("env") gets a real id once
+    it is saved, and the calendar choice is cleared when the calendar comes from another sign-in afterwards."""
+    p = acct["provider"]
+    same = next((x for x in data["accounts"] if x.get("provider") == p and x["username"].lower() == acct["username"].lower()
+                 and x.get("id") != before_id), None)
+    replaced = {i for i in (before_id, (same or {}).get("id")) if i}
+    acct["id"] = next((i for i in ((same or {}).get("id"), before_id) if i and i != "env"), "") or new_id()
+    accts: list[dict[str, Any]] = []
+    for x in data["accounts"]:
+        if before_id and x.get("id") == before_id:
+            accts.append(acct)
+        if x.get("id") in replaced:
+            continue
+        x = dict(x, areas=[a for a in x["areas"] if a not in acct["areas"]])
+        accts.append(x if x.get("id") != "env" else dict(x, id=new_id()))
+    if not any(x is acct for x in accts):
+        accts.insert(0, acct)
+    out = dict(data, accounts=accts)
+    if (by_area(data).get("calendar") or {}).get("username") != (by_area(out).get("calendar") or {}).get("username"):
+        out["calendars_visible"] = []
+    return out
 
 
 def by_area(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -241,9 +275,7 @@ def env_overlay(data_dir: str) -> dict[str, str]:
 
 
 def guess_provider(imap_host: str) -> str:
-    host = imap_host.lower()
-    return "icloud" if host.endswith("mail.me.com") else "webde" if host.endswith("web.de") else \
-        "gmail" if host.endswith("gmail.com") else "other"
+    return "icloud" if imap_host.lower().endswith("mail.me.com") else "other"
 
 
 def current(s: Any) -> dict[str, Any]:

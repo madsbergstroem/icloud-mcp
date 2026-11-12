@@ -152,8 +152,8 @@
   "listing": [
    {
     "id": "wd02c4d5",
-    "provider": "webde",
-    "label": "WEB.DE",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "owner@example.net",
     "areas": [
      "Mail"
@@ -176,7 +176,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "WEB.DE",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.net",
    "app_password": "Web-Pass-1",
@@ -271,14 +271,14 @@
   "listing": [
    {
     "id": "gm03e6f7",
-    "provider": "gmail",
-    "label": "Gmail",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "alias@example.com",
     "areas": [
      "Mail"
     ],
     "read_only": false,
-    "sign_in": "App-specific password",
+    "sign_in": "Password",
     "from_environment": false
    },
    {
@@ -295,7 +295,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "Gmail",
+  "mail_account": "",
   "settings": {
    "username": "owner@gmail.example",
    "app_password": "abcdefghijklmnop",
@@ -377,7 +377,7 @@
    {
     "id": "ot04a8b9",
     "provider": "other",
-    "label": "Other provider",
+    "label": "Other email & calendar",
     "address": "owner@example.com",
     "areas": [
      "Mail",
@@ -539,8 +539,8 @@
    },
    {
     "id": "last02",
-    "provider": "webde",
-    "label": "WEB.DE",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "owner@example.net",
     "areas": [
      "Mail"
@@ -550,7 +550,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "WEB.DE",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.org",
    "app_password": "abcd-efgh-ijkl-mnop",
@@ -651,8 +651,8 @@
    },
    {
     "id": "wd02c4d5",
-    "provider": "webde",
-    "label": "WEB.DE",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "owner@example.net",
     "areas": [
      "Mail"
@@ -662,7 +662,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "WEB.DE",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.org",
    "app_password": "wxyz-abcd-efgh-ijkl",
@@ -792,18 +792,18 @@
    },
    {
     "id": "gm09",
-    "provider": "gmail",
-    "label": "Gmail",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "alias@example.com",
     "areas": [
      "Mail"
     ],
     "read_only": false,
-    "sign_in": "App-specific password",
+    "sign_in": "Password",
     "from_environment": false
    }
   ],
-  "mail_account": "Gmail",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.org",
    "app_password": "abcd-efgh-ijkl-mnop",
@@ -891,8 +891,8 @@
   "listing": [
    {
     "id": "",
-    "provider": "webde",
-    "label": "WEB.DE",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "owner@example.net",
     "areas": [
      "Mail"
@@ -915,7 +915,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "WEB.DE",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.net",
    "app_password": "Web-Pass-1",
@@ -1006,8 +1006,8 @@
   "listing": [
    {
     "id": "same",
-    "provider": "webde",
-    "label": "WEB.DE",
+    "provider": "other",
+    "label": "Other email & calendar",
     "address": "owner@example.net",
     "areas": [
      "Mail"
@@ -1030,7 +1030,7 @@
     "from_environment": false
    }
   ],
-  "mail_account": "WEB.DE",
+  "mail_account": "",
   "settings": {
    "username": "owner@example.net",
    "app_password": "Web-Pass-1",

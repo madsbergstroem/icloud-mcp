@@ -39,7 +39,7 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 - Buttons: one filled button per bar (the accent), the other is Ionic's button with the `neutral` class (raised, hairline).
   With a warning on a request, Discard is the filled one and "Send anyway…" asks first. Danger is tinted text, not a filled
   button. Text buttons use Ionic's `fill="clear"`.
-- Letters in a tile (`.av`) stand for an account; there are no provider logos. Icons are the ten Ionicons in
+- There are no provider logos and no letter tiles for services; the app's own tile in the side list is the one `.av`. Icons are the ten Ionicons in
   `static/vendor/ionicons`; search, plus and check marks are not icons here.
 - A push note says only what kind of item waits, never who it goes to or what it says. Neither does the log: it records that
   a text was edited, never the text.
@@ -53,8 +53,10 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 | After Approve | `icm-item` | Sending (the buttons are off), sent (back to Home with the result), unclear (Messages did not confirm it: nothing is sent again, the page stays until Done), not sent (the request still waits: Try again or Discard) |
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
 | Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear, Withdrawn), chain check and download |
-| Settings | `icm-settings` | One group per section: sign-in and security, accounts, iCloud, your Mac (live state of the helper), safety switches, account and server. On a wide screen a list of the sections replaces the side list, with "Back to app" |
-| Accounts | `icm-accounts` | The accounts the setup assistant saved (provider, address, areas, read only), read only, with a link to `/setup`. Where an area has more than one account, the default one carries a "Default for …" tag |
+| Settings | `icm-settings` | General (sign-in and security, safety switches, activity and server) and, on a phone, the connected services with "Connect a service". On a wide screen a side list replaces the app's: General, then one entry per connected service (name and a grey line: the address, or Beeper's number of networks), then "Connect a service" |
+| One service | `icm-service` (`services.js`) | iCloud or another provider: Used for (one switch per area; turning one on moves the area from the service that had it, a service with no area stays connected), the settings of its areas, "Through your Mac" (first iCloud account only), Servers (another provider), Sign-in (replace the password, read only, Disconnect). Beeper: the networks with your name there (account ID on tap), Send, who it may write to (`BEEPER_SEND_ALLOWLIST`) and Read chats "Not built yet". Each page names its limits in one sentence where they apply (iCloud: the Mac areas only while the Mac is on; another provider: no reminders or notes). Group-wide facts are one sentence under the group; there are no pills and no per-row source labels |
+| Connect a service | `icm-connect`, `icm-connect-form` | Ionic cards for iCloud and "Other email & calendar", each with one status line ("Available"); Beeper's says "Set up by whoever runs this server". The form for another provider starts with "Provider" (Custom, WEB.DE, Gmail), which only fills in the servers under "Advanced server settings". The form checks the sign-in before anything is saved and lists what to try when the provider says no. `/setup` and `#/connect` open it |
+| Calendars your assistant sees | `icm-calendars` | The calendar service's calendars as switches, Save in the toolbar |
 | One area | `icm-group` | The area's fields as Ionic controls, Save in the toolbar, reset per field |
 | Notifications, Passkeys, AI clients, Owner password, Server | `icm-*` | One job each |
 | Sign in / Confirm it is you | `app.js`, `ui.js` | Passkey first, then the owner password |
@@ -69,7 +71,8 @@ Ionic has nothing for these, so they are written here, each in one place in `app
 - `.title`, `.fresh`, `.notice` and `.note`: text blocks
 - `.msg`: the message exactly as it goes out, with `.bubble` for an iMessage and `.capr` for the line under it
 - `.warnbox`: why a request needs a second look
-- `.tag` and `.av`: a small label and a letter tile
+- `.tag` and `.av`: a small label and the app's letter tile
+- `.tiles`: the choices on "Connect a service" (Ionic cards in a grid), and `ol.steps` for numbered steps
 - `.slot`: the drop area for a missing file
 - `.footbar`: the bar under a request on a phone. It is a plain bar, not an `ion-toolbar`, because Ionic restyles buttons inside a toolbar
 - `.split`, `.side` and `.setnav`: the wide-screen layout
@@ -78,20 +81,29 @@ Ionic has nothing for these, so they are written here, each in one place in `app
 
 - `#/item/<kind>:<id>` opens one request. Tools give this in `approve_at` (`Settings.approval_link`), and push notes open
   it too.
-- `#/activity` and `#/settings` open those tabs.
+- `#/activity` and `#/settings` open those tabs; `#/connect` opens "Connect a service" (where `/setup` leads).
 - Old addresses (`/dashboard/approvals?item=`, `/dashboard/attach/<id>`, `/dashboard/security`, `/dashboard/settings`)
   redirect to them.
 
 ## Accounts model
 
+There are two providers: `icloud` (Apple's servers) and `other` ("Other email & calendar", the servers the person entered). A file
+saved while the WEB.DE and Gmail presets existed still loads: `webde` and `gmail` read as `other` with the servers those presets
+used (`accounts.SERVER_PRESETS`), and the next save writes them out. The same presets fill in the servers when the owner picks
+WEB.DE or Gmail under "Provider" on the connect form; the account is still "other", and the servers stay editable under
+"Advanced server settings". An account may hold no area at all; it stays connected and
+serves nothing until an area is turned on for it on its page. Every change from the dashboard goes through `setup_page.connect`
+(checks, then the sign-in with the provider) and `accounts.put` (merge: the account takes its areas from the others, an edited one
+keeps its place, a new one goes first).
+
 `DATA_DIR/accounts.json` is version 2: `accounts` (each with a random `id`, `provider`, `auth`, `areas`, `read_only` and its
 sign-in), `defaults` (area to account id) and `calendars_visible`. An area can be held by several accounts and has exactly one
 default; the server runs with the defaults, so `Settings` still knows one account per area and nothing else had to change. A
-file with no `version` is read as version 2 in memory and rewritten only when the owner saves on /setup (no copy is made); where
+file with no `version` is read as version 2 in memory and rewritten only when the owner saves in Settings (no copy is made); where
 such a file lets two accounts hold one area, the account listed last keeps it, as it always did. An id is random and says
 nothing about the address. `auth` is `app_password`; `oauth` is reserved and nothing reads it. `accounts.problems()` checks
 that ids are unique, that every default is an account holding that area and that every held area has a default, and `save()`
-refuses a model that fails it. /setup still offers one account per area, and the dashboard marks a default only where an area is shared.
+refuses a model that fails it. The dashboard still offers one account per area.
 
 How a second account would attach (none of this exists yet). Tools take an optional `account`, an id from the owner's list and
 never an address; `settings_for_account(s, id)` already builds the settings for it, and without the argument the default of the
@@ -182,13 +194,14 @@ own, and `get_chat` on the Beeper entry. Agents lack the first grant, which is w
 - Log, audit and push carry the kind, the id, the outcome and the time. The card's title is always "Beeper message". The text,
   the chat's name and its id appear only in the entry itself, which is removed with it.
 
-Settings › Accounts lists the networks Beeper is signed in to, below the accounts of /setup: network, the owner's name there and
+Settings › Beeper lists the networks Beeper is signed in to: network, the owner's name there and
 Beeper's account id, read live with `get_accounts` through the gateway. That takes a key of its own, `BEEPER_READ_KEY` (the
 execution key has no grant for it), and the tool name `BEEPER_ACCOUNTS_TOOL`. The answer is kept in memory for three minutes, a
 failure for 30 seconds; nothing is written to disk, and the log has the outcome only. The address and the phone number in Beeper's
 answer are never read, and Beeper's own account (`matrix`) is not a network. Without the key, when the gateway cannot be reached or
-refuses the key, or when the answer is not a list of accounts, one row "Beeper" says which. Each network is marked as coming
-through Beeper and set in the server's environment, with "Sends after your approval" when sending is on, and "Reading: not yet".
+refuses the key, or when the answer is not a list of accounts, one row says which. The page says once, not per network, that
+whoever runs the server sets Beeper up, that sending needs approval and goes only to `BEEPER_SEND_ALLOWLIST` (editable there as
+"Who it may write to"), and that reading chats is not built yet.
 
 Not built yet: choosing a chat by name on the dashboard, the last messages of a chat on the card (another person's words, so a
 switch of its own), and an instance for a second owner, who would have to agree first.

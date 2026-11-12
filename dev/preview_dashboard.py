@@ -3,10 +3,14 @@
 keeps it). Nothing here reaches a real account.
 
     PYTHONPATH=src python dev/preview_dashboard.py [--port 8765] [--data DIR] [--arrive SECONDS] [--beeper ok|no-key|down|refused|none]
+                                                   [--owner yes|no]
 
 Open http://localhost:8765/dashboard and sign in with the owner password printed at start. Words in a message steer the fake Mac:
 [unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
-seconds, to watch a new request show up without a reload. Needs the test extras (pip install -e '.[test]')."""
+seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
+identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
+password and Settings shows why services cannot be connected or changed. Account changes are checked against made-up servers (a password starting with "wron" is refused)
+and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
 import argparse
 import asyncio
 import contextlib
@@ -25,6 +29,7 @@ ap.add_argument("--port", type=int, default=8765)
 ap.add_argument("--data", default="")
 ap.add_argument("--arrive", type=int, default=0)
 ap.add_argument("--beeper", choices=["ok", "no-key", "down", "refused", "none"], default="ok")
+ap.add_argument("--owner", choices=["yes", "no"], default="yes")
 args = ap.parse_args()
 PORT = args.port
 DATA = args.data or tempfile.mkdtemp(prefix="icloud-mcp-preview-")
@@ -39,7 +44,8 @@ os.environ.update(
     ICLOUD_USERNAME="alex.morgan@example.org", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL=f"http://localhost:{PORT}",
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
     DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*",
-    BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400")
+    BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400",
+    OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1")   # no request comes from that proxy: see --owner
 # Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
 # gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
 if args.beeper != "none":
@@ -78,8 +84,32 @@ gw.mode = "down" if args.beeper == "down" else None
 B.connect = lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=gw.make_http), s.beeper_chat_tool, s.beeper_send_tool)
 B.accounts_reader = lambda s: B.AccountsReader(s, make_http=gw.make_http)
 
+# The owner's Tailscale identity on every request (--owner yes), as tailscale serve would add it: the dashboard signs the owner in
+# on the way, as it does behind tailscale serve
+from icloud_mcp import access_sso  # noqa: E402
+
+
+async def _owner(self, request):
+    return ("alex.morgan@example.org", "Tailscale") if args.owner == "yes" else None
+
+
+access_sso.OwnerSSO.owner = _owner
+
+
+# Sign-in checks against made-up servers: every account works unless its password starts with "wron" (wrong, wron-gwro-ngwr-ongg)
+async def _check(_s, acct, areas=None):
+    bad = str(acct.get("password", "")).startswith("wron")
+    areas = list(areas if areas is not None else acct["areas"])
+    await asyncio.sleep(1.2)                                         # long enough to see "Checking…"
+    return {"failed": areas if bad else [], "kinds": {a: "refused" for a in areas} if bad else {},
+            "calendars": [{"name": "Home", "id": "https://caldav.example.com/1/home/"}, {"name": "Work", "id": "https://caldav.example.com/1/work/"},
+                          {"name": "Family", "id": "https://caldav.example.com/1/family/"}]}
+
+
+A.check = _check
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
+d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
 mail = d.sources["mail"].mail
 cal = d.sources["calendar"].cal
 im = d.sources["imessage"]
@@ -107,10 +137,11 @@ def cal_release(self, q):
 
 CalendarService.release = cal_release
 
-# -- saved accounts (what /setup keeps) -------------------------------------------------------------------------------------------
+# -- saved accounts (what Connect a service keeps)----------------------------------------------------------------------------------
 A.save(DATA, {"accounts": [
     {"id": "a1", "provider": "icloud", "username": "alex.morgan@example.org", "password": "abcd-efgh-ijkl-mnop", "areas": ["mail", "calendar"]},
-    {"id": "a2", "provider": "webde", "username": "alex.work@example.net", "password": "not-a-real-password", "areas": ["contacts"], "read_only": True}],
+    {"id": "a2", "provider": "other", "username": "alex@work.example.net", "password": "not-a-real-password", "areas": ["contacts"], "read_only": True,
+     "imap": "mail.work.example.net:993", "smtp": "mail.work.example.net:587", "caldav": "https://dav.work.example.net/", "carddav": "https://dav.work.example.net/"}],
     "calendars_visible": []})
 
 # -- waiting requests, all made up ------------------------------------------------------------------------------------------------

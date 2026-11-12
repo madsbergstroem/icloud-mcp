@@ -99,6 +99,10 @@
 !dev/*.sh
 !docs/
 !docs/*.md
+# screenshots a pull request links to (made-up data from dev/preview_dashboard.py only)
+!docs/screenshots/
+!docs/screenshots/*/
+!docs/screenshots/*/*.jpg
 
 # Belt and braces: these must never be tracked, whatever the rules above say.
 .env

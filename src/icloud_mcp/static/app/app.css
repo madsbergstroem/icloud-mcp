@@ -144,6 +144,17 @@ ion-toggle::part(label) { white-space: normal; }
 .empty { padding: 56px 32px; text-align: center; color: var(--muted); font-size: 15px; line-height: 1.45; }
 .empty b { display: block; color: var(--text); font-size: 17px; font-weight: 600; margin-bottom: 4px; }
 
+/* Connect a service: the choices as Ionic cards, and numbered steps in a list or a notice */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 14px 16px 0; }
+.tiles ion-card { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: none; }
+.tiles ion-card-title { font-size: 17px; font-weight: 600; color: var(--text); }
+.tiles ion-card-content { color: var(--muted); font-size: 14px; line-height: 1.45; }
+.tiles ion-card-content .status { margin: 8px 0 0; color: var(--text); font-size: 13.5px; font-weight: 500; }
+.tiles ion-card[disabled] .status { color: var(--muted); }
+ol.steps { margin: 6px 0 0; padding-left: 20px; line-height: 1.5; font-size: 15px; }
+ol.steps li { margin: 3px 0; }
+ol.steps a { color: var(--accent-ink); font-weight: 500; text-decoration: none; }
+
 /* the attachment preview sheet */
 .preview { height: 100%; display: flex; flex-direction: column; background: var(--ground); }
 .preview img { max-width: 100%; margin: 16px auto; display: block; border-radius: 6px; }
@@ -173,6 +184,7 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .side ion-item.on ion-icon { color: var(--text); }
   .side ion-item.sub { --min-height: 34px; --padding-start: 43px; color: var(--muted); font-size: 14.5px; }
   .side .lbl { padding: 18px 10px 6px; color: var(--muted); font-size: 13px; }
+  .side ion-item p { margin: 1px 0 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
   .side .foot { margin-top: auto; border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; font-size: 13.5px; color: var(--muted); line-height: 1.5; background: var(--surface); overflow-wrap: anywhere; }
   .side .foot b { color: var(--text); font-weight: 500; display: block; }
   .shell { display: flex; height: 100%; }
