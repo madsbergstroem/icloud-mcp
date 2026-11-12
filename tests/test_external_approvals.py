@@ -100,8 +100,9 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 
 
 async def test_only_the_beeper_tool_calls_queue_external():
-    users = [p.name for p in Path(A.__file__).parent.glob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    assert users == ["beeper.py"]
+    root = Path(A.__file__).parent
+    users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
+    assert sorted(users) == ["plugins/__init__.py", "plugins/beeper/gateway.py"]     # the contract names it; Beeper's sender calls it
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------

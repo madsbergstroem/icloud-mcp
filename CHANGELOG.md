@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Service plugins (fork).** Services are now plugins of one kind (`icloud_mcp.plugins`), found through the Python entry point
+  group `icloud_mcp.plugins`. A plugin declares its name, status line, limits, how it is connected, its settings as data, secrets,
+  a health check, what its page lists and its capabilities (`messages` now; `mail`, `calendar` and `contacts` as interfaces).
+  Beeper is the first plugin and moved to `icloud_mcp/plugins/beeper`; `icloud_mcp.beeper` still imports. Settings, the service
+  page, Connect a service, the chat tools, the approval of a send and icloud_check_health handle any plugin from its data. The
+  chat tools (`messages_list_chats`, `messages_read_chat`, `messages_search`) now exist whenever any channel can be read, not
+  only with iMessage. Nothing changes for the owner: same tools, same `BEEPER_*` settings, same pages. A plugin can add rules
+  beyond the allowlist (`policy`), checked when a request is queued and again when it is approved.
+
 - **Home, reworked (fork).** With nothing waiting, a wide screen shows Home in one column instead of an empty right half;
   when something waits, the request still opens beside the list. "1 request was withdrawn by your assistant." becomes a section
   "Taken back by your assistant" with one row per request withdrawn in the last 24 hours: title, kind and first recipient, time,

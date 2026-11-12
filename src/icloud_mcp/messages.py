@@ -268,6 +268,10 @@ class Hub:
     def can_send(self) -> bool:
         return bool(self._senders)
 
+    def backends(self) -> list[str]:
+        """The prefixes of the channels that can be read here."""
+        return list(self._backends)
+
     def accounts(self) -> list[Account]:
         return [a for b, _f in self._backends.values() for a in b.accounts()]
 

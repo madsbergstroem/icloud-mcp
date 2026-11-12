@@ -169,6 +169,28 @@ Where the seam is not general yet:
 - `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
   as calendar changes do.
 
+## Service plugins
+
+Every service the owner connects can be a plugin of one kind (`src/icloud_mcp/plugins/__init__.py`), found through the entry point
+group `icloud_mcp.plugins` (the packaging guide's "Creating and discovering plugins"; no plugin framework). The plugins of this
+package are in `pyproject.toml` under that group and also in `plugins.BUILTIN`, so a checkout that runs from source finds them.
+
+A plugin is data plus a few functions: id, name, status line, limits sentence, Connect card text, how it is connected
+(`operator`: set up in the environment; `form`: fields and a sign-in check, drawn once a plugin uses it), the settings it lets the
+owner change (`settings_keys`, `settings_group()` as a `settings.Group`), secrets to mask, a health check, what its page lists
+(`accounts`), and its capabilities. `messages` is in use: a `messages.Backend` for reading, a `messages.Sender` with an
+`ActionType` and an `Executor` for sending, and chat search and resolve for the recipient picker. `mail`, `calendar` and
+`contacts` are interfaces only, shaped after MailService, CalendarService and ContactsService.
+
+The core keeps the guarantees: queue with the canonical hash, the owner's approval, the executor called once, the allowlist and
+the plugin's policy checked at queue and at approval, a log of metadata only. Settings › Connected services, the service page and
+the Connect card are drawn from the plugin's data; plugins bring no JavaScript. A plugin reads its own settings with
+`Settings.plugin_value(key)`. `tests/test_plugins.py` loads two made-up plugins (Chatty with messages, Mailbox with mail) through
+the entry point and needs no core change; `dev/preview_dashboard.py --demo-plugins` shows them.
+
+Beeper is the first plugin (`plugins/beeper`); `icloud_mcp.beeper` stays the same module under its old name. iMessage stays in the
+core for now (Mac helper); it could become a plugin the same way.
+
 ## Beeper
 
 `messages_send_request` with a `chat_id` that starts with `beeper:` (and `text`, `reply_to`, `request_id`) asks the owner to approve a

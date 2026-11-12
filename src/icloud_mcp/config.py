@@ -35,11 +35,21 @@ CONTACTS_ALLOW_EMAIL_CHANGES
 ENABLE_REMINDERS ENABLE_NOTES ENABLE_DRIVE ENABLE_MAPS ENABLE_IMESSAGE ENABLE_HEALTH IMESSAGE_HIDDEN_CHATS IMESSAGE_VISIBLE_CHATS
 IMESSAGE_MAX_AGE_DAYS IMESSAGE_HIDE_SHORT_CODES IMESSAGE_NEVER_SEND IMESSAGE_ALLOW_SEND IMESSAGE_SEND_REQUIRES_APPROVAL
 IMESSAGE_SEND_ALLOWLIST SHORTCUTS_ALLOW BRIDGE_JOB_TIMEOUT_SECONDS
-BEEPER_SEND_ALLOWLIST
 READ_ONLY
 OWNER_PASSWORD_LOGIN DASHBOARD_SESSION_MINUTES AUDIT_LOG AUDIT_KEEP_DAYS
 """.split())
 _dashboard_values: dict[str, str] = {}   # the dashboard's values while Settings.from_env runs; they win over the environment
+
+
+def _plugin_keys() -> frozenset[str]:
+    from .plugins import settings_keys
+    return settings_keys()
+
+
+def editable_keys() -> frozenset[str]:
+    """DASHBOARD_EDITABLE and what the service plugins let the owner change (their settings_keys)."""
+    from .plugins import settings_keys
+    return DASHBOARD_EDITABLE | settings_keys()
 
 
 def read_dashboard_settings(data_dir: str) -> dict[str, str]:
@@ -52,7 +62,7 @@ def read_dashboard_settings(data_dir: str) -> dict[str, str]:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
-    return {k: v for k, v in data.items() if k in DASHBOARD_EDITABLE and isinstance(v, str)} if isinstance(data, dict) else {}
+    return {k: v for k, v in data.items() if k in editable_keys() and isinstance(v, str)} if isinstance(data, dict) else {}
 
 
 # Settings written by the /setup page (DATA_DIR/accounts.json, see accounts.py), as environment names. While from_env runs
@@ -231,6 +241,12 @@ class Settings:
     beeper_timeout_seconds: float = 30.0           # BEEPER_TIMEOUT_SECONDS: how long one gateway call may take
     beeper_read_key: str = ""                      # BEEPER_READ_KEY: a gateway key that may read Beeper's accounts for the dashboard; only in the environment
     beeper_accounts_tool: str = "beeper-get_accounts"   # BEEPER_ACCOUNTS_TOOL: the gateway's name for Beeper's get_accounts
+    # the settings a service plugin declares (its settings_keys), as set on the dashboard or in the environment: plugin_value(key)
+    plugin_values: tuple[tuple[str, str], ...] = ()
+
+    def plugin_value(self, key: str, default: str = "") -> str:
+        """A service plugin's own setting: the dashboard's value, else the environment's, else `default`."""
+        return next((v for k, v in self.plugin_values if k == key), default)
     warmup_on_start: bool = True  # WARMUP_ON_START: log in to mail, calendar and contacts in the background right after start
     tool_workers: int = 8         # TOOL_WORKERS: threads that run tool calls, so parallel calls do not queue behind each other
                                   # (Mac helper tools use a pool of their own, min(TOOL_WORKERS, 6), so they never hold these)
@@ -277,7 +293,7 @@ class Settings:
         global _dashboard_values, _OVERLAY
         data_dir = os.environ.get("DATA_DIR", "").strip() or "./data"
         values = read_dashboard_settings(data_dir) if dashboard_values is None else \
-            {k: v for k, v in dashboard_values.items() if k in DASHBOARD_EDITABLE}
+            {k: v for k, v in dashboard_values.items() if k in editable_keys()}
         overlay = env_overlay(data_dir)
         _dashboard_values, _OVERLAY = values, overlay
         try:
@@ -376,6 +392,7 @@ class Settings:
             beeper_timeout_seconds=float(max(5, min(_int("BEEPER_TIMEOUT_SECONDS", 30), 120))),
             beeper_read_key=_str("BEEPER_READ_KEY").strip(),
             beeper_accounts_tool=_str("BEEPER_ACCOUNTS_TOOL", "beeper-get_accounts").strip() or "beeper-get_accounts",
+            plugin_values=tuple((k, v) for k in sorted(_plugin_keys()) if (v := _env(k)) is not None),
             warmup_on_start=_bool("WARMUP_ON_START", True),
             tool_workers=max(2, min(_int("TOOL_WORKERS", 8), 32)),
             agent_notes_file=_str("AGENT_NOTES_FILE"),

@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
-from .config import DASHBOARD_EDITABLE, SETTINGS_FILE, Settings
+from .config import SETTINGS_FILE, Settings, editable_keys
 
 log = logging.getLogger(__name__)
 _TRUE = ("1", "true", "yes", "on")
@@ -125,7 +125,12 @@ class Group:
     summary: Callable[[Callable[[str], str]], str] | None = None   # one line for the Settings list, from (key -> value)
 
 
-GROUPS: list[Group] = [
+def _plugin_groups() -> list[Group]:
+    from .plugins import settings_groups
+    return settings_groups()
+
+
+CORE_GROUPS: list[Group] = [
     Group("accounts", "Sender", "Who your mail comes from and how it is signed.", [
         Spec("ICLOUD_EMAIL_ADDRESS", "From address", "text", "Your address or an alias; mail you send comes from it.",
              loosens=_changed),
@@ -201,12 +206,6 @@ GROUPS: list[Group] = [
                                                                        ("Drive", "ENABLE_DRIVE"), ("Maps", "ENABLE_MAPS"),
                                                                        ("Messages", "ENABLE_IMESSAGE"), ("Health", "ENABLE_HEALTH"))
                                                     if _on(v(k))) or "Nothing") + " on"),
-    Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
-        Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat.",
-             loosens=_changed, section="Sending"),
-    ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
-                          else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
-                          else "Nobody may be written to")),
     Group("safety", "Safety", "Switches that limit everything at once.", [
         Spec("READ_ONLY", "Read-only server", default="false", help="Nothing can be sent, moved, changed or deleted.", loosens=_to_false),
     ], summary=lambda v: "Read-only: nothing can change" if _on(v("READ_ONLY")) else "Agents may make changes"),
@@ -219,8 +218,20 @@ GROUPS: list[Group] = [
     ], summary=lambda v: ("Password sign-in on" if _on(v("OWNER_PASSWORD_LOGIN")) else "Passkey only")
                          + (f" · activity kept {v('AUDIT_KEEP_DAYS')} days" if _on(v("AUDIT_LOG")) else " · no activity log")),
 ]
-SPECS = {sp.key: sp for g in GROUPS for sp in g.specs}
-assert set(SPECS) <= DASHBOARD_EDITABLE, set(SPECS) - DASHBOARD_EDITABLE
+
+
+def all_groups() -> list[Group]:
+    """The core's groups and the group each service plugin brings as data (plugins/__init__.py)."""
+    return CORE_GROUPS + _plugin_groups()
+
+
+def specs() -> dict[str, Spec]:
+    return {sp.key: sp for g in all_groups() for sp in g.specs}
+
+
+GROUPS = all_groups()          # as found at import; the dashboard asks all_groups(), so a plugin found later counts too
+SPECS = specs()
+assert set(SPECS) <= editable_keys(), set(SPECS) - editable_keys()
 
 # Shown read-only under "Server": (label, environment variable, how to show it)
 SERVER_VIEW = [
@@ -250,7 +261,7 @@ class SettingsStore:
                 data = json.load(f)
         except (OSError, ValueError):
             return {}
-        return {k: v for k, v in data.items() if k in DASHBOARD_EDITABLE and isinstance(v, str)} if isinstance(data, dict) else {}
+        return {k: v for k, v in data.items() if k in editable_keys() and isinstance(v, str)} if isinstance(data, dict) else {}
 
     def write(self, values: dict[str, str]) -> None:
         from .admin import _write_private
@@ -273,7 +284,8 @@ def current(key: str, stored: dict[str, str]) -> tuple[str, str]:
     env = os.environ.get(key)
     if env is not None and env.strip() != "":
         return env.strip(), "environment"
-    return SPECS[key].default if key in SPECS else "", "default"
+    known = specs()
+    return known[key].default if key in known else "", "default"
 
 
 def parse(sp: Spec, form: Any) -> str:
@@ -381,7 +393,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         return new, changes, looser, entered, typed, errors
 
     def group_for(request: Request) -> Group | None:
-        g = next((x for x in GROUPS if x.slug == request.path_params["slug"]), None)
+        g = next((x for x in all_groups() if x.slug == request.path_params["slug"]), None)
         return g if g is not None and editable else None
 
     @mcp.custom_route("/dashboard/settings", methods=["GET"])
@@ -431,8 +443,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
                                                      (os.environ.get(key, "").strip() or "default"))] for label, key, how in items]}
                   for title, items in SERVER_VIEW]
         return d.api_ok({"editable": editable, "restart_needed": bool(state["restart_needed"] or stored != started_with),
-                         "groups": [group_json(g, stored, True) for g in GROUPS], "server": server, "mac": d.bridge_state(),
-                         "values": {sp.key: current(sp.key, stored)[0] for g in GROUPS for sp in g.specs}})
+                         "groups": [group_json(g, stored, True) for g in all_groups()], "server": server, "mac": d.bridge_state(),
+                         "values": {sp.key: current(sp.key, stored)[0] for g in all_groups() for sp in g.specs}})
 
     @mcp.custom_route("/dashboard/api/settings/restart", methods=["POST"])
     async def api_restart(request: Request) -> Response:
@@ -491,7 +503,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         stored = store.read()
         if g is None or key not in stored or key not in {sp.key for sp in g.specs}:
             return d.api_err("That setting was not changed here.", 404)
-        sp = SPECS[key]
+        sp = specs()[key]
         new = {k: v for k, v in stored.items() if k != key}
         back, _ = current(key, new)
         if sp.loosens and sp.loosens(stored[key], back) and not d.recent(rec):
