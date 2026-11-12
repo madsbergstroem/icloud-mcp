@@ -124,6 +124,8 @@ class Registration:
     action_type: ActionType
     executor: Executor
     allowed: Callable[[], Iterable[str]]       # who a request of this type may reach, as the owner has it now; empty means nobody
+    # rules beyond the list, read on the parameters as the owner has them now: the reason a request is not permitted, or None
+    policy: Callable[[Mapping[str, Any]], str | None] | None = None
 
     def allowed_set(self) -> set[str]:
         return {str(x).strip().casefold() for x in self.allowed()}
@@ -134,16 +136,19 @@ class ActionRegistry:
         self._items: dict[str, Registration] = {}
 
     def register(self, action_type: ActionType, executor: Executor,
-                 allowed_recipients: Callable[[], Iterable[str]] | Iterable[str] = ()) -> None:
+                 allowed_recipients: Callable[[], Iterable[str]] | Iterable[str] = (),
+                 policy: Callable[[Mapping[str, Any]], str | None] | None = None) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
-        anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient."""
+        anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient. policy: further
+        rules of the owner's (for Beeper: which networks, whether groups), checked like the list when a request is queued and
+        again when it is approved; it answers why a request is not permitted, or None."""
         if action_type.id in self._items:
             raise ValueError(f"Action type {action_type.id} is already registered.")
         if not callable(getattr(executor, "execute", None)):
             raise TypeError("An executor has an execute(request) method.")
         allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
-        self._items[action_type.id] = Registration(action_type, executor, allowed)
+        self._items[action_type.id] = Registration(action_type, executor, allowed, policy)
 
     def copy(self) -> "ActionRegistry":
         """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the

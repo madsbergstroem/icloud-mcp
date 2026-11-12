@@ -171,6 +171,7 @@ def hub(monkeypatch):
 
 
 def launch(web, hub, *, allow=f"{SINGLE},{GROUP}", **env):
+    env.setdefault("BEEPER_SEND_GROUPS", "true")          # most tests use the group on the list; the defaults have tests of their own
     app, mcp, _p, _sent = web(BEEPER_GATEWAY_URL=URL, BEEPER_EXEC_KEY=KEY, BEEPER_SEND_ALLOWLIST=allow, **env)
     return app, mcp, mcp._icloud_dashboard.sources["external"]
 
@@ -237,12 +238,13 @@ async def test_a_gateway_that_passes_structured_data_gives_the_size_too(web, hub
 def test_beepers_text_answer_is_read_as_it_comes():
     text = ("\n## Example Club (chatID: !g:beeper.test)\nChat on Signal (signal.1000000001).\n**Type**: group\n"
             "**Last Activity**: 2026-11-11T12:18:36.000Z\nThis chat is muted.\n\n# Using this information\n\n- Use search_messages.\n")
-    assert B._chat_of(B.Answer(False, None, text), "!g:beeper.test") == B.Chat("Example Club", "Signal", True, None)
+    assert B._chat_of(B.Answer(False, None, text), "!g:beeper.test") == B.Chat("Example Club", "Signal", True, None, "2026-11-11T12:18:36.000Z")
     assert B._chat_of(B.Answer(False, None, text), "!other:beeper.test") is None            # the answer is for another chat
     assert B._chat_of(B.Answer(True, None, text), "!g:beeper.test") is None                 # an error is no chat
     assert B._chat_of(B.Answer(False, None, "No such chat."), "!g:beeper.test") is None
     two_words = text.replace("Example Club (chatID: !g:beeper.test)", "Club (Berlin) (chatID: !g:beeper.test)").replace("Signal (", "Facebook Messenger (")
-    assert B._chat_of(B.Answer(False, None, two_words), "!g:beeper.test") == B.Chat("Club (Berlin)", "Facebook Messenger", True, None)
+    assert B._chat_of(B.Answer(False, None, two_words), "!g:beeper.test") == B.Chat("Club (Berlin)", "Facebook Messenger", True, None,
+                                                                                    "2026-11-11T12:18:36.000Z")
 
 
 async def test_what_the_agent_says_about_the_chat_is_not_taken(web, hub, gateway):
@@ -263,9 +265,11 @@ async def test_a_chat_outside_the_owners_list_is_refused_and_empty_means_nobody(
         await ask(mcp, SINGLE)
 
 
-async def test_a_star_lets_any_chat_through(web, hub, gateway):
+async def test_a_star_lets_any_single_chat_through_but_never_a_group(web, hub, gateway):
     app, mcp, src = launch(web, hub, allow="*")
-    assert (await ask(mcp, GROUP))["status"] == "queued_for_owner_approval"
+    assert (await ask(mcp, SINGLE))["status"] == "queued_for_owner_approval"
+    with pytest.raises(Exception, match="must be on the owner's list by name"):
+        await ask(mcp, GROUP)                                  # groups on, but * does not cover a group
 
 
 async def test_a_chat_beeper_does_not_know_queues_nothing(web, hub, gateway):

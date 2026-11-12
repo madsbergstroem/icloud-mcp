@@ -18,8 +18,14 @@ What happens to the entry after an approval (actions.py has the general rule):
 - `unclear`: the send left and the answer did not come back or could not be read (a timeout, a 5xx, an error from the tool).
   Never repeated here. The owner is told to look in the chat first.
 
-Everything the owner can change about who may be reached is the list `BEEPER_SEND_ALLOWLIST` (chat ids as Beeper gives them, `*`
-for every chat, empty for nobody). It is checked when a request is queued and again when it is approved.
+Who may be reached is three rules of the owner's, and a chat must pass all three (`policy`): the list `BEEPER_SEND_ALLOWLIST`
+(chat ids as Beeper gives them, `*` for every chat, empty for nobody), the networks `BEEPER_SEND_NETWORKS` (`*` by default), and
+group chats, off by default (`BEEPER_SEND_GROUPS`); a group must be on the list by its id even then, `*` never covers one. They
+are checked when a request is queued and again when it is approved (external.py).
+
+The dashboard shows the list by name (`ChatsReader`): with the read key it asks Beeper for each chat on the list (`get_chat`) and
+searches chats by name (`search_chats`), on the gateway's server entry `BEEPER_READ_SERVER`. Answers are kept in memory for a
+short while, never on disk, and the log has the outcome only. The read key cannot send: sending stays with the exec key.
 """
 from __future__ import annotations
 
@@ -70,6 +76,7 @@ class Chat:
     network: str
     is_group: bool
     people: int | None
+    last_activity: str = ""      # ISO time of the last message, when Beeper says
 
 
 def _classify(sent: bool, statuses: list[int]) -> GatewayError:
@@ -137,6 +144,7 @@ def _answer(result: Any) -> Answer:
 _TITLE_LINE = re.compile(r"^## (?P<title>.+) \(chatID: (?P<id>[^)]+)\)\s*$", re.M)
 _NETWORK_LINE = re.compile(r"^Chat on (?P<network>.+?) \((?P<account>\S+)\)", re.M)
 _TYPE_LINE = re.compile(r"^\*\*Type\*\*: (?P<type>single|group)\s*$", re.M)
+_ACTIVITY_LINE = re.compile(r"^\*\*Last Activity\*\*: (?P<at>\S+)\s*$", re.M)
 
 
 def _chat_from_text(text: str, chat_id: str) -> Chat | None:
@@ -145,8 +153,9 @@ def _chat_from_text(text: str, chat_id: str) -> Chat | None:
     title, kind = _TITLE_LINE.search(text), _TYPE_LINE.search(text)
     if title is None or kind is None or title["id"].strip() != chat_id.strip():
         return None
-    net = _NETWORK_LINE.search(text)
-    return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", None)
+    net, at = _NETWORK_LINE.search(text), _ACTIVITY_LINE.search(text)
+    return Chat(" ".join(title["title"].split())[:300], " ".join(net["network"].split())[:100] if net else "", kind["type"] == "group", None,
+                at["at"][:40] if at else "")
 
 
 def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
@@ -166,7 +175,8 @@ def _chat_of(answer: Answer, chat_id: str = "") -> Chat | None:
     if not isinstance(total, int) or isinstance(total, bool):
         items = parts.get("items") if isinstance(parts, Mapping) else None
         total = len(items) if isinstance(items, list) and items else None
-    return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total)
+    return Chat(" ".join(d["title"].split())[:300], " ".join(str(d.get("network") or "").split())[:100], d["type"] == "group", total,
+                str(d.get("lastActivity") or "")[:40])
 
 
 # -- the networks behind Beeper, for the dashboard's account list --------------------------------------------------------------------
@@ -272,6 +282,128 @@ def accounts_reader(s: Settings, make_http: Callable[[dict[str, str], float], An
     return AccountsReader(s, make_http)
 
 
+# -- the chats on the owner's list, by name, and finding one to add -----------------------------------------------------------------
+_CHAT_HEAD = re.compile(r"^## .+ \(chatID: [^)]+\)\s*$", re.M)
+
+
+def _chats_of(answer: Answer) -> list[tuple[str, Chat]] | None:
+    """The chats of a search_chats answer as (id, chat): blocks like get_chat's in text, or a list of chats in structured data
+    (`items` or `chats`, each with `id`). None when the answer is not a list of chats."""
+    if answer.is_error:
+        return None
+    d = answer.data
+    if isinstance(d, Mapping) and isinstance(d.get("items", d.get("chats")), list):
+        out = []
+        for x in d.get("items", d.get("chats")):
+            if isinstance(x, Mapping) and isinstance(x.get("id"), str) and (c := _chat_of(Answer(False, x, ""), x["id"])):
+                out.append((x["id"], c))
+        return out
+    text = answer.text or (d.get("result") if isinstance(d, Mapping) and isinstance(d.get("result"), str) else "")
+    if not text:
+        return None
+    heads = list(_CHAT_HEAD.finditer(text))
+    out = []
+    for i, h in enumerate(heads):
+        block = text[h.start():heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        chat_id = _TITLE_LINE.search(block)["id"].strip()
+        if (c := _chat_from_text(block, chat_id)) is not None:
+            out.append((chat_id, c))
+    return out
+
+
+def _row(chat_id: str, c: Chat) -> dict[str, Any]:
+    return {"id": chat_id, "title": c.title, "network": c.network, "group": c.is_group, "people": c.people, "last_activity": c.last_activity}
+
+
+class ChatsReader:
+    """Reads chats through the gateway with the read key, for the dashboard: each chat on the list by id (`get_chat`) and a search by
+    name (`search_chats`), on the server entry BEEPER_READ_SERVER. A chat is kept in memory a short while, never on disk; the log
+    has the outcome only, never a title or an id. The methods never raise: a failure is a `state` the page shows."""
+
+    KEEP_SECONDS = 120
+    STATES = {"auth": "refused", "unreachable": "unreachable"}
+
+    def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
+        server = s.beeper_read_server or "beeper"
+        self.chat_tool, self.search_tool = f"{server}-get_chat", f"{server}-search_chats"
+        self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
+        self._lock = threading.Lock()
+        self._kept: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+    def _one(self, chat_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            hit = self._kept.get(chat_id)
+            if hit is not None and time.monotonic() < hit[0]:
+                return hit[1]
+        answer = self.gateway.call(self.chat_tool, {"chatID": chat_id, "maxParticipantCount": 0})
+        c = _chat_of(answer, chat_id)
+        row = _row(chat_id, c) if c is not None else None          # None: Beeper does not know this chat (any more)
+        with self._lock:
+            self._kept[chat_id] = (time.monotonic() + self.KEEP_SECONDS, row)
+        return row
+
+    def chats(self, ids: list[str]) -> dict[str, Any]:
+        """{"state", "chats": [{id, title, network, group, people, last_activity, found}]} for the ids on the list, in its order."""
+        if self.gateway is None:
+            return {"state": "no_read_key", "chats": []}
+        out, missing = [], 0
+        try:
+            for chat_id in ids:
+                row = self._one(chat_id)
+                missing += row is None
+                out.append({**row, "found": True} if row else {"id": chat_id, "found": False})
+        except GatewayError as e:
+            log.info("beeper chats: %s", self.STATES.get(e.kind, "unreadable"))
+            return {"state": self.STATES.get(e.kind, "unreadable"), "chats": []}
+        except Exception as e:  # noqa: BLE001  -- the page must stand whatever happens here
+            log.warning("beeper chats: unreadable (%s)", type(e).__name__)
+            return {"state": "unreadable", "chats": []}
+        log.info("beeper chats: ok (%d on the list, %d not found)", len(ids), missing)
+        return {"state": "ok", "chats": out}
+
+    def search(self, query: str, limit: int = 20) -> dict[str, Any]:
+        """{"state", "chats": [...]}: chats whose title matches `query` (Beeper's own search), or the most recent ones without it."""
+        if self.gateway is None:
+            return {"state": "no_read_key", "chats": []}
+        args: dict[str, Any] = {"limit": limit, **({"query": query} if query else {})}
+        try:
+            got = _chats_of(self.gateway.call(self.search_tool, args))
+        except GatewayError as e:
+            log.info("beeper chat search: %s", self.STATES.get(e.kind, "unreadable"))
+            return {"state": self.STATES.get(e.kind, "unreadable"), "chats": []}
+        except Exception as e:  # noqa: BLE001
+            log.warning("beeper chat search: unreadable (%s)", type(e).__name__)
+            return {"state": "unreadable", "chats": []}
+        if got is None:
+            log.info("beeper chat search: unreadable")
+            return {"state": "unreadable", "chats": []}
+        log.info("beeper chat search: ok (%d chats)", len(got))
+        return {"state": "ok", "chats": [_row(i, c) for i, c in got]}
+
+
+def chats_reader(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> ChatsReader:
+    return ChatsReader(s, make_http)
+
+
+# -- the owner's rules: list, networks, groups --------------------------------------------------------------------------------------
+def policy(s: Settings) -> Callable[[Mapping[str, Any]], str | None]:
+    """Beyond the list (external.py checks that): the chat's network must be allowed, and a group needs group chats on and its own
+    id on the list (`*` never covers a group). The answer is written for the agent."""
+    def check(p: Mapping[str, Any]) -> str | None:
+        nets = {x.strip().casefold() for x in s.beeper_send_networks}
+        network = str(p.get("network") or "")
+        if "*" not in nets and network.casefold() not in nets:
+            return (f"Not permitted: writing on {network or 'this network'} is off. Tell the owner; only the owner can choose the networks "
+                    "that may be written to.")
+        if p.get("is_group"):
+            if not s.beeper_send_groups:
+                return "Not permitted: group chats are off. Tell the owner; only the owner can turn group chats on."
+            if str(p.get("chat_id", "")).strip().casefold() not in {x.strip().casefold() for x in s.beeper_send_allowlist}:
+                return "Not permitted: a group chat must be on the owner's list by name. Tell the owner; only the owner can add it."
+        return None
+    return check
+
+
 class BeeperError(Exception):
     """A request that cannot be made; the message is written for the agent."""
 
@@ -368,7 +500,7 @@ def connect(s: Settings, make_http: Callable[[dict[str, str], float], Any] | Non
 
 def register_type(registry: A.ActionRegistry, beeper: Beeper, s: Settings) -> None:
     """The action type, with the owner's list read from the settings every time it is asked."""
-    registry.register(ACTION_TYPE, BeeperExecutor(beeper), lambda: s.beeper_send_allowlist)
+    registry.register(ACTION_TYPE, BeeperExecutor(beeper), lambda: s.beeper_send_allowlist, policy(s))
 
 
 class BeeperSender:

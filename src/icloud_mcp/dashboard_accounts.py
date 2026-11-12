@@ -225,3 +225,47 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         if before == "env":                                    # the deployment's own account gets a real id once it is saved
             data = A.put(data, dict(acct), "env")
         return save(data, rec, f"Chose {len(chosen)} calendar{'s' if len(chosen) != 1 else ''} for the assistant")
+
+
+# -- Beeper: who it may write to, by name -------------------------------------------------------------------------------------------
+def _beeper_rules(s: Any) -> dict[str, Any]:
+    """The owner's three rules as they stand in Settings now (saved values win over the environment; they apply after a restart)."""
+    from .settings import SettingsStore, current
+    stored = SettingsStore(s.data_dir).read()
+    split = lambda v: [x.strip() for x in v.split(",") if x.strip()]                      # noqa: E731
+    allow = split(current("BEEPER_SEND_ALLOWLIST", stored)[0])
+    nets = split(current("BEEPER_SEND_NETWORKS", stored)[0])
+    return {"ids": [x for x in allow if x != "*"], "any": "*" in allow, "networks": nets,
+            "groups": current("BEEPER_SEND_GROUPS", stored)[0].strip().lower() in ("1", "true", "yes", "on")}
+
+
+def register_beeper_api(mcp: Any, d: Any) -> None:
+    """GET /dashboard/api/beeper/who: the chats on the owner's list by name, the other two rules and the networks to choose from.
+    GET /dashboard/api/beeper/find?q=: chats found by name, or the recent ones, each marked when it is on the list. Read only:
+    the page changes the rules through /dashboard/api/settings/beeper like every other setting."""
+    if not d.s.beeper_gateway_url:
+        return
+    chats = B.chats_reader(d.s)
+    accounts = B.accounts_reader(d.s)
+
+    @mcp.custom_route("/dashboard/api/beeper/who", methods=["GET"])
+    async def beeper_who(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        rules = _beeper_rules(d.s)
+        listed, acc = await asyncio.gather(asyncio.to_thread(chats.chats, rules["ids"]), asyncio.to_thread(accounts.read))
+        names = list(dict.fromkeys(n["network"] for n in acc["networks"]))
+        return d.api_ok({**rules, "state": listed["state"], "chats": listed["chats"], "all_networks": names,
+                         "accounts_state": acc["state"], "sending": B.configured(d.s)})
+
+    @mcp.custom_route("/dashboard/api/beeper/find", methods=["GET"])
+    async def beeper_find(request: Request) -> Response:
+        got = d.api_reader(request)
+        if isinstance(got, Response):
+            return got
+        q = str(request.query_params.get("q", "")).strip()[:100]
+        found = await asyncio.to_thread(chats.search, q, 20 if q else 10)
+        on = {x.casefold() for x in _beeper_rules(d.s)["ids"]}
+        return d.api_ok({"state": found["state"], "query": q,
+                         "chats": [{**c, "added": c["id"].casefold() in on} for c in found["chats"]]})

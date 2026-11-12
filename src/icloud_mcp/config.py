@@ -35,7 +35,7 @@ CONTACTS_ALLOW_EMAIL_CHANGES
 ENABLE_REMINDERS ENABLE_NOTES ENABLE_DRIVE ENABLE_MAPS ENABLE_IMESSAGE ENABLE_HEALTH IMESSAGE_HIDDEN_CHATS IMESSAGE_VISIBLE_CHATS
 IMESSAGE_MAX_AGE_DAYS IMESSAGE_HIDE_SHORT_CODES IMESSAGE_NEVER_SEND IMESSAGE_ALLOW_SEND IMESSAGE_SEND_REQUIRES_APPROVAL
 IMESSAGE_SEND_ALLOWLIST SHORTCUTS_ALLOW BRIDGE_JOB_TIMEOUT_SECONDS
-BEEPER_SEND_ALLOWLIST
+BEEPER_SEND_ALLOWLIST BEEPER_SEND_NETWORKS BEEPER_SEND_GROUPS
 READ_ONLY
 OWNER_PASSWORD_LOGIN DASHBOARD_SESSION_MINUTES AUDIT_LOG AUDIT_KEEP_DAYS
 """.split())
@@ -225,12 +225,15 @@ class Settings:
     imessage_send_allowlist: tuple[str, ...] = ()  # IMESSAGE_SEND_ALLOWLIST: who may receive; empty = nobody, "*" = anyone
     beeper_gateway_url: str = ""                   # BEEPER_GATEWAY_URL: the gateway's MCP endpoint (beeper.py); with the key it lets messages_send_request write to beeper: chats
     beeper_exec_key: str = ""                      # BEEPER_EXEC_KEY: the gateway key that sends after approval and reads chat details; only in the environment
-    beeper_send_allowlist: tuple[str, ...] = ()    # BEEPER_SEND_ALLOWLIST: chat ids that may be written to; empty = nobody, "*" = any chat
+    beeper_send_allowlist: tuple[str, ...] = ()    # BEEPER_SEND_ALLOWLIST: chat ids that may be written to; empty = nobody, "*" = any chat (never a group)
+    beeper_send_networks: tuple[str, ...] = ("*",)  # BEEPER_SEND_NETWORKS: networks (as Beeper names them) that may be written to; "*" = all, empty = none
+    beeper_send_groups: bool = False               # BEEPER_SEND_GROUPS: group chats may be written to, only those on the list by id
     beeper_chat_tool: str = "beeper-get_chat"      # BEEPER_CHAT_TOOL: the gateway's name for Beeper's get_chat
     beeper_send_tool: str = "beeper_send-send_message"   # BEEPER_SEND_TOOL: the gateway's name for send_message on its own server entry
     beeper_timeout_seconds: float = 30.0           # BEEPER_TIMEOUT_SECONDS: how long one gateway call may take
     beeper_read_key: str = ""                      # BEEPER_READ_KEY: a gateway key that may read Beeper's accounts for the dashboard; only in the environment
     beeper_accounts_tool: str = "beeper-get_accounts"   # BEEPER_ACCOUNTS_TOOL: the gateway's name for Beeper's get_accounts
+    beeper_read_server: str = ""                   # BEEPER_READ_SERVER: the gateway's server entry the read key reads from ("beeper_michel"): its tools are <server>-get_chat, -search_chats, -get_accounts
     warmup_on_start: bool = True  # WARMUP_ON_START: log in to mail, calendar and contacts in the background right after start
     tool_workers: int = 8         # TOOL_WORKERS: threads that run tool calls, so parallel calls do not queue behind each other
                                   # (Mac helper tools use a pool of their own, min(TOOL_WORKERS, 6), so they never hold these)
@@ -371,11 +374,16 @@ class Settings:
             beeper_gateway_url=_str("BEEPER_GATEWAY_URL").strip(),
             beeper_exec_key=_str("BEEPER_EXEC_KEY").strip(),
             beeper_send_allowlist=tuple(_list("BEEPER_SEND_ALLOWLIST")),
+            beeper_send_networks=tuple(_list("BEEPER_SEND_NETWORKS", "*")) if _env("BEEPER_SEND_NETWORKS") is not None else ("*",),
+            beeper_send_groups=_bool("BEEPER_SEND_GROUPS", False),
+            beeper_read_server=_str("BEEPER_READ_SERVER").strip(),
             beeper_chat_tool=_str("BEEPER_CHAT_TOOL", "beeper-get_chat").strip() or "beeper-get_chat",
             beeper_send_tool=_str("BEEPER_SEND_TOOL", "beeper_send-send_message").strip() or "beeper_send-send_message",
             beeper_timeout_seconds=float(max(5, min(_int("BEEPER_TIMEOUT_SECONDS", 30), 120))),
             beeper_read_key=_str("BEEPER_READ_KEY").strip(),
-            beeper_accounts_tool=_str("BEEPER_ACCOUNTS_TOOL", "beeper-get_accounts").strip() or "beeper-get_accounts",
+            # BEEPER_ACCOUNTS_TOOL wins; without it the read server's own get_accounts, else the old default name
+            beeper_accounts_tool=_str("BEEPER_ACCOUNTS_TOOL").strip()
+            or (f"{_str('BEEPER_READ_SERVER').strip()}-get_accounts" if _str("BEEPER_READ_SERVER").strip() else "beeper-get_accounts"),
             warmup_on_start=_bool("WARMUP_ON_START", True),
             tool_workers=max(2, min(_int("TOOL_WORKERS", 8), 32)),
             agent_notes_file=_str("AGENT_NOTES_FILE"),

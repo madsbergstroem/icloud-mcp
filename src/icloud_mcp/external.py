@@ -155,6 +155,8 @@ class ExternalApprovals(ApprovalSource):
         blocked = [] if "*" in allowed else [p for p in people if p.casefold() not in allowed]
         if blocked:
             raise A.ExternalError(f"Not permitted for {at.id}: {', '.join(blocked)}. Tell the owner; only the owner can change who may be reached.")
+        if reg.policy is not None and (why := reg.policy(plain)):
+            raise A.ExternalError(why)
         return plain, people
 
     def queue_external(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None) -> QueuedMessage:

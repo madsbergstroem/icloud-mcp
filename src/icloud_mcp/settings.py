@@ -202,8 +202,12 @@ GROUPS: list[Group] = [
                                                                        ("Messages", "ENABLE_IMESSAGE"), ("Health", "ENABLE_HEALTH"))
                                                     if _on(v(k))) or "Nothing") + " on"),
     Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
-        Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat.",
+        Spec("BEEPER_SEND_ALLOWLIST", "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat except groups.",
              loosens=_changed, section="Sending"),
+        Spec("BEEPER_SEND_NETWORKS", "Networks that may be written to", "list", "Network names as Beeper shows them. * means every network, empty none.",
+             default="*", loosens=_changed, section="Sending"),
+        Spec("BEEPER_SEND_GROUPS", "Group chats", default="false", help="Only groups on the list by name; * never covers a group.",
+             loosens=_to_true, section="Sending"),
     ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
                           else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
                           else "Nobody may be written to")),
