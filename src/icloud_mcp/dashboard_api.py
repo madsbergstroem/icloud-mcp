@@ -177,6 +177,16 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                 "what": ("iMessage" if m.group(1) == "imessage" else m.group(1)[:1].upper() + m.group(1)[1:]) if m else "", "to": short_names(", ".join(map(str, rcpt[:1]))),
                 "unclear": (e.get("details") or {}).get("delivery") in ("unconfirmed", "failed")}
 
+    def withdrawn_item(e: dict[str, Any]) -> dict[str, Any]:
+        """A request the assistant took back, as a row: what Activity shows for it (title, kind, first recipient, reason), no text."""
+        det = e.get("details") or {}
+        m = re.match(r"Withdrew (.+?) “(.*)”$", str(e.get("summary") or ""))
+        badge = (m.group(1) if m else "") or {"mail": "email", "calendar": "invitation"}.get(str(det.get("kind")), "request")
+        why = REASON_WORDS.get(str(det.get("reason")), "")
+        return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else "A queued request",
+                "what": badge[:1].upper() + badge[1:], "to": short_names(", ".join(map(str, (det.get("recipients") or [])[:1]))),
+                "why": why[:1].upper() + why[1:] + "." if why else ""}
+
     def label_of(src: Any, q: Any) -> str:
         return src.approve_label_for(q) if hasattr(src, "approve_label_for") else src.approve_label
 
@@ -210,10 +220,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         sent = [e for e in await asyncio.to_thread(audit.entries, 300, ("approval.sent",))
                 if datetime.fromtimestamp(e.get("t", 0), d.tz).date() == day]
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
-        taken_back = [e.get("t", 0) for e in await asyncio.to_thread(audit.entries, 100, ("approval.withdrawn",))
+        taken_back = [withdrawn_item(e) for e in await asyncio.to_thread(audit.entries, 100, ("approval.withdrawn",))
                       if time.time() - e.get("t", 0) < _WITHDRAWN_NOTICE_SECONDS]
         return ok({"waiting": [summary(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
-                   "withdrawn": taken_back,           # when each request the assistant took back in the last 24 hours was: Home counts them, and lets go of each on time
+                   "withdrawn": taken_back,           # each request the assistant took back in the last 24 hours: Home lists them, and lets go of each on time
                    "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 

@@ -3,6 +3,7 @@
 import { get, post, session, loadSession, token, confirmNow } from "./api.js";
 import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide } from "./ui.js";
 import { serviceEntries } from "./services.js";
+import { app } from "./state.js";
 
 export function page(el, title, back, body) {
   el.innerHTML = `<ion-header translucent><ion-toolbar>${back ? `<ion-buttons slot="start"><ion-back-button text="${esc(back)}"></ion-back-button></ion-buttons>` : ""}
@@ -19,14 +20,19 @@ class Activity extends HTMLElement {
     this.innerHTML = `<ion-content><div data-body></div></ion-content>`;
     this.load();
     window.addEventListener("icm:changed", (this.onChange = () => this.load()));
+    // Home asks to show one entry (a request the assistant took back): all entries, scrolled to it and marked
+    window.addEventListener("icm:activity-focus", (this.onFocus = () => { this.filter = "all"; this.load(); }));
   }
 
-  disconnectedCallback() { window.removeEventListener("icm:changed", this.onChange); }
+  disconnectedCallback() {
+    window.removeEventListener("icm:changed", this.onChange);
+    window.removeEventListener("icm:activity-focus", this.onFocus);
+  }
 
   async load() {
     let a;
     try { a = await get("/activity?filter=" + encodeURIComponent(this.filter)); } catch (e) { fail(e); return; }
-    const days = a.days.map((d) => section(d.day) + `<ion-list class="inset">${d.entries.map((e) => `<ion-item>
+    const days = a.days.map((d) => section(d.day) + `<ion-list class="inset">${d.entries.map((e) => `<ion-item data-t="${esc(e.t)}">
       <ion-label class="ion-text-wrap" style="display:flex;gap:12px"><span class="num" style="color:var(--muted);min-width:44px">${esc(e.time)}</span>
       <span><span${e.ok ? "" : ' style="color:var(--negative)"'}>${esc(e.who)} ${esc(e.what)}</span>${e.error ? `<br><small style="color:var(--muted)">${esc(e.error)}</small>` : ""}
       ${e.note ? `<br><small style="color:var(--muted)">${esc(e.note)}</small>` : ""}</span>
@@ -40,6 +46,11 @@ class Activity extends HTMLElement {
       + (days || `<div class="empty"><b>Nothing recorded${this.filter === "all" ? " yet" : " of this kind"}.</b>What your assistant does and what you change shows up here.</div>`)
       + `<p class="note">${chain} No message text, passwords or tokens. <a href="/dashboard/activity.json" download>Download</a></p>`;
     this.querySelector("ion-segment").addEventListener("ionChange", (e) => { this.filter = e.detail.value; this.load(); });
+    if (app.activityFocus) {
+      const hit = this.querySelector(`ion-item[data-t="${CSS.escape(String(app.activityFocus))}"]`);
+      app.activityFocus = null;
+      if (hit) { hit.classList.add("sel"); hit.scrollIntoView({ block: "center" }); }
+    }
   }
 }
 customElements.define("icm-activity", Activity);

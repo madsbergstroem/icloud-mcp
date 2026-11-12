@@ -13,7 +13,7 @@ function greeting() {
 }
 
 function finding(waiting) {
-  if (!waiting.length) return "Nothing waits for you. When your assistant wants to send something, it shows up here.";
+  if (!waiting.length) return "Nothing waits for you. When your assistant wants to send something, it shows up here, and a note reaches your phone.";
   const n = waiting.length;
   const head = n === 1 ? "One request waits for you." : n === 2 ? "Two requests wait for you." : `${n} requests wait for you.`;
   return `${head} ${n === 1 ? "It is" : "The oldest is"} dropped in ${left(waiting[0].expires_at)}.`;
@@ -47,17 +47,17 @@ class Today extends HTMLElement {
     clearTimeout(this.letGoTimer);
   }
 
-  // Requests the assistant took back in the last 24 hours. Each time is the server's; the count is worked out here at every draw,
-  // and a draw is timed for the moment the oldest one passes the day, so the line goes away by itself even on an open tab.
+  // Requests the assistant took back in the last 24 hours. Each time is the server's; the list is worked out here at every draw,
+  // and a draw is timed for the moment the oldest one passes the day, so a row goes away by itself even on an open tab.
   withdrawn() {
     const now = Date.now() / 1000;
-    return (this.data.withdrawn || []).filter((t) => now - t < DAY);
+    return (this.data.withdrawn || []).filter((w) => now - w.t < DAY);
   }
 
   letGo() {
     clearTimeout(this.letGoTimer);
     const live = this.withdrawn();
-    if (live.length) this.letGoTimer = setTimeout(() => this.render(), Math.max(1000, (Math.min(...live) + DAY - Date.now() / 1000) * 1000 + 500));
+    if (live.length) this.letGoTimer = setTimeout(() => this.render(), Math.max(1000, (Math.min(...live.map((w) => w.t)) + DAY - Date.now() / 1000) * 1000 + 500));
   }
 
   async load() {
@@ -74,8 +74,6 @@ class Today extends HTMLElement {
       <ion-button size="small" fill="clear" data-resume>Resume</ion-button></div>`);
     if (this.data.recent_burst > 2) out.push(`<div class="notice pause"><span>Agents asked for ${this.data.recent_burst} of these in the
       last hour. Approve only what you asked for.</span></div>`);
-    const taken = this.withdrawn().length;
-    if (taken) out.push(`<div class="notice"><span>${taken === 1 ? "1 request was" : `${taken} requests were`} withdrawn by your assistant.</span></div>`);
     const hint = window.InstallHint && window.InstallHint.state ? window.InstallHint.state() : "none";
     if (hint !== "none" && !app.hintClosed) out.push(`<div class="notice"><span>Add this app to your
       Home Screen to get notifications${hint.startsWith("ios") ? ": in Safari tap Share, then Add to Home Screen" : ""}.</span>
@@ -89,19 +87,24 @@ class Today extends HTMLElement {
       <ion-label class="ion-text-wrap"><h2>${esc(w.title)}</h2><p>${itemSub(w)}</p></ion-label>
       <ion-note slot="end" class="num">${esc(left(w.expires_at))}</ion-note></ion-item>`).join("");
     const sent = d.sent_today.map((e) => `<ion-item class="sent"><ion-label class="ion-text-wrap"><h2>${esc(e.title)}</h2>
-      <p>${esc(e.what || "")}${e.unclear ? ` ${tag("Unclear", "warn end")}` : ""}</p></ion-label>
+      <p>${esc(e.what || "")}${e.to ? ` to ${esc(e.to)}` : ""}${e.unclear ? ` ${tag("Unclear", "warn end")}` : ""}</p></ion-label>
       <ion-note slot="end" class="num">${esc(e.time)}</ion-note></ion-item>`).join("");
-    const empty = !d.waiting.length && !wide() ? `<div class="empty"><b>Nothing waits for you.</b>Requests from your assistant show up here, and a note reaches your phone.</div>` : "";
+    // taken back: what it was and for whom, when, and the reason the assistant chose; tapping one opens it in Activity
+    const taken = this.withdrawn().map((w) => `<ion-item button detail="true" data-taken="${esc(w.t)}"><ion-label class="ion-text-wrap">
+      <h2>${esc(w.title)}</h2><p>${esc(w.what)}${w.to ? ` to ${esc(w.to)}` : ""}</p><p>${w.why ? `${esc(w.why)} ` : ""}Nothing was sent.</p></ion-label>
+      <ion-note slot="end" class="num">${esc(w.time)}</ion-note></ion-item>`).join("");
     return titleBlock(greeting(), esc(finding(d.waiting)))
       + `<div class="fresh ${app.online ? "" : "off"}"><i></i>${app.online ? `Live, checked ${esc(ago(app.updated))}` : "Offline, showing the last state"}</div>`
-      + this.notices() + empty
+      + this.notices()
       + (d.waiting.length ? section("Waiting", `<span class="num">${d.waiting.length}</span>`) + `<ion-list class="inset">${items}</ion-list>` : "")
+      + (taken ? section("Taken back by your assistant") + `<ion-list class="inset">${taken}</ion-list>` : "")
       + (sent ? section("Sent today") + `<ion-list class="inset">${sent}</ion-list>` : "");
   }
 
   render() {
     const body = this.querySelector("[data-body]");
-    if (wide()) {
+    // with nothing waiting (and no request still showing how its send went) a wide screen shows one column, not an empty half
+    if (wide() && (this.data.waiting.length || app.holding)) {
       // the two columns stay in place: a refresh redraws the list and leaves the request open, so nothing flickers or loses what you typed
       if (!this.split) {
         body.innerHTML = `<div class="split"><div class="list" data-list></div><div class="detail" data-detail></div></div>`;
@@ -128,9 +131,13 @@ class Today extends HTMLElement {
       }
     } else {
       this.split = null;
-      body.innerHTML = this.list();
+      body.innerHTML = wide() ? `<div class="single">${this.list()}</div>` : this.list();
     }
     this.letGo();
+    body.querySelectorAll("[data-taken]").forEach((n) => n.addEventListener("click", () => {
+      app.activityFocus = Number(n.dataset.taken);
+      window.dispatchEvent(new Event("icm:activity-focus"));          // app.js switches to Activity, which finds the entry
+    }));
     body.querySelectorAll("[data-key]").forEach((n) => n.addEventListener("click", () => this.open(n.dataset.key)));
     body.querySelector("[data-resume]")?.addEventListener("click", async () => {
       try { await post("/server/pause", { paused: false }); app.note = "Resumed."; app.noteUntil = Date.now() + 10000; window.dispatchEvent(new Event("icm:changed")); } catch (e) { fail(e); }

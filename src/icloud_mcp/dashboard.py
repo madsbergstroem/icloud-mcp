@@ -642,11 +642,22 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         # versioned paths (ionic/9.0.10/...), so a browser may keep them; the chunks Ionic loads lazily come from here too
         return static_file(vendor_dir, request.path_params["rel"], "public, max-age=31536000, immutable")
 
+    # The modules import each other as "./api.js"; served, each import carries the same ?v= as app.js in the page, so a browser
+    # that kept an older module under its plain address fetches the new one after an update, on a normal reload
+    module_import = re.compile(rb'(\bfrom\s*|\bimport\s*\(?\s*)"(\./[A-Za-z0-9_-]+\.js)"')
+
+    def versioned(body: bytes) -> bytes:
+        return module_import.sub(lambda m: m.group(1) + b'"' + m.group(2) + b"?v=" + app_v.encode() + b'"', body)
+
     @mcp.custom_route("/dashboard/app/{rel:path}", methods=["GET"])
     async def app_file(request: Request) -> Response:
-        if request.path_params["rel"] == "index.html":
+        rel = request.path_params["rel"]
+        if rel == "index.html":
             return Response("Not found", status_code=404, headers=_HEADERS)
-        return static_file(app_dir, request.path_params["rel"], "no-cache")   # modules import each other without a version
+        resp = static_file(app_dir, rel, "no-cache")
+        if rel.endswith(".js") and resp.status_code == 200:
+            resp = Response(versioned(resp.body), media_type="text/javascript", headers={**_HEADERS, "Cache-Control": "no-cache"})
+        return resp
 
     def app_shell() -> Response:
         # The icons ride in the page: iOS fetches the home-screen icon without the session, and a sign-in proxy in front

@@ -45,12 +45,11 @@ function shell() {
   const tabs = [["today", "Home", "file-tray-outline"], ["activity", "Activity", "time-outline"], ["settings", "Settings", "settings-outline"]];
   root().innerHTML = `<div class="shell">
     <nav class="side" aria-label="Sections">
-      <div class="who"><span class="av">I</span>iCloud connector</div>
+      <div class="who">Sendgate</div>
       <ion-button class="neutral pause" expand="block" data-pause>Pause tools</ion-button>
       ${tabs.map(([t, l, i]) => `<ion-item button detail="false" data-side="${t}" lines="none">${icon(i)}
         <ion-label style="margin-left:10px">${l}</ion-label>${t === "today" ? `<ion-note slot="end" class="num" data-count></ion-note>` : ""}</ion-item>`).join("")}
-      <div class="lbl">Waiting by kind</div><div data-kinds></div>
-      <div class="foot" data-foot></div></nav>
+      <div class="lbl">Waiting by kind</div><div data-kinds></div></nav>
     <nav class="side setnav" aria-label="Settings sections">
       <ion-item button detail="false" lines="none" data-back>${icon("chevron-back-outline")}<ion-label style="margin-left:10px">Back to app</ion-label></ion-item>
       <div class="lbl">General</div>
@@ -133,7 +132,7 @@ function setCount(n) {
   renderSide();
 }
 
-// The side list's own bits: the count, the pause button, the waiting count by kind and the state card at the bottom
+// The side list's own bits: the count, the pause button and the waiting count by kind
 function renderSide() {
   const q = (s) => root().querySelector(s);
   const count = q("[data-count]");
@@ -143,9 +142,6 @@ function renderSide() {
   const kinds = q("[data-kinds]");
   if (kinds) kinds.innerHTML = Object.entries(app.kinds).map(([k, n]) => `<ion-item class="sub" lines="none"><ion-label>${esc(kindName(k))}</ion-label>
     <ion-note slot="end" class="num">${n}</ion-note></ion-item>`).join("");
-  const foot = q("[data-foot]");
-  if (foot) foot.innerHTML = `<b>${app.online ? (app.paused ? "Live, tools paused" : "Live") : "Offline"}</b>${esc((session.data || {}).host || "")}`
-    + (app.mac === "off" ? "" : `<br>Mac helper ${app.mac === "online" ? "online" : "offline"}`);
 }
 
 async function poll() {
@@ -186,6 +182,7 @@ async function main() {
     else if (/^#\/(activity|settings|connect)$/.test(location.hash)) location.reload();   // the shell reads these when it starts
   });
   window.addEventListener("icm:signed-out", () => location.reload());
+  window.addEventListener("icm:activity-focus", () => root().querySelector("ion-tabs").select("activity"));
   window.addEventListener("icm:changed", () => setTimeout(poll, 300));
   navigator.serviceWorker?.addEventListener("message", (e) => { if (e.data && e.data.open) openItem(e.data.open); });
 }
