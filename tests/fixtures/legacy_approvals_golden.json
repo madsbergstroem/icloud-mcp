@@ -423,7 +423,10 @@
    "details": {
     "kind": "mail",
     "outbox_id": "<id:mail-3>",
-    "reason": "mistake"
+    "reason": "mistake",
+    "recipients": [
+     "bob@example.org"
+    ]
    },
    "ok": true,
    "summary": "Withdrew email “Take me back”",
@@ -447,7 +450,10 @@
    "details": {
     "kind": "calendar",
     "outbox_id": "<id:calendar-3>",
-    "reason": "mistake"
+    "reason": "mistake",
+    "recipients": [
+     "jana@example.org"
+    ]
    },
    "ok": true,
    "summary": "Withdrew invitation “Autumn fair”",

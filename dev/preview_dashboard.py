@@ -9,7 +9,8 @@ Open http://localhost:8765/dashboard and sign in with the owner password printed
 [unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
 seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
-password and Settings shows why services cannot be connected or changed. Account changes are checked against made-up servers (a password starting with "wron" is refused)
+password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
+one column with what was taken back and what was sent today. Account changes are checked against made-up servers (a password starting with "wron" is refused)
 and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
 import argparse
 import asyncio
@@ -30,6 +31,7 @@ ap.add_argument("--data", default="")
 ap.add_argument("--arrive", type=int, default=0)
 ap.add_argument("--beeper", choices=["ok", "no-key", "down", "refused", "none"], default="ok")
 ap.add_argument("--owner", choices=["yes", "no"], default="yes")
+ap.add_argument("--nothing-waits", action="store_true")
 args = ap.parse_args()
 PORT = args.port
 DATA = args.data or tempfile.mkdtemp(prefix="icloud-mcp-preview-")
@@ -186,6 +188,13 @@ d.audit.record("signin.password", actor="owner", via="password", summary="Signed
 # One request the assistant queued and then took back, through the real tool, so Home and Activity show what a withdrawal leaves.
 taken_back = mail.send(to=["jordan.lee@example.org"], subject="Offer for the delivery van", body="Hi Jordan, we can offer 18,400 EUR for the van.")["outbox_id"]
 asyncio.run(mcp.call_tool("approval_withdraw", {"id": taken_back, "reason": "mistake"}))
+if args.nothing_waits:                                       # Home with nothing waiting: the queues emptied, one mail sent today
+    for src in d.sources.values():
+        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
+        for q in src.pending():
+            box.claim(q.id)
+    d.audit.record("approval.sent", actor="owner", via="password", summary="Approved email “Re: Invoice for October”",
+                   kind="mail", recipients=["sam.taylor@example.org"])
 if args.arrive:
     threading.Timer(args.arrive, lambda: imsg("Live arrival test: this appeared without a reload.", chat="live@example.org",
                                               people=[{"handle": "live@example.org", "name": "Lena Fischer"}])).start()

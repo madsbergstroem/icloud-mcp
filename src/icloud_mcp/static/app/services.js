@@ -60,6 +60,8 @@ class Service extends HTMLElement {
 
   async load() {
     let r, st;
+    // Beeper's networks come live from the gateway, which can take a few seconds: say so instead of an empty page
+    if (this.sid === "beeper" && !this.r) this.body.innerHTML = titleBlock("Beeper", "Asking Beeper for its networks…") + `<div class="empty"><ion-spinner></ion-spinner></div>`;
     try { [r, st] = await Promise.all([get("/accounts"), get("/settings")]); } catch (e) { fail(e); return; }
     this.r = r; this.st = st;
     if (this.sid === "beeper") return this.beeper(r.beeper);
