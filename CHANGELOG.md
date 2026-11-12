@@ -5,6 +5,12 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Beeper reading with a maximum age works (fork).** Beeper takes times only as UTC with Z (`2026-10-13T12:12:23.000Z`) and
+  answered the age limit, sent with an offset, with 400 Invalid input, so `messages_list_chats` failed as soon as
+  `BEEPER_MAX_AGE_DAYS` was above 0. Every time sent to Beeper (`lastActivityAfter`, `dateAfter`, `dateBefore`) now goes out in that
+  form: the age limit, a time with an offset, and a bare date or a time without offset as local time, as the chat tools describe
+  it. A `since` or `before` that does not read is refused before Beeper is asked.
+
 - **Beeper reading, checked against the live gateway (fork).** Search hits read Beeper's real answer: the day heading
   `Today (YYYY-MM-DD)` as well as `YYYY-MM-DD (Weekday)`, times in UTC, and the link `/open/<chat>/<sort key>`, so a hit's
   `message_id` is `sortkey:<n>` (Beeper's search names no message id). Links in formatted messages keep their address

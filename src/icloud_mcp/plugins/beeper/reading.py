@@ -18,7 +18,7 @@ import html
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ...messages import Account, Chat, ChatFilter, Filters, Match, Matches, Message, MessagesError, Page, Person, make_id, split_id
@@ -72,26 +72,47 @@ class _Rules:
         k = native.strip().casefold()
         return k not in self.hidden and (not self.visible or k in self.visible)
 
-    def floor(self) -> str | None:
-        """The oldest time that may be read, in UTC as Beeper takes it."""
+    def floor(self) -> datetime | None:
+        """The oldest time that may be read (UTC)."""
         if not self.max_age:
             return None
-        return (datetime.now().astimezone() - timedelta(days=self.max_age)).astimezone().isoformat(timespec="seconds")
+        return datetime.now(timezone.utc) - timedelta(days=self.max_age)
 
 
-def _later(a: str | None, b: str | None) -> str | None:
-    """The later of two ISO times (either may be missing)."""
-    if not a or not b:
-        return a or b
+def _when(value: str | None, name: str) -> datetime | None:
+    """An ISO 8601 time as the agent gives it, in UTC. With an offset or Z it is that moment; without one (and a bare date, which
+    means its start) it is local time, as the chat tools describe it. A value that does not read is refused, never sent on."""
+    if not value or not value.strip():
+        return None
     try:
-        da, db = (datetime.fromisoformat(x.replace("Z", "+00:00")) for x in (a, b))
-        if da.tzinfo is None:
-            da = da.astimezone()
-        if db.tzinfo is None:
-            db = db.astimezone()
-        return a if da >= db else b
+        d = datetime.fromisoformat(value.strip().replace("Z", "+00:00").replace("z", "+00:00"))
     except ValueError:
-        return b
+        raise MessagesError(f"{name} is not an ISO 8601 time or date, like 2026-11-12 or 2026-11-12T09:30:00+01:00.") from None
+    return (d if d.tzinfo else d.astimezone()).astimezone(timezone.utc)
+
+
+BEEPER_TIME_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z")
+
+
+def beeper_time(d: datetime) -> str:
+    """A time as Beeper's MCP takes it: UTC with milliseconds and Z (2026-10-13T12:12:23.000Z). With an offset (+00:00) or as a bare
+    date Beeper answers 400 Invalid input."""
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _stamp(item: dict[str, Any]) -> datetime | None:
+    """A message's timestamp as Beeper gives it (UTC with Z), or None when it does not read."""
+    try:
+        return _when(str(item.get("timestamp") or ""), "timestamp")
+    except MessagesError:
+        return None
+
+
+def _later(a: datetime | None, b: datetime | None) -> datetime | None:
+    """The later of two times (either may be missing)."""
+    if a is None or b is None:
+        return a or b
+    return max(a, b)
 
 
 def _plain(text: str) -> str:
@@ -249,8 +270,8 @@ class BeeperBackend:
                 args["unreadOnly"] = True
             if flt.account:
                 args["accountIDs"] = [flt.account]
-            if after := _later(flt.since, self.rules.floor()):
-                args["lastActivityAfter"] = after
+            if after := _later(_when(flt.since, "since"), self.rules.floor()):
+                args["lastActivityAfter"] = beeper_time(after)
             got = G._chats_of(self._call("search_chats", args))
             if got is None:
                 raise MessagesError("Beeper's answer was not a list of chats.")
@@ -316,7 +337,8 @@ class BeeperBackend:
                     break
                 kept += fresh
                 skip = 0
-                too_old = floor is not None and bool(fresh) and _later(str(fresh[-1].get("timestamp") or ""), floor) == floor
+                oldest = _stamp(fresh[-1]) if fresh else None
+                too_old = floor is not None and oldest is not None and oldest < floor
                 if not more or too_old:                       # nothing older, or nothing older the owner allows
                     break
                 page_cursor = older
@@ -335,10 +357,10 @@ class BeeperBackend:
             args: dict[str, Any] = {"query": query, "limit": max(1, min(limit, 50))}
             if chat_id:
                 args["chatIDs"] = [split_id(chat_id)[1]]
-            if after := _later(since, self.rules.floor()):
-                args["dateAfter"] = after
-            if before:
-                args["dateBefore"] = before
+            if after := _later(_when(since, "since"), self.rules.floor()):
+                args["dateAfter"] = beeper_time(after)
+            if (until := _when(before, "before")) is not None:
+                args["dateBefore"] = beeper_time(until)
             hits, more = _search_hits(self._text(self._call("search_messages", args)))
             found = []
             for h in hits:
