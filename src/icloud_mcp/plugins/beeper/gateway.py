@@ -237,7 +237,7 @@ def _networks_of(answer: Answer) -> list[Network] | None:
 
 
 def read_tool(s: Settings, name: str) -> str:
-    """The gateway's name of one of Beeper's read tools for the read key: `<BEEPER_READ_SERVER>-<name>` ("beeper_michel-search_chats").
+    """The gateway's name of one of Beeper's read tools for the read key: `<BEEPER_READ_SERVER>-<name>` ("beeper_alex-search_chats").
     BEEPER_ACCOUNTS_TOOL, where set, still names get_accounts; without a read server the old default names stay."""
     server = s.plugin_value("BEEPER_READ_SERVER").strip()
     if name == "get_accounts" and (s.plugin_value("BEEPER_ACCOUNTS_TOOL").strip() or not server):
