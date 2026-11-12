@@ -12,7 +12,7 @@ from icloud_mcp import instructions as instr_mod
 from icloud_mcp.config import Settings
 from icloud_mcp.server import apply_tool_filter, create_server
 
-CAP = 10800   # 10,500 before approval_withdraw: its map line and its one rule take about 315 characters. 0.12.1: the WHICH TOOL map (about 2,600 characters with every area on) is worth its context
+CAP = 11100   # 10,500 before approval_withdraw: its map line and its one rule take about 315 characters. 10,800 before icloud_list_accounts (its map line, about 60) and messages_archive_chat (map line and rule, about 240, only where a plugin reads chats). 0.12.1: the WHICH TOOL map (about 2,600 characters with every area on) is worth its context
 
 
 @pytest.fixture

@@ -15,10 +15,16 @@ chat. It knows nothing of the tools or of the owner's filters. The hub sits betw
 A request to send goes the other way, through a sender (one per channel that can be written to). The hub only picks the sender by
 the same prefix; the sender is the channel's own approval flow, and nothing is carried out here.
 
+Archiving a chat goes through an archiver (one per channel that offers it). It is reversible and reaches nobody, so it needs no
+approval; the hub lets it through only for a chat of a channel it reads, and only when the owner's filters show that chat, so a chat
+kept from agents cannot be archived either. Each call leaves one server log line: the backend, archive or unarchive, and the
+result. Never a chat id or a title.
+
 Nothing here keeps a message: each call reads the backend live, and nothing is written to the activity log or the server log.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -34,8 +40,15 @@ KINDS = ("single", "group")
 _BACKEND = re.compile(r"[a-z][a-z0-9_]{0,23}")
 
 
+log = logging.getLogger(__name__)
+
+
 class MessagesError(Exception):
     """A request that cannot be served; the message is written for the agent."""
+
+
+class Unclear(MessagesError):
+    """A change that may or may not have happened: the request left and no answer came back. The message says how to find out."""
 
 
 # -- ids --------------------------------------------------------------------------------------------------------------
@@ -182,6 +195,15 @@ class Sender(Protocol):
     def send_request(self, req: SendRequest) -> dict[str, Any]: ...
 
 
+class Archiver(Protocol):
+    """A channel that can archive and unarchive a chat. It gets the backend's own chat id (no prefix) of a chat the hub has already
+    found visible, may refuse more (a chat its own rules hide) with MessagesError, and raises Unclear when it cannot tell whether the
+    change happened."""
+    name: str                                    # the prefix of its chat ids
+
+    def archive_chat(self, chat_id: str, archived: bool) -> dict[str, Any]: ...
+
+
 # -- the owner's filters ------------------------------------------------------------------------------------------------
 def _everything(_native: str) -> bool:
     return True
@@ -243,13 +265,16 @@ def message_wire(m: Message, handles: set[str]) -> dict[str, Any]:
 
 
 class Hub:
-    def __init__(self, backends: Iterable[tuple[Backend, Filters]] = (), senders: Iterable[Sender] = ()):
+    def __init__(self, backends: Iterable[tuple[Backend, Filters]] = (), senders: Iterable[Sender] = (), archivers: Iterable[Archiver] = ()):
         self._backends: dict[str, tuple[Backend, Filters]] = {}
         self._senders: dict[str, Sender] = {}
+        self._archivers: dict[str, Archiver] = {}
         for backend, filters in backends:
             self.add_backend(backend, filters)
         for sender in senders:
             self.add_sender(sender)
+        for archiver in archivers:
+            self.add_archiver(archiver)
 
     def add_backend(self, backend: Backend, filters: Filters) -> None:
         self._named(backend.name)
@@ -264,16 +289,40 @@ class Hub:
         if not _BACKEND.fullmatch(name):
             raise ValueError(f"'{name}' cannot be a chat id prefix")
 
+    def add_archiver(self, archiver: Archiver) -> None:
+        """Only for a channel read here: a chat that cannot be listed must not be archived blind."""
+        self._named(archiver.name)
+        if archiver.name not in self._backends:
+            raise ValueError(f"'{archiver.name}' chats are not read here, so they cannot be archived")
+        self._archivers[archiver.name] = archiver
+
     @property
     def can_send(self) -> bool:
         return bool(self._senders)
+
+    @property
+    def can_archive(self) -> bool:
+        return bool(self._archivers)
 
     def backends(self) -> list[str]:
         """The prefixes of the channels that can be read here."""
         return list(self._backends)
 
+    def senders(self) -> list[str]:
+        """The prefixes of the channels that can be written to here (after the owner's approval)."""
+        return list(self._senders)
+
+    def archivers(self) -> list[str]:
+        """The prefixes of the channels whose chats can be archived here."""
+        return list(self._archivers)
+
     def accounts(self) -> list[Account]:
         return [a for b, _f in self._backends.values() for a in b.accounts()]
+
+    def backend_accounts(self, name: str) -> list[Account]:
+        """The accounts of one channel read here ([] for one that is not)."""
+        got = self._backends.get(name)
+        return got[0].accounts() if got else []
 
     def _route(self, chat_id: str) -> tuple[Backend, Filters, str]:
         name, native = split_id(chat_id)
@@ -391,3 +440,26 @@ class Hub:
                 self._reachable(chat_id)
             sender = self._senders[name]
         return sender.send_request(SendRequest(text, native, handle, (reply_to or "").strip() or None, (request_id or "").strip() or None))
+
+    def archive_chat(self, chat_id: str, archived: bool = True) -> dict[str, Any]:
+        """Archive (or, with archived=False, unarchive) a chat on the channel its chat_id names. No approval: it is reversible and
+        sends nothing. A chat the owner keeps from agents is refused as unknown, before the channel is asked."""
+        name, _native = split_id(chat_id)
+        op = "archive" if archived else "unarchive"
+        if name not in self._archivers:
+            on = ", ".join(self._archivers) or "no channel"
+            raise MessagesError(f"Archiving '{name}' chats is not offered here (it is for: {on}). Take chat_ids from messages_list_chats.")
+        try:
+            _backend, _filters, native = self._reachable(chat_id)
+            got = self._archivers[name].archive_chat(native, bool(archived))
+        except Unclear:
+            log.info("chat archive: tool=messages_archive_chat backend=%s op=%s result=unclear", name, op)
+            raise
+        except MessagesError:
+            log.info("chat archive: tool=messages_archive_chat backend=%s op=%s result=refused", name, op)
+            raise
+        except Exception as e:
+            log.warning("chat archive: tool=messages_archive_chat backend=%s op=%s result=failed (%s)", name, op, type(e).__name__)
+            raise
+        log.info("chat archive: tool=messages_archive_chat backend=%s op=%s result=ok", name, op)
+        return {"chat_id": chat_id, "archived": bool(archived), **{k: v for k, v in got.items() if k not in ("chat_id", "archived")}}

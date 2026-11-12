@@ -5,6 +5,17 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **One list of every account, and archiving chats (fork).** `icloud_list_accounts` lists every account of the server in one call:
+  the mail, calendar and contacts accounts (provider, address, areas, which area each is the default of, read only) and every chat
+  channel with what agents can do there and its accounts (for Beeper: network, your name there and the account id, read with the
+  read key). It never returns a password, key, server or sign-in name, or a chat network's address or number. `messages_archive_chat`
+  archives a chat or brings it back (`archived: false`). It takes effect at once, without approval, because it is reversible and
+  reaches nobody; each call is in Activity with the channel and the result, never the chat's name. It is offered only while a
+  plugin's chats are read here and the server is not read only, and a chat you keep from agents (hidden, outside "only these
+  chats", a service sender) cannot be archived. Beeper archives with the execution key, so the gateway has to grant `archive_chat`
+  to that key; the read key still cannot change anything. Plugins bring both through two optional hooks (`agent_accounts`,
+  `MessagesCapability.archive`).
+
 - **Beeper reading with a maximum age works (fork).** Beeper takes times only as UTC with Z (`2026-10-13T12:12:23.000Z`) and
   answered the age limit, sent with an offset, with 400 Invalid input, so `messages_list_chats` failed as soon as
   `BEEPER_MAX_AGE_DAYS` was above 0. Every time sent to Beeper (`lastActivityAfter`, `dateAfter`, `dateBefore`) now goes out in that
