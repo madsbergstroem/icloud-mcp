@@ -2,7 +2,7 @@
 
 The owner can change the words of a request before approving it, and bring back what the agent asked for until it is sent.
 Only the text changes: recipients, conversation, calendar and the time limit stay as they were queued. Each kind of request
-keeps its text in its own place, so each approval source answers three questions (see ApprovalSource in dashboard.py):
+keeps its text in its own place, so each approval source answers three questions (see ApprovalSource in gate/source.py):
 
 - text_block(q): why the text cannot be edited, or "" when it can
 - text_of(q): the text as it stands

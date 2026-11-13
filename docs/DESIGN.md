@@ -11,7 +11,7 @@ The owner dashboard is an Ionic Core app at `/dashboard`. It talks to the server
 | No hand-made controls | Buttons, toggles, segments, inputs, selects, lists, alerts, toasts and sheets are Ionic components. Own markup is limited to the pieces in "Own pieces" below |
 | Vendored and pinned (`static/vendor/`) | The CSP allows `script-src 'self'` only, and the server reaches no CDN. A version bump is its own change, with every screen checked on a phone and a desktop |
 | A JSON API instead of HTML forms | Ionic's controls do not take part in plain form posts: `ion-button` submits without `name`/`value`, and `ion-toggle` keeps its checkbox in the shadow DOM. Sessions, CSRF, passkeys, approvals and the audit log stay on the server |
-| Web Push without pywebpush | pywebpush pulls in requests and aiohttp. Its building block http-ece ships only as a source package, which the image build cannot fetch. `push.py` uses `cryptography` and PyJWT, which the server already has, and `tests/test_push.py` checks it against the worked example in RFC 8291 |
+| Web Push without pywebpush | pywebpush pulls in requests and aiohttp. Its building block http-ece ships only as a source package, which the image build cannot fetch. `gate/push.py` uses `cryptography` and PyJWT, which the server already has, and `tests/test_push.py` checks it against the worked example in RFC 8291 |
 | English everywhere | The code and upstream are English. Sample data in mocks and tests is English and made up |
 
 ## Look
@@ -126,9 +126,9 @@ registry exist, and one connector uses them: Beeper (below).
 
 | Layer | What it is | Where |
 | --- | --- | --- |
-| Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `outbox.py`, `dashboard*.py`, `approval_*.py`, `textedit.py`, `audit.py` |
-| Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `actions.py`, `external.py` |
-| Inputs | How a request arrives. Today `queue_external`, and the Beeper tool is its one caller; a further connector or an input would be another | `external.py`, `beeper.py` |
+| Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `gate/outbox.py`, `gate/source.py`, `gate/status.py`, `gate/withdraw.py`, `gate/audit.py`, `gate/push.py`, `dashboard*.py`, `textedit.py` |
+| Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `gate/actions.py`, `gate/external.py` |
+| Inputs | How a request arrives. Today `queue_external`, and the Beeper tool is its one caller; a further connector or an input would be another | `gate/external.py`, `plugins/beeper/` |
 | Outputs | What leaves after a decision: the executor's call and, later, a message about a status change | later |
 
 What every layer keeps:

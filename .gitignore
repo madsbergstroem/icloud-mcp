@@ -55,6 +55,8 @@
 !src/icloud_mcp/plugins/*.py
 !src/icloud_mcp/plugins/*/
 !src/icloud_mcp/plugins/*/*.py
+!src/icloud_mcp/gate/
+!src/icloud_mcp/gate/*.py
 !src/icloud_mcp/static/
 !src/icloud_mcp/static/README.md
 !src/icloud_mcp/static/favicon.ico
@@ -101,6 +103,7 @@
 !dev/*.py
 !dev/*.conf
 !dev/*.sh
+!dev/provenance.toml
 !docs/
 !docs/*.md
 # screenshots a pull request links to (made-up data from dev/preview_dashboard.py only)

@@ -1,0 +1,97 @@
+# Where each file of this fork belongs (docs/SENDGATE.md, "Provenance"). tests/test_provenance.py checks that every tracked file
+# under src/, mac-helper/, menubar/ and dev/ matches exactly one entry, so a new file has to be sorted before it lands.
+#
+# A pattern is a path from the repository root, or a directory followed by /** for everything under it.
+#
+# upstream   iCloud MCP as its author ships it, unchanged since the fork left upstream
+# mergeable  a change of this fork that makes sense for iCloud MCP whether or not it takes the gate
+# gate       Sendgate: queue, action registry, approval pages, status, withdrawal, log
+# connector  one service behind the gate
+# mixed      holds parts of more than one bin and is split by a later package
+# fork       stays in this fork
+
+[bins]
+upstream = [
+  "mac-helper/**",
+  "menubar/**",
+  "dev/bench.py",
+  "dev/dovecot.conf",
+  "dev/e2e_http.py",
+  "dev/radicale.conf",
+  "dev/readme_art.py",
+  "dev/smtp_sink.py",
+  "dev/start_local_stack.sh",
+  "dev/tool_surface.py",
+  "src/icloud_mcp/__init__.py",
+  "src/icloud_mcp/__main__.py",
+  "src/icloud_mcp/agentlog.py",
+  "src/icloud_mcp/bridge.py",
+  "src/icloud_mcp/extract.py",
+  "src/icloud_mcp/keepalive.py",
+  "src/icloud_mcp/mailbulk.py",
+  "src/icloud_mcp/mailparts.py",
+  "src/icloud_mcp/matching.py",
+  "src/icloud_mcp/safety.py",
+  "src/icloud_mcp/selftest.py",
+  "src/icloud_mcp/static/README.md",
+  "src/icloud_mcp/static/favicon.ico",
+  "src/icloud_mcp/static/icon-180.png",
+  "src/icloud_mcp/static/icon-192.png",
+  "src/icloud_mcp/static/icon-32.png",
+  "src/icloud_mcp/static/icon-512.png",
+  "src/icloud_mcp/static/install-hint.js",
+  "src/icloud_mcp/static/manifest.webmanifest",
+]
+mergeable = [
+  "dev/privacy_check.py",
+  "src/icloud_mcp/access_sso.py",
+  "src/icloud_mcp/accounts.py",
+  "src/icloud_mcp/auth.py",
+  "src/icloud_mcp/cal.py",
+  "src/icloud_mcp/callctx.py",
+  "src/icloud_mcp/contacts.py",
+  "src/icloud_mcp/dashboard_accounts.py",
+  "src/icloud_mcp/discover.py",
+  "src/icloud_mcp/imessage.py",
+  "src/icloud_mcp/mail.py",
+  "src/icloud_mcp/passkeys.py",
+  "src/icloud_mcp/setup_page.py",
+  "src/icloud_mcp/static/passkey.js",
+]
+gate = [
+  "dev/preview_dashboard.py",
+  "dev/provenance.toml",
+  "src/icloud_mcp/gate/**",
+  "src/icloud_mcp/actions.py",             # the old module paths: one-line aliases of gate/
+  "src/icloud_mcp/approval_status.py",
+  "src/icloud_mcp/approval_withdraw.py",
+  "src/icloud_mcp/audit.py",
+  "src/icloud_mcp/external.py",
+  "src/icloud_mcp/outbox.py",
+  "src/icloud_mcp/push.py",
+  "src/icloud_mcp/dashboard_api.py",
+  "src/icloud_mcp/hub_accounts.py",
+  "src/icloud_mcp/plugins/__init__.py",
+  "src/icloud_mcp/static/app/**",
+  "src/icloud_mcp/static/vendor/**",
+  "src/icloud_mcp/static/dashboard.css",
+  "src/icloud_mcp/static/sw.js",
+]
+connector = [
+  "src/icloud_mcp/beeper.py",
+  "src/icloud_mcp/messages.py",
+  "src/icloud_mcp/plugins/beeper/**",
+]
+mixed = [
+  "src/icloud_mcp/admin.py",
+  "src/icloud_mcp/approvals.py",
+  "src/icloud_mcp/config.py",
+  "src/icloud_mcp/dashboard.py",
+  "src/icloud_mcp/instructions.py",
+  "src/icloud_mcp/server.py",
+  "src/icloud_mcp/settings.py",
+  "src/icloud_mcp/textedit.py",
+]
+fork = [
+  "src/icloud_mcp/feedbackkit.py",
+]

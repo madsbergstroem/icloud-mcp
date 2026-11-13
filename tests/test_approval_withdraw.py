@@ -483,7 +483,7 @@ async def test_the_rules_say_how_to_take_a_request_back_and_what_to_ask_the_owne
 def test_the_stale_docstrings_no_longer_call_the_approval_page_password_protected():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / "src" / "icloud_mcp"
-    for name in ("imessage.py", "mail.py", "outbox.py"):
+    for name in ("imessage.py", "mail.py", "gate/outbox.py"):
         assert "password-protected" not in (root / name).read_text() and "needs the owner password" not in (root / name).read_text(), name
     assert "approval_withdraw" in mod.__doc__ and "not a security boundary" in mod.__doc__
 

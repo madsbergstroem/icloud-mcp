@@ -1,6 +1,6 @@
 # Sendgate: one approval gate for what an agent sends
 
-Status: proposal, 2026-11-13. "Sendgate" is the working title the dashboard already shows. The packages below are not built.
+Status: proposal, 2026-11-13. "Sendgate" is the working title the dashboard already shows. Package 0 is built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
 
 ## Context
@@ -13,9 +13,10 @@ own way of asking "are you sure".
 The gate's rules hold up. The seam around it does not yet: a new service needs Python inside this process and edits to the
 core, and three of the four kinds of request do not use the general path.
 
-## Two outcomes this plan has to survive
+## Order: build in the fork, then propose
 
-The fork's owner will ask the upstream author whether this belongs in iCloud MCP.
+Every package is built and run in this fork first. Only once the gate works here does the fork's owner ask the upstream author
+whether it belongs in iCloud MCP. The plan has to survive either answer:
 
 - If upstream takes it, the gate becomes a package inside iCloud MCP, and mail, calendar and iMessage are its first connectors.
 - If upstream declines, the gate moves to a repository of its own, and iCloud MCP (upstream, unchanged) becomes one service it
@@ -69,11 +70,11 @@ A first sort of `src/icloud_mcp`. Which `mergeable` candidates go upstream is fo
 
 | Bin | Files |
 |-----|-------|
-| `gate`, new in the fork | `actions.py`, `external.py`, `approval_status.py`, `approval_withdraw.py`, `textedit.py`, `push.py`, `dashboard_api.py`, `plugins/__init__.py`, `hub_accounts.py`, `static/app/*` |
-| `gate`, grown from upstream files | `outbox.py` (+75 −12), `approvals.py` (+29 −10), `dashboard.py` (+293 −642), `audit.py` (unchanged) |
+| `gate`, new in the fork | `actions.py`, `external.py`, `approval_status.py`, `approval_withdraw.py`, `push.py`, `dashboard_api.py`, `plugins/__init__.py`, `hub_accounts.py`, `static/app/*` |
+| `gate`, grown from upstream files | `outbox.py` (+75 −12), `audit.py` (unchanged), `static/dashboard.css`, `static/sw.js` |
 | `connector` | `plugins/beeper/*`, `beeper.py`, `messages.py` (the chat model that connectors share) |
 | `mergeable` candidates | `accounts.py`, `dashboard_accounts.py`, `discover.py`, `setup_page.py`, `access_sso.py`, and the fork's changes to `mail.py` (+169 −16), `imessage.py` (+112 −12), `auth.py` (+74 −9), `cal.py`, `passkeys.py`, `callctx.py`, `contacts.py` |
-| mixed, to be split | `server.py` (+340 −134), `config.py` (+126 −17), `settings.py` (+130 −297), `instructions.py` (+29 −13), `admin.py` (+34 −13) |
+| mixed, to be split | `server.py` (+340 −134), `config.py` (+126 −17), `settings.py` (+130 −297), `instructions.py` (+29 −13), `admin.py` (+34 −13), `dashboard.py` (+293 −642, the approval sources of mail, calendar and iMessage next to the gate's pages), `approvals.py` (+29 −10, the `/outbox` pages for mail and iMessage), `textedit.py` (new; editing for every kind, with mail and calendar parts) |
 | stays in the fork | `feedbackkit.py` (off by default) |
 
 Package 0 turns this table into a file the tests read, so the sort stays true as the code moves.
@@ -137,35 +138,31 @@ time; none of them is needed for a new service.
 This package only moves files, so `git log --follow` still finds each file's history afterwards.
 
 - New package `src/icloud_mcp/gate/` with `actions.py`, `external.py`, `outbox.py`, `status.py` (from `approval_status.py`),
-  `withdraw.py` (from `approval_withdraw.py`), `textedit.py`, `audit.py`, `push.py` and `source.py`, which holds the
-  `ApprovalSource` base class now in `dashboard.py:159-201`.
-- The old module paths stay as one-line re-exports, as `icloud_mcp.beeper` does today, so no import outside the package changes.
-- `dev/provenance.toml` maps path patterns to the four bins.
-
-```toml
-[bins]
-gate = ["src/icloud_mcp/gate/**", "src/icloud_mcp/static/app/**"]
-connector = ["src/icloud_mcp/plugins/beeper/**", "src/icloud_mcp/messages.py"]
-mergeable = ["src/icloud_mcp/accounts.py", "src/icloud_mcp/discover.py"]
-upstream = ["src/icloud_mcp/contacts.py", "mac-helper/**"]
-mixed = ["src/icloud_mcp/server.py", "src/icloud_mcp/config.py"]
-```
+  `withdraw.py` (from `approval_withdraw.py`), `audit.py`, `push.py` and `source.py`, which holds the `ApprovalSource` base
+  class that was in `dashboard.py:159-201`.
+- `textedit.py` stays outside: it imports `mail` for the mail source's text. It is `mixed` until package 6 moves that part.
+  The gate still imports it (`TextLocked`, `TextInvalid`, `clean`), so the gate cannot leave this server on its own before then.
+- The old module paths stay as aliases (`sys.modules[__name__]` is the new module), as `icloud_mcp.beeper` does today, so
+  imports and monkeypatches written against them reach the module that runs.
+- `dev/provenance.toml` maps path patterns to the bins `upstream`, `mergeable`, `gate`, `connector`, `mixed` and `fork`.
+  `.gitignore` allows `gate/` and the file, because the repository tracks only what it lists.
 
 Acceptance criteria:
 
 1. Every file `git ls-files` lists under `src/`, `mac-helper/`, `menubar/` and `dev/` matches exactly one pattern of
    `dev/provenance.toml`; a test fails for a file with none or with two.
 2. No module under `src/icloud_mcp/gate/` imports `icloud_mcp.mail`, `cal`, `contacts`, `imessage`, `messages`, `bridge`,
-   `server`, `config` or `plugins.beeper`; a test walks the imports with `ast` and fails on one.
-3. `pytest tests --ignore=tests/integration -q` passes with no test file changed except for import paths.
+   `server`, `config`, `settings`, `dashboard`, `dashboard_api`, `approvals` or `plugins`, at the top or inside a function; a
+   test walks the imports with `ast` and fails on one, and a second test proves the walk sees such an import.
+3. `pytest tests --ignore=tests/integration -q` passes with no test file changed except for paths.
 4. `tests/test_hub_golden.py` and `tests/fixtures/legacy_approvals_golden.json` pass unchanged.
-5. The `mixed` bin lists at most 5 files, and each has an entry in this document's table above.
+5. Every file in the `mixed` bin is named in the table above, with what it mixes.
 
 | Layer | What | Count |
 |-------|------|-------|
-| Unit | Provenance: every file has one bin | +1 |
-| Unit | Import rule for `gate` | +1 |
-| Unit | Each old module path still imports its names | +1 |
+| Unit | Provenance: every file has one bin; every entry names a file | +2 |
+| Unit | Import rule for `gate`, and that the rule can fail | +2 |
+| Unit | Each old module path is the new module | +7 |
 
 ## Package 1: actions of any kind
 
@@ -382,8 +379,20 @@ Acceptance criteria:
 3. Any change to a test, a golden file, a timeout, a threshold or a suppression is reported on its own line, with its reason,
    before any other result.
 4. A reported command comes with what it printed: exit status, counts, the failing line.
-5. One commit touches one bin of `dev/provenance.toml`. A change that needs two bins is two commits.
+5. One commit touches one bin of `dev/provenance.toml`. A change that needs two bins is two commits; a move touches the bins it
+   moves between and nothing else.
 6. `CONTRIBUTING.md` applies in full: made-up data only, noreply author, no co-author trailers, `python dev/privacy_check.py`.
+
+## Merging upstream
+
+The old module paths are aliases now, so git does not see `outbox.py` and `audit.py` as moved. A change upstream makes to either
+arrives as a conflict on the alias file. Keep the alias and carry the change into `gate/` by hand; resolving the conflict either
+way without that drops the change silently (keeping the alias) or brings back a second copy of the module (taking upstream's
+file, which `tests/test_provenance.py` reports). After each merge, compare what upstream changed:
+
+```bash
+git diff ORIG_HEAD...MERGE_HEAD -- src/icloud_mcp/outbox.py src/icloud_mcp/audit.py src/icloud_mcp/dashboard.py
+```
 
 ## Rollback
 
@@ -430,6 +439,8 @@ unknown-outcome state after a crash (package 3) and signed checkpoints with an e
 the standard library, and the gateway client is the one Beeper already uses.
 
 ## Questions for the upstream author
+
+To be asked once packages 0 to 3 run in the fork.
 
 1. Is a general approval gate something iCloud MCP should hold, or does it stay a server for iCloud and nothing else?
 2. If yes: is a `gate` package inside the repository acceptable, with the import rule of package 0?
