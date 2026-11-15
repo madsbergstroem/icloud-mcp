@@ -24,6 +24,7 @@ from starlette.responses import JSONResponse, Response
 
 from . import textedit as T
 from .approval_withdraw import REASON_WORDS
+from .gate.actions import Rechecked
 from .dashboard_accounts import mail_account
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "approval.withdrawn":
             why = REASON_WORDS.get(str((e.get("details") or {}).get("reason")), "")
             return "Withdrawn", "Withdrawn by your assistant" + (f": {why}." if why else ".") + " Nothing was sent."
+        if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "target_changed":
+            return "Not sent", "The target changed after you looked. Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
             if (e.get("details") or {}).get("kind") == "external":
                 return "Unclear", "It may or may not have gone through. Nothing is sent again."
@@ -266,7 +269,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src, q, v = found[0]
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
-               "approve_label": label_of(src, q), "files": [], "missing": [], "original": None,
+               "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
                "account": mail_account(s) if src.kind == "mail" else ""}
         if src.kind == "mail":
@@ -332,21 +335,27 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "discard":
             await asyncio.to_thread(src.discard, q)
             audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
-                         action_type=getattr(q, "action_type", None))
+                         action_type=getattr(q, "action_type", None), sha256=q.sha256)
             return ok({"note": "Discarded. Nothing was sent."})
+        if v.get("approvable") is False:
+            return err("This cannot be approved. Discard it.", 409)
         if v["needs_override"] and body.get("override") is not True:
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
         if v.get("blocked"):
             return err("Not sent: a file is still missing. Add it first.", 409)
         try:
             note = await asyncio.to_thread(src.release, q)
+        except Rechecked as e:                     # checked again just before sending: not the target the owner saw; it ends here
+            audit.record("approval.discarded", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed",
+                         kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=q.sha256, reason=e.reason)
+            return err(str(e), 409, gone=True, state="discarded")
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
             log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
             audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
-                         action_type=getattr(q, "action_type", None))
+                         action_type=getattr(q, "action_type", None), sha256=q.sha256)
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
-                     outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None),
+                     outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None), sha256=q.sha256,
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         # "state" only when the send is not certain; nothing is sent again from here
         return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})

@@ -123,6 +123,9 @@ ion-item.sel { --background: var(--active); }                          /* the op
 .msg .capr ion-button { margin: -6px -8px -6px 0; font-size: 14px; flex: none; white-space: nowrap; }
 .footbar { background: var(--ground); border-top: 1px solid var(--border); }
 .msg .why { color: var(--muted); font-size: 13.5px; margin-top: 8px; line-height: 1.45; }
+/* an action's other rows, under its text (the first row, who or what it reaches, stays above the text) */
+.msg .rows2 { border-top: 1px solid var(--rule); margin-top: 14px; padding-top: 12px; }
+.msg .rows2 dl { margin: 0; }
 .msg ion-textarea { --background: var(--ground); --color: var(--text); --padding-start: 14px; --padding-end: 14px; --padding-top: 12px; --padding-bottom: 12px;
   border: 1.5px solid var(--accent); border-radius: 14px; font-size: 16px; line-height: 1.5; min-height: 112px; }
 .msg ion-textarea.ion-invalid { border-color: var(--negative); }

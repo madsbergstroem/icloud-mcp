@@ -39,6 +39,8 @@ _EDITS = ("approval.edited", "approval.edit_undone")   # the owner changed the t
 _LOG_LIMIT = 1_000_000               # the log keeps AUDIT_KEEP_DAYS days; this is only "all of it"
 _PAGE = 50                           # records per `since` answer
 _MAX_ID = 64                         # outbox ids are 16 characters; anything longer is not one
+# why the server, not the owner, discarded a request (a code in the log, never a parameter), and what an agent should do about it
+_REASONS = {"target_changed": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it."}
 
 
 class Released(str):
@@ -101,7 +103,8 @@ class ApprovalLedger:
 
     def _log_expiry(self, kind: str, q: Any) -> None:
         self.audit.record("approval.expired", actor="server", summary=f"A queued {kind} message expired without an answer",
-                          kind=kind, outbox_id=q.id, expired_at=round(q.expires_at, 3), action_type=getattr(q, "action_type", None))
+                          kind=kind, outbox_id=q.id, expired_at=round(q.expires_at, 3), action_type=getattr(q, "action_type", None),
+                          sha256=getattr(q, "sha256", None))
 
     # -- reading ---------------------------------------------------------------------------------------------------------
     def _waiting(self) -> dict[str, tuple[str, Any]]:
@@ -142,7 +145,11 @@ class ApprovalLedger:
         kind = d.get("kind") if isinstance(d.get("kind"), str) else None
         when = d.get("expired_at") if e.get("action") == "approval.expired" and d.get("expired_at") else e.get("t")
         kind_of = d.get("action_type") if isinstance(d.get("action_type"), str) else None
-        return _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False), kind_of)
+        out = _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False), kind_of)
+        if e.get("action") == "approval.discarded" and d.get("reason") in _REASONS:      # the server ended it, not the owner
+            out["reason"] = d["reason"]
+            out["note"] = _REASONS[d["reason"]]
+        return out
 
     def _note(self, out: dict[str, Any]) -> dict[str, Any]:
         if not getattr(self.audit, "enabled", True):

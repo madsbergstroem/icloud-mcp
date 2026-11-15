@@ -102,7 +102,8 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 async def test_only_the_beeper_tool_calls_queue_external():
     root = Path(A.__file__).parent.parent             # the icloud_mcp package; actions.py lives in its gate/ package
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    assert sorted(users) == ["plugins/__init__.py", "plugins/beeper/gateway.py"]     # the contract names it; Beeper's sender calls it
+    # the contract names it; Beeper's sender calls it; approval_request (gate/requests.py) calls it for every other action
+    assert sorted(users) == ["gate/requests.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
@@ -295,7 +296,7 @@ async def test_approve_carries_the_edited_request_out_once_and_logs_no_text(web,
                                                            "at": (await tool(mcp, "approval_status", id=q.id))["at"], "action_type": "test.echo"}
     (sent,) = [json.loads(x) for x in audit_text(mcp).splitlines() if '"approval.sent"' in x]
     assert sent["summary"] == "Approved echo “Echo test”" and sent["details"] == {
-        "kind": "external", "outbox_id": q.id, "delivery": "sent", "action_type": "test.echo"}       # no recipients, no words
+        "kind": "external", "outbox_id": q.id, "delivery": "sent", "action_type": "test.echo", "sha256": sha}   # no recipients, no words; the hash of what went out
     assert "anna@example.org" not in audit_text(mcp) and "Edited words" not in audit_text(mcp)
 
 
@@ -397,9 +398,10 @@ async def test_a_type_that_is_gone_cannot_be_approved_but_can_be_discarded(web, 
     async with client(app) as c:
         token = await signed_in(c)
         it = (await c.get(url(q.id))).json()
-        assert it["title"] == "Unknown action test.echo" and it["approve_label"] == "Approve" and it["edit"]["allowed"] is False
+        assert it["title"] == "Unknown action test.echo" and it["approvable"] is False and it["edit"]["allowed"] is False
+        assert "not available" in it["notes"][0]                                            # the card says why, and shows only Discard
         r = await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
-        assert r.status_code == 502 and "not available" in r.json()["error"] and src.pending() == [q]
+        assert r.status_code == 409 and "cannot be approved" in r.json()["error"] and src.pending() == [q]
         r = await c.post(url(q.id) + "/discard", json={"sha": q.sha256}, headers=api(token))
         assert r.status_code == 200 and src.pending() == []
     assert ex.calls == []

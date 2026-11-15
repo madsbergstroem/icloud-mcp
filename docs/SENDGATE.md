@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Package 0 is built; the others are not.
+shows. Packages 0 and 1 are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
 
 ## Context
@@ -448,6 +448,71 @@ To be asked once packages 0 to 3 run in the fork.
 2. If yes: is a `gate` package inside the repository acceptable, with the import rule of package 0?
 3. Which of the `mergeable` candidates are welcome as pull requests of their own, whatever the answer to 1?
 4. Is SQLite for the queue acceptable, given that upstream's `outbox.py` is a JSON file of 129 lines?
+
+## Writing a plugin action
+
+Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`, a tuple of `ActionSpec`
+(`src/icloud_mcp/plugins/__init__.py`). `ActionSpec` and `PluginContext` are public from package 1 and versioned in package 7.
+
+| Field | What it is |
+|-------|------------|
+| `action_type` | An `ActionType` (`gate/actions.py`): id, title, badge, approve label, the parameters as a JSON Schema, the rows of the card and the text the owner may edit. Its first row names who or what the request reaches; the card shows that row first, then the text, then the other rows. |
+| `executor(ctx)` | What carries it out after approval. It answers `sent`, `failed` (provably never reached the service; the request waits again) or `unclear` (never repeated). |
+| `allowed(ctx)` | Who it may reach, as the owner has it now. `*` means anyone and empty means nobody. Mail's `SEND_ALLOWLIST`, where empty means anyone, is the one exception until package 6. |
+| `policy(ctx)` | Further rules on the parameters: a function that returns why a request is not permitted, or None. |
+| `prepare(ctx, params)` | Optional. Asks the service what the target is and returns the parameters that are stored, so the card shows the service's words. Fields it adds are `readOnly` in the schema; an agent that sets one is refused. Raise `ExternalError(message, code, path)` to refuse. |
+| `recheck(ctx, params)` | Optional. Called after the owner approved and before the executor. Return `target_changed` when the target is not what the owner saw: nothing is carried out and the request ends as discarded with that reason. |
+
+`ctx.value(key, default)` reads one of the plugin's own settings. Agents name an action `action` in `approval_request` and
+`approval_list_actions`; `approval_status` keeps the field `action_type` it already had, so existing agents read it unchanged.
+`approval_request` checks the agent's own parameters (schema, size, the owner's list) before `prepare`, so the service is never
+asked about a target the owner did not allow; the policy runs after `prepare`, on what it filled in. `readOnly` is allowed only
+on top-level properties, and a type with `readOnly` fields needs a `prepare`. A `request_id` returns the first request only
+while that one still waits; package 3 keeps keys after a request ended. The list and the policy are checked when a request is queued
+and again when it is approved. Agents ask with `approval_list_actions` and `approval_request`; a type that a chat channel owns
+(`messages_send_request`) is left out of the list and refused by name. `tests/test_plugin_actions.py` is a worked example.
+
+## Refusal codes
+
+`approval_request` refuses with one JSON object, raised as a tool error: `{status: "refused", sent: false, reason, message, fix,
+docs, path?}`. Nothing was queued. `message` never repeats an entry of the owner's lists, and a service's own error text never
+reaches the agent.
+
+### Refusal codes: unknown_action
+
+No action of that name on this server. Fix: call `approval_list_actions` and use one it lists.
+
+### Refusal codes: channel_tool
+
+The action belongs to a channel's own tool, named in the message (a chat message goes through `messages_send_request`).
+
+### Refusal codes: schema
+
+A parameter does not fit the action's schema, or `params` is not an object. `path` names the parameter.
+
+### Refusal codes: read_only
+
+The agent set a field the server fills in from the service. `path` names it; leave it out.
+
+### Refusal codes: not_allowed
+
+Who the request reaches is not on the owner's list. Only the owner can change the list.
+
+### Refusal codes: policy
+
+A rule of the owner's or of the action's type does not permit it. Only the owner can change it.
+
+### Refusal codes: describe_failed
+
+The service could not be asked about the target. Adds `retryable: true` and `side_effects: "none"`; asking again later may pass.
+
+### Refusal codes: key_conflict
+
+The `request_id` was already used for a request with other parameters. Use a new key, or ask with the same parameters.
+
+### Refusal codes: queue_full
+
+Too many requests are waiting for the owner. Do not retry; tell the owner.
 
 ## Review obligations
 

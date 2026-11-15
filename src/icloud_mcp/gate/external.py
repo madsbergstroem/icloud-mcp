@@ -72,12 +72,12 @@ class ExternalApprovals(ApprovalSource):
         try:
             reg, type_id, params = self._entry(q)
         except A.ExternalError as e:
-            return {"title": "Unreadable request", "badge": "Action", "rows": [], "text": "", "warnings": [str(e)],
-                    "notes": ["It cannot be approved. Discard it."], "needs_override": False}
+            return {"title": "Unreadable request", "badge": "Other", "rows": [], "text": "", "warnings": [],
+                    "notes": [f"{e} It cannot be approved. Discard it."], "needs_override": False, "approvable": False}
         if reg is None:
-            return {"title": f"Unknown action {type_id}", "badge": "Action", "rows": [], "text": "",
-                    "warnings": ["This kind of action is not available on this server any more, so it cannot be approved."],
-                    "notes": ["Discard it."], "needs_override": False}
+            return {"title": f"Unknown action {type_id}", "badge": "Other", "rows": [], "text": "", "warnings": [],
+                    "notes": ["This kind of action is not available on this server any more, so it cannot be approved. Discard it."],
+                    "needs_override": False, "approvable": False}
         at = reg.action_type
         rows = [(label, _shown(params[name])) for label, name in at.rows if params.get(name) not in (None, "", [])]
         warnings = self._call(at.warnings, params, "The cautions for this request could not be worked out.")
@@ -149,15 +149,43 @@ class ExternalApprovals(ApprovalSource):
         try:
             people = [str(p).strip() for p in at.recipients(plain)]
         except Exception as e:  # noqa: BLE001
-            raise A.ExternalError("Who this request reaches could not be worked out.") from e
+            raise A.ExternalError("Who this request reaches could not be worked out.", "schema", "params") from e
         people = list(dict.fromkeys(p for p in people if p))
-        allowed = reg.allowed_set()
+        self._check_people(reg, people)
+        try:
+            why = reg.policy(plain) if reg.policy is not None else None
+        except Exception as e:  # noqa: BLE001  -- a rule that cannot be read permits nothing, and its error text stays here
+            log.warning("The policy of %s raised %s", at.id, type(e).__name__)
+            raise A.ExternalError("The owner's rules for this action could not be read, so nothing was queued.", "policy") from None
+        if why:
+            raise A.ExternalError(why, "policy")
+        return plain, people
+
+    @staticmethod
+    def _check_people(reg: A.Registration, people: list[str]) -> None:
+        try:
+            allowed = reg.allowed_set()
+        except Exception as e:  # noqa: BLE001  -- a list that cannot be read lets nobody through, and its entries stay here
+            log.warning("The list of %s raised %s", reg.action_type.id, type(e).__name__)
+            raise A.ExternalError("The owner's list for this action could not be read, so nothing was queued.", "policy") from None
         blocked = [] if "*" in allowed else [p for p in people if p.casefold() not in allowed]
         if blocked:
-            raise A.ExternalError(f"Not permitted for {at.id}: {', '.join(blocked)}. Tell the owner; only the owner can change who may be reached.")
-        if reg.policy is not None and (why := reg.policy(plain)):
-            raise A.ExternalError(why)
-        return plain, people
+            raise A.ExternalError(f"Not permitted for {reg.action_type.id}: {', '.join(blocked)}. Tell the owner; only the owner can change "
+                                  "who may be reached.", "not_allowed")
+
+    def precheck(self, reg: A.Registration, params: Any) -> None:
+        """What can be checked on an agent's own parameters before prepare asks the service anything: the schema (the readOnly
+        fields not required yet), the size and the owner's list. A target the owner did not allow never reaches the service.
+        Rules that need what prepare fills in run after it, in queue_external."""
+        at = reg.action_type
+        plain = A.check_params(at, params, A.request_schema(at))
+        if len(A.canonical(at.id, plain)) > A.MAX_RAW_BYTES:
+            raise A.ExternalError(f"The request is larger than {A.MAX_RAW_BYTES} bytes.", "schema", "params")
+        try:
+            people = [str(p).strip() for p in at.recipients(plain)]
+        except Exception:  # noqa: BLE001  -- who it reaches is known only after prepare: checked there
+            return
+        self._check_people(reg, list(dict.fromkeys(p for p in people if p)))
 
     def queue_external(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None) -> QueuedMessage:
         """Queue a request for the owner's approval, or return the entry already waiting for the same bytes or the same key.
@@ -165,13 +193,13 @@ class ExternalApprovals(ApprovalSource):
         queue, and ExternalConflict for a key that was used for a different request. Nothing is carried out here."""
         reg = self.registry.get(action_type_id)
         if reg is None:
-            raise A.ExternalError(f"Unknown action type {action_type_id!r}.")
+            raise A.ExternalError(f"Unknown action type {action_type_id!r}.", "unknown_action", "action")
         if key is not None and (not isinstance(key, str) or not key.strip() or len(key) > A.MAX_KEY_CHARS):
-            raise A.ExternalError(f"key must be text of 1 to {A.MAX_KEY_CHARS} characters.")
+            raise A.ExternalError(f"key must be text of 1 to {A.MAX_KEY_CHARS} characters.", "schema", "request_id")
         plain, people = self._check(reg, params)
         raw = A.canonical(reg.action_type.id, plain)
         if len(raw) > A.MAX_RAW_BYTES:
-            raise A.ExternalError(f"The request is larger than {A.MAX_RAW_BYTES} bytes.")
+            raise A.ExternalError(f"The request is larger than {A.MAX_RAW_BYTES} bytes.", "schema", "params")
         if key is not None and (old := next((x for x in self.box.pending() if x.key == key), None)) is not None \
                 and not self._same_request(old, reg.action_type, plain):
             raise A.ExternalConflict("This key was already used for a different request. Use a new key, or ask with the same parameters.")
@@ -179,7 +207,7 @@ class ExternalApprovals(ApprovalSource):
             return self.box.add(raw, people, None, key=key, approval_page="the dashboard's Approvals page",
                                 requested_by=requested_by, action_type=reg.action_type.id)
         except OutboxFull as e:
-            raise A.ExternalError(str(e)) from e
+            raise A.ExternalError(str(e), "queue_full") from e
 
     @staticmethod
     def _same_request(old: QueuedMessage, at: A.ActionType, params: Mapping[str, Any]) -> bool:
@@ -188,7 +216,8 @@ class ExternalApprovals(ApprovalSource):
             type_id, theirs = A.read(old.raw)
         except A.ExternalError:
             return False
-        drop = lambda p: {k: v for k, v in p.items() if k != at.text_field}      # noqa: E731
+        skip = {at.text_field} | A.read_only_fields(at)          # the owner may edit the text; the service fills in readOnly fields
+        drop = lambda p: {k: v for k, v in p.items() if k not in skip}            # noqa: E731
         return type_id == at.id and drop(theirs) == drop(params)
 
     # -- the owner's decision ----------------------------------------------------------------------------------------------
@@ -206,6 +235,15 @@ class ExternalApprovals(ApprovalSource):
         if claimed.sha256 != q.sha256:                           # edited between the owner's look and the click: that is not what was approved
             self.box.restore(claimed)
             raise A.ExternalError("The request changed just now. Nothing was done; look at it again.")
+        if reg.recheck is not None:                              # is the target still the one the owner looked at?
+            try:
+                reason = reg.recheck(plain)
+            except Exception as e:  # noqa: BLE001  -- nothing has been carried out: the owner can try again
+                self.box.restore(claimed)
+                log.warning("The recheck of %s raised %s; the request waits again", type_id, type(e).__name__)
+                raise A.ExternalError("Not carried out: the service could not be asked about the target. Try again in a moment.") from None
+            if reason:                                           # claimed and not put back: it ends here, nothing was carried out
+                raise A.Rechecked(reason if reason in A.RECHECK_CODES else "target_changed")   # a code, never the plugin's own text
         request = A.ActionRequest(claimed.id, type_id, plain, claimed.requested_by, claimed.key)
         try:
             result = reg.executor.execute(request)

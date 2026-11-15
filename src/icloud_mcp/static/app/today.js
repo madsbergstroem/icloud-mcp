@@ -219,7 +219,10 @@ class Item extends HTMLElement {
     const own = m ? it.text.slice(0, m.index).trimEnd() : (it.text || "");
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;
-    const rows = this.rowsHtml();
+    // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
+    const ext = it.kind === "external";
+    const rows = ext ? it.rows.slice(0, 1).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") : this.rowsHtml();
+    const more = ext ? it.rows.slice(1).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") : "";
     const text = it.kind === "imessage" ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
       : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
     const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : it.kind === "imessage" ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
@@ -227,15 +230,20 @@ class Item extends HTMLElement {
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
       ${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
       ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}
-      <div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>
-      ${edit.allowed ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}</div>`;
+      ${ext && !own ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>`}
+      ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
+      ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
   }
 
   // How the last approve went, above the message
   resultHtml() {
     const r = this.result, it = this.it;
     if (!r) return "";
-    const to = it.to ? esc(it.to) : "the recipients";
+    const to = it.kind === "external" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
+    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div><b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.
+      <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
+    if (r.state === "failed" && it.kind === "external") return `<div class="notice bad"><div><b>Did not go out:</b> ${esc(r.note)}
+      <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;
     if (r.state === "sending") return `<div class="notice"><ion-spinner name="crescent"></ion-spinner><div><b>Sending to ${to}…</b><br>Nothing is sent twice.</div></div>`;
     if (r.state === "unclear") return `<div class="notice warn"><div><b>Not sure it arrived.</b> Nothing is sent again. Look at the conversation first, then decide.
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
@@ -262,6 +270,8 @@ class Item extends HTMLElement {
       return;
     }
     let h = titleBlock(it.title, this.subline()) + `<div data-result>${this.resultHtml()}</div>`;
+    const ext = it.kind === "external";
+    if (ext && it.approvable !== false) h += this.card();
     if (it.warnings.length) {
       const grp = it.group;
       h += `<div class="warnbox"><strong>${icon("warning-outline")} ${grp ? "Group chat: everyone in it receives this" : "Check before sending"}</strong>
@@ -275,7 +285,7 @@ class Item extends HTMLElement {
         <div class="s">Up to ${esc(size(it.max_bytes))}</div></div><ion-button data-pick="${m.index}">Choose file</ion-button>
         <input type="file" hidden data-input="${m.index}"></div>`).join("");
     }
-    h += this.card();
+    if (!ext) h += this.card();
     if (it.edit && it.edit.edited) {
       h += section("What your assistant asked for", `<ion-button fill="clear" size="small" data-restore>Bring it back</ion-button>`)
         + `<div class="msg"><div class="asked">${esc(it.edit.original)}</div></div>`;
@@ -297,6 +307,11 @@ class Item extends HTMLElement {
     const careful = it.warnings.length || it.needs_override;
     const sending = this.result && this.result.state === "sending";
     // with a warning, Discard is the main button and the send asks first
+    if (it.approvable === false) {                                   // a kind of action this server no longer has: only Discard
+      foot(`<div class="acts"><ion-button class="neutral" data-discard>Discard</ion-button></div>`);
+      this.wire(id);
+      return;
+    }
     foot(this.result && this.result.state === "failed" ? "" : careful
       ? `<div class="acts"><ion-button data-discard ${sending ? "disabled" : ""}>Discard</ion-button><ion-button class="neutral" data-anyway ${sending ? "disabled" : ""}>Send anyway…</ion-button></div>`
       : `<div class="acts"><ion-button class="neutral" data-discard ${sending ? "disabled" : ""}>Discard</ion-button>
@@ -391,6 +406,11 @@ class Item extends HTMLElement {
         return;
       }
       this.result = null;
+      if (e.status === 409 && e.body && e.body.state === "discarded") {   // checked again before sending: not what you saw; it ended
+        app.note = `${clock(Date.now() / 1000)} · ${e.message}`; app.noteBad = true; app.noteUntil = Date.now() + 15000;
+        this.leave();
+        return;
+      }
       this.render();
       fail(e);
       if (e.status === 409) this.load();

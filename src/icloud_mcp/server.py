@@ -158,6 +158,7 @@ _PAST = {"send": "sent", "reply": "replied to", "forward": "forwarded", "mark": 
          "create": "created", "update": "updated", "run": "ran", "undo": "undid", "unsubscribe": "unsubscribed from",
          "respond": "answered", "complete": "completed", "append": "appended to", "write": "wrote", "trash": "trashed"}
 _SELF_LOGGED = ("approval_withdraw", "messages_archive_chat")    # tools that write their own activity line (a second one would repeat it)
+_audit_outboxes: dict[str, Any] = {}       # kind -> Outbox, so the line for a queued request can name its hash
 _AUDIT_LABELS = ("summary", "title", "subject", "name", "path", "list_name")
 _AUDIT_KEEP = ("folder", "destination", "calendar", "to_calendar", "new_name", "to", "response", "action", "uid", "id")
 _AUDIT_ADDRS = ("to", "cc", "bcc", "attendees", "add_attendees", "remove_attendees", "handle")
@@ -208,14 +209,30 @@ def _addresses(v: Any) -> list[str]:
     return out
 
 
+def _queued_ids(text: str) -> dict[str, Any]:
+    """outbox_id and sha256 of the request a tool's answer says it queued, for its line in the activity log; {} when unknown."""
+    try:
+        item_id = json.loads(text).get("outbox_id")
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(item_id, str):
+        return {}
+    for box in _audit_outboxes.values():
+        q = next((x for x in box.pending() if x.id == item_id), None) if box is not None else None
+        if q is not None:
+            return {"outbox_id": item_id, "sha256": q.sha256}
+    return {"outbox_id": item_id}
+
+
 def _audit_call(name: str, kwargs: dict[str, Any], ok: bool, out: Any = None, error: str = "") -> None:
     """One line in the activity log for a tool that changes something: who, which tool, the target, never a body or a password."""
     if _audit is None or name not in _WRITE_TOOLS or name in _SELF_LOGGED:
         return
     area, _, rest = name.partition("_")
     verb, _, noun = rest.partition("_")
-    label = next((str(kwargs[k]) for k in _AUDIT_LABELS if kwargs.get(k)), "")
-    # a tool parameter called `action` (mail_run_bulk_action) is kept as tool_action: `action` is the line's own
+    noun = noun or "an action"                 # approval_request: "Asked to request an action “parcel.pickup.book”"
+    label = next((str(kwargs[k]) for k in _AUDIT_LABELS if kwargs.get(k)), "") or (str(kwargs.get("action") or "") if name == "approval_request" else "")
+    # a tool parameter called `action` (mail_run_bulk_action, approval_request) is kept as tool_action: `action` is the line's own
     details: dict[str, Any] = {("tool_action" if k == "action" else k): kwargs[k] for k in _AUDIT_KEEP
                                if isinstance(kwargs.get(k), (str, int)) and k != "to"}
     for k in _AUDIT_ADDRS:
@@ -235,6 +252,8 @@ def _audit_call(name: str, kwargs: dict[str, Any], ok: bool, out: Any = None, er
         summary += f" ({details['count']})"
     if details.get("destination"):
         summary += f" to {details['destination']}"
+    if queued:                                 # which request it queued, and the hash of exactly what waits
+        details.update(_queued_ids(text))
     who, cid = _caller()
     _audit.record("tool.queued" if queued else f"tool.{area}", actor=who, via=cid, ok=ok, summary=summary if ok else f"Tried: {summary[0].lower()}{summary[1:]}",
                   tool=name, error=error[:200] if error else None, **details)
@@ -2932,6 +2951,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 results[area]["connections"] = view
         return {"ok": all(r["ok"] for r in results.values()), "since_start_seconds": round(time.monotonic() - _STARTED),
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
+                **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
@@ -3014,9 +3034,19 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                and p.capabilities.messages.action_type is not None and p.capabilities.messages.sending_on(s)]
     if s.dashboard and provider is not None and _audit is not None:
         from . import actions
+        from .plugins import PluginContext
         registry = actions.REGISTRY.copy()         # this server's own, so what its settings turn on stays with it
         for m in senders:                          # the core calls the executor once, after approval; list and policy at queue and approval
-            registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s))
+            registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s), channel_tool="messages_send_request")
+        for p in plugins:                          # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
+            ctx = PluginContext(s, p.id)
+            for spec in p.actions:
+                try:
+                    registry.register(spec.action_type, spec.executor(ctx), (lambda spec=spec, ctx=ctx: spec.allowed(ctx)), spec.policy(ctx),
+                                      prepare=functools.partial(spec.prepare, ctx) if spec.prepare else None,
+                                      recheck=functools.partial(spec.recheck, ctx) if spec.recheck else None)
+                except Exception as e:  # noqa: BLE001  -- one broken action must not take the server down
+                    log.warning("plugin %s: action %s skipped (%s)", p.id, getattr(spec.action_type, "id", "?"), type(e).__name__)
         if registry.types():
             from .external import ExternalApprovals
             external = ExternalApprovals(Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="external-outbox.json"), registry)
@@ -3024,10 +3054,17 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                             "imessage": approval["imessage_outbox"],
                             "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,
                             **({"external": external.box} if external is not None else {})}                       # counts for the admin API
+    global _audit_outboxes
+    _audit_outboxes = mcp._icloud_outboxes          # tool.queued names the hash of what it queued (_audit_call)
+    mcp._icloud_approval_tools = ("on" if external is not None else "off: no action types are set up") if s.dashboard \
+        else "off: the dashboard is not enabled"
     if provider is not None and _audit is not None and any(mcp._icloud_outboxes.values()):
         ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
         register_approval_status(tool, _guard, ledger)
-        register_approval_withdraw(tool, _guard, ledger)
+        register_approval_withdraw(tool, _guard, ledger, external)
+        if external is not None:                    # approval_list_actions and approval_request (gate/requests.py)
+            from .gate import requests as gate_requests
+            gate_requests.register(tool, _guard, gate_requests.Requests(external, s.approval_link, max(1, s.effective_tool_timeout - 2)), _WRITE)
         if external is not None:
             for m in senders:
                 if m.sender is not None:

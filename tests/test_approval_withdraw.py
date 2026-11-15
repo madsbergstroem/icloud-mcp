@@ -312,9 +312,10 @@ async def test_the_log_line_is_by_the_assistant_and_holds_no_text(web):
     assert [e["summary"] for e in entries] == ["Withdrew email “Invoice 2291”", "Withdrew imessage “iMessage to Anna Rivera (anna@example.org)”",
                                                "Withdrew invitation “Autumn fair”"]
     # a mail and an invitation keep their first recipient, as approval.sent does, so Home can say whom it was for
-    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients"}),
-                                                               (True, {"kind", "outbox_id", "reason"}),
-                                                               (True, {"kind", "outbox_id", "reason", "recipients"})]
+    # and the hash of exactly what waited (docs/SENDGATE.md, review obligation E-3), never its text
+    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients", "sha256"}),
+                                                               (True, {"kind", "outbox_id", "reason", "sha256"}),
+                                                               (True, {"kind", "outbox_id", "reason", "recipients", "sha256"})]
     assert entries[0]["details"]["recipients"] == ["bob@example.org"]
     raw_log = mcp._icloud_dashboard.audit.path.read_text()
     for hidden in ("Hidden mail body", "Hidden iMessage text", "Hidden event notes"):

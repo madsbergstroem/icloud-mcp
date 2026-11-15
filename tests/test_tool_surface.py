@@ -122,7 +122,7 @@ VERBS = {"append", "archive", "check", "complete", "create", "delete", "extract"
          "refresh", "reply", "respond", "run", "search", "send", "trash", "undo", "unsubscribe", "update", "write"}
 
 
-NAMED_AFTER_WHAT_THEY_ANSWER = {"approval_status", "approval_withdraw"}      # not an area of iCloud: they answer or act on a queued_for_owner_approval result
+NAMED_AFTER_WHAT_THEY_ANSWER = {"approval_status", "approval_withdraw", "approval_list_actions", "approval_request"}      # not an area of iCloud: they answer or act on a queued_for_owner_approval result
 SEARCH_OF_MESSAGES = {"messages_search"}                                          # the one search across every channel's chats: the area says what is searched
 
 

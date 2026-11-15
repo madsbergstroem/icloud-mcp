@@ -76,6 +76,42 @@ class AccountRef:
     name: str = ""
 
 
+# -- actions ----------------------------------------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class PluginContext:
+    """What a plugin's action functions get: the server's settings and the plugin's own id. Read a setting of the plugin with
+    `value(key, default)`. Public from package 1 of docs/SENDGATE.md, versioned in package 7."""
+    settings: Any
+    plugin_id: str
+
+    def value(self, key: str, default: str = "") -> str:
+        return self.settings.plugin_value(key, default)
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    """One kind of action a plugin can carry out after the owner approved it, apart from whether the plugin has chats. Agents ask
+    for it with approval_request; the core queues it, shows the card, checks the list and the policy at queue and at approval, and
+    calls the executor once. Public from package 1 of docs/SENDGATE.md, versioned in package 7.
+
+    - action_type: how the request looks and which parameters it takes (actions.ActionType). Its first row should name who or
+      what the request reaches: the card shows that row first.
+    - executor(ctx): what carries it out (actions.Executor), answering sent, failed or unclear.
+    - allowed(ctx): who it may reach, as the owner has it now. `*` means anyone, empty means nobody.
+    - policy(ctx): further rules on the parameters (a reason a request is not permitted, or None), or None.
+    - prepare(ctx, params): asks the service about the target and returns the parameters that are stored, so the card shows the
+      service's words. Fields it adds are readOnly in the schema. Raise actions.ExternalError to refuse. Optional.
+    - recheck(ctx, params): called after the owner approved and before the executor; returns 'target_changed' when the target is
+      not what the owner saw (nothing is carried out and the request ends), else None. Optional.
+    """
+    action_type: Any
+    executor: Callable[[PluginContext], Any]
+    allowed: Callable[[PluginContext], Iterable[str]] = lambda c: ()
+    policy: Callable[[PluginContext], Callable[[Mapping[str, Any]], str | None] | None] = lambda c: None
+    prepare: Callable[[PluginContext, Mapping[str, Any]], Mapping[str, Any]] | None = None
+    recheck: Callable[[PluginContext, Mapping[str, Any]], str | None] | None = None
+
+
 # -- capabilities ---------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ChatRef:
@@ -192,6 +228,7 @@ class Plugin:
     # its accounts for icloud_list_accounts, as (state, accounts): state "ok" or why nothing could be read ("no_read_key",
     # "unreachable" ...). Never raises; never a password, key, address or number. None: the plugin lists no accounts to agents.
     agent_accounts: Callable[[Any], tuple[str, list[AccountRef]]] | None = None
+    actions: tuple[ActionSpec, ...] = ()           # actions of any kind agents may ask for with approval_request (docs/SENDGATE.md)
 
 
 def _load(name: str, target: str) -> Plugin | None:

@@ -34,6 +34,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .. import callctx
+from .actions import read as read_action
 from .status import _MAX_ID, ApprovalLedger
 
 Reason = Literal["mistake", "duplicate", "superseded", "no_longer_needed"]
@@ -46,7 +47,7 @@ REASON_WORDS = {"mistake": "queued by mistake", "duplicate": "a duplicate", "sup
 _CALENDAR_BADGES = {"create": "invitation", "update": "event update", "delete": "cancellation", "cancel": "cancellation", "reply": "reply"}
 
 
-def describe(kind: str, q: Any) -> tuple[str, str]:
+def describe(kind: str, q: Any, external: Any = None) -> tuple[str, str]:
     """(badge, title) of a queued request the way the dashboard words its approval lines ('email', 'Re: Invoice 2291'), from
     the stored entry alone: nothing here reads a mailbox. ('', '') for a kind this does not know or an entry it cannot read."""
     try:
@@ -56,6 +57,9 @@ def describe(kind: str, q: Any) -> tuple[str, str]:
         if kind == "calendar":
             m = q.followup or {}
             return _CALENDAR_BADGES.get(m.get("op"), "calendar"), str(m.get("summary") or "") or "(no title)"
+        if kind == "external" and external is not None:           # the action type's own title, never a parameter
+            reg = external.registry.get(read_action(q.raw)[0])
+            return ("action", reg.action_type.title) if reg is not None else ("action", "")
         if kind == "imessage":
             d = json.loads(q.raw.decode())
             to = d.get("to") or {}
@@ -67,8 +71,8 @@ def describe(kind: str, q: Any) -> tuple[str, str]:
 
 
 class Withdrawals:
-    def __init__(self, ledger: ApprovalLedger):
-        self.ledger = ledger
+    def __init__(self, ledger: ApprovalLedger, external: Any = None):
+        self.ledger, self.external = ledger, external
 
     def _not_withdrawn(self, item_id: str) -> dict[str, Any]:
         """What an id that is not waiting answers: the status approval_status gives it, and withdrawn false."""
@@ -88,12 +92,13 @@ class Withdrawals:
         claimed = self.ledger.outboxes[kind].claim(item_id)
         if claimed is None:                              # the owner (or the clock) got there between the look and the claim
             return self._not_withdrawn(item_id)
-        badge, title = describe(kind, claimed)
+        badge, title = describe(kind, claimed, self.external)
         # the first recipient, as approval.sent records it, so Home can say whom it was for; never the text
         rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind in ("mail", "calendar") else []
         self.ledger.audit.record("approval.withdrawn", actor="assistant", via=client,
                                  summary=f"Withdrew {badge} “{title}”" if title else f"Withdrew a queued {kind} request",
                                  kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None),
+                                 sha256=getattr(claimed, "sha256", None),
                                  **({"recipients": rcpt} if rcpt else {}))
         return {"id": item_id, "withdrawn": True, "status": "withdrawn"}
 
@@ -102,9 +107,9 @@ def _D(text: str) -> Any:
     return Field(description=text)
 
 
-def register(tool: Any, guard: Any, ledger: ApprovalLedger) -> None:
+def register(tool: Any, guard: Any, ledger: ApprovalLedger, external: Any = None) -> None:
     """Register the tool. `tool` and `guard` are the server's own decorators, so it is listed, guarded, paused and timed like the rest."""
-    withdrawals = Withdrawals(ledger)
+    withdrawals = Withdrawals(ledger, external)
 
     @tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False))
     @guard

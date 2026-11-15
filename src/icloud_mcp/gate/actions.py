@@ -40,12 +40,48 @@ Status = Literal["sent", "failed", "unclear"]
 STATUSES: tuple[str, ...] = ("sent", "failed", "unclear")
 
 
+# Why a request is refused, as an agent reads it in approval_request's answer (docs/SENDGATE.md, "Refusal codes"). Each code has
+# one line that says what to do instead. `retryable` codes may pass when asked again unchanged; the others never do.
+REFUSALS: dict[str, str] = {
+    "unknown_action": "Call approval_list_actions and use one of the actions it lists.",
+    "channel_tool": "Use the channel's own tool named in the message.",
+    "schema": "Fix the parameter named in path; approval_list_actions shows the schema.",
+    "read_only": "Leave out the field named in path: the server fills it in from the service.",
+    "not_allowed": "Tell the owner; only the owner can change who may be reached.",
+    "policy": "Tell the owner; only the owner can change this rule.",
+    "describe_failed": "The service could not be asked about the target. Nothing was queued; try again in a minute.",
+    "key_conflict": "Use a new request_id, or ask again with the same parameters.",
+    "queue_full": "Do not retry. Tell the owner to review the waiting requests on the dashboard.",
+}
+RETRYABLE = ("describe_failed",)
+RECHECK_CODES = ("target_changed",)     # what a recheck may answer; anything else it returns is logged as target_changed
+
+
 class ExternalError(Exception):
-    """A request that cannot be queued or carried out. The message is written for the agent or the owner who reads it."""
+    """A request that cannot be queued or carried out. The message is written for the agent or the owner who reads it.
+    code: one of REFUSALS, for the agent's answer; path: the parameter it is about, when there is one."""
+
+    def __init__(self, message: str, code: str = "policy", path: str | None = None):
+        super().__init__(message)
+        self.code = code if code in REFUSALS else "policy"
+        self.path = path
 
 
 class ExternalConflict(ExternalError):
     """The idempotency key was already used for a different request."""
+
+    def __init__(self, message: str, code: str = "key_conflict", path: str | None = "request_id"):
+        super().__init__(message, code, path)
+
+
+class Rechecked(ExternalError):
+    """Checked again just before the executor was called, the target was not what the owner looked at. Nothing was carried out
+    and the request ends as discarded with `reason` (a code, never a parameter): it is not put back, because approving it again
+    would fail the same way."""
+
+    def __init__(self, reason: str = "target_changed"):
+        super().__init__("Not sent: the target changed since you looked. Your assistant has to ask again.", "policy")
+        self.reason = reason
 
 
 def _jsonschema() -> Any:
@@ -91,6 +127,26 @@ class ActionType:
                 raise ValueError(f"Action type {self.id}: row {label!r} shows {name!r}, which is not in the schema.")
         if self.text_field is not None and (props.get(self.text_field) or {}).get("type") != "string":
             raise ValueError(f"Action type {self.id}: text_field {self.text_field!r} must be a string property of the schema.")
+        if _nested_read_only(schema):
+            raise ValueError(f"Action type {self.id}: readOnly is allowed only on top-level properties, where it is enforced.")
+
+
+def _nested_read_only(node: Any, top: bool = True) -> bool:
+    """Whether readOnly appears anywhere but on a top-level property: there jsonschema would not refuse it and neither would we."""
+    if isinstance(node, Mapping):
+        for k, v in node.items():
+            if k == "readOnly" and not top:
+                return True
+            if top and k == "properties" and isinstance(v, Mapping):
+                if any(_nested_read_only({kk: vv for kk, vv in p.items() if kk != "readOnly"}, False) for p in v.values() if isinstance(p, Mapping)):
+                    return True
+                continue
+            if isinstance(v, (Mapping, list)) and _nested_read_only(v, False):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_nested_read_only(x, False) for x in node)
+    return False
 
 
 @dataclass(frozen=True)
@@ -126,6 +182,13 @@ class Registration:
     allowed: Callable[[], Iterable[str]]       # who a request of this type may reach, as the owner has it now; empty means nobody
     # rules beyond the list, read on the parameters as the owner has them now: the reason a request is not permitted, or None
     policy: Callable[[Mapping[str, Any]], str | None] | None = None
+    # the agent's parameters -> the parameters that are stored: asks the service what the target is, so the card shows the
+    # service's words. Fields it adds are readOnly in the schema; an agent that sets one is refused. Raises ExternalError to refuse.
+    prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
+    # called after the owner approved and before the executor: a reason code when the target is no longer what the owner saw
+    # ('target_changed'), else None. The request then ends as discarded and nothing is carried out.
+    recheck: Callable[[Mapping[str, Any]], str | None] | None = None
+    channel_tool: str | None = None            # the tool that owns this type (messages_send_request); approval_request refuses it
 
     def allowed_set(self) -> set[str]:
         return {str(x).strip().casefold() for x in self.allowed()}
@@ -137,7 +200,10 @@ class ActionRegistry:
 
     def register(self, action_type: ActionType, executor: Executor,
                  allowed_recipients: Callable[[], Iterable[str]] | Iterable[str] = (),
-                 policy: Callable[[Mapping[str, Any]], str | None] | None = None) -> None:
+                 policy: Callable[[Mapping[str, Any]], str | None] | None = None, *,
+                 prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+                 recheck: Callable[[Mapping[str, Any]], str | None] | None = None,
+                 channel_tool: str | None = None) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
         anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient. policy: further
@@ -147,8 +213,10 @@ class ActionRegistry:
             raise ValueError(f"Action type {action_type.id} is already registered.")
         if not callable(getattr(executor, "execute", None)):
             raise TypeError("An executor has an execute(request) method.")
+        if read_only_fields(action_type) and prepare is None:
+            raise ValueError(f"Action type {action_type.id} has readOnly fields but no prepare to fill them in.")
         allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
-        self._items[action_type.id] = Registration(action_type, executor, allowed, policy)
+        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool)
 
     def copy(self) -> "ActionRegistry":
         """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the
@@ -162,6 +230,9 @@ class ActionRegistry:
 
     def types(self) -> list[ActionType]:
         return [r.action_type for r in self._items.values()]
+
+    def registrations(self) -> list[Registration]:
+        return list(self._items.values())
 
 
 REGISTRY = ActionRegistry()          # what the server builds the external source from; nothing registers into it yet
@@ -189,17 +260,33 @@ def read(raw: bytes) -> tuple[str, dict[str, Any]]:
     raise ExternalError("This request could not be read.")
 
 
-def check_params(action_type: ActionType, params: Any) -> dict[str, Any]:
-    """The parameters as plain JSON, when they fit the type's schema. ExternalError (one line) when they do not."""
+def read_only_fields(action_type: ActionType) -> set[str]:
+    """The parameters the server fills in itself (readOnly in the schema). jsonschema does not refuse them on its own."""
+    props = action_type.params_schema.get("properties") or {}
+    return {name for name, spec in props.items() if isinstance(spec, Mapping) and spec.get("readOnly") is True}
+
+
+def request_schema(action_type: ActionType) -> dict[str, Any]:
+    """The schema an agent's own parameters must fit before prepare runs: the type's, with the readOnly fields no longer required
+    (the server fills them in afterwards)."""
+    schema = dict(action_type.params_schema)
+    ro = read_only_fields(action_type)
+    if ro and isinstance(schema.get("required"), list):
+        schema["required"] = [r for r in schema["required"] if r not in ro]
+    return schema
+
+
+def check_params(action_type: ActionType, params: Any, schema: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The parameters as plain JSON, when they fit the type's schema (or `schema`). ExternalError (one line) when they do not."""
     if not isinstance(params, Mapping):
-        raise ExternalError("params must be an object.")
+        raise ExternalError("params must be an object.", "schema", "params")
     try:
         plain = json.loads(json.dumps(params, allow_nan=False))
     except (TypeError, ValueError) as e:
-        raise ExternalError("params must be plain JSON: text, numbers, true or false, lists and objects.") from e
+        raise ExternalError("params must be plain JSON: text, numbers, true or false, lists and objects.", "schema", "params") from e
     js = _jsonschema()
-    err = js.exceptions.best_match(js.Draft202012Validator(action_type.params_schema).iter_errors(plain))
+    err = js.exceptions.best_match(js.Draft202012Validator(schema or action_type.params_schema).iter_errors(plain))
     if err is not None:
         where = "/".join(str(p) for p in err.absolute_path) or "params"
-        raise ExternalError(f"{where}: {err.message}"[:300])
+        raise ExternalError(f"{where}: {err.message}"[:300], "schema", where)
     return plain

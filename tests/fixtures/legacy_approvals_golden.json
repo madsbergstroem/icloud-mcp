@@ -269,7 +269,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited email “Lunch” before sending",
@@ -281,7 +282,8 @@
    "actor": "owner",
    "details": {
     "kind": "imessage",
-    "outbox_id": "<id:imessage-1>"
+    "outbox_id": "<id:imessage-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited imessage “iMessage to Hiking crew” before sending",
@@ -293,7 +295,8 @@
    "actor": "owner",
    "details": {
     "kind": "calendar",
-    "outbox_id": "<id:calendar-1>"
+    "outbox_id": "<id:calendar-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited invitation “Autumn fair” before sending",
@@ -305,7 +308,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Brought back the original text of email “Lunch”",
@@ -317,7 +321,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": false,
    "summary": "Could not send email “Lunch”",
@@ -333,7 +338,8 @@
     "recipients": [
      "bob@example.org",
      "bob@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved email “Lunch”",
@@ -346,7 +352,8 @@
    "details": {
     "delivery": "unconfirmed",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-1>"
+    "outbox_id": "<id:imessage-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved imessage “iMessage to Hiking crew”",
@@ -361,7 +368,8 @@
     "outbox_id": "<id:calendar-1>",
     "recipients": [
      "jana@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved invitation “Autumn fair”",
@@ -374,7 +382,8 @@
    "details": {
     "delivery": "sent",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-2>"
+    "outbox_id": "<id:imessage-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved imessage “iMessage to Hiking crew”",
@@ -386,7 +395,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-2>"
+    "outbox_id": "<id:mail-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded email “Discard me”",
@@ -398,7 +408,8 @@
    "actor": "owner",
    "details": {
     "kind": "imessage",
-    "outbox_id": "<id:imessage-3>"
+    "outbox_id": "<id:imessage-3>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded imessage “iMessage to Hiking crew”",
@@ -410,7 +421,8 @@
    "actor": "owner",
    "details": {
     "kind": "calendar",
-    "outbox_id": "<id:calendar-2>"
+    "outbox_id": "<id:calendar-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded invitation “Autumn fair”",
@@ -426,7 +438,8 @@
     "reason": "mistake",
     "recipients": [
      "bob@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew email “Take me back”",
@@ -438,7 +451,8 @@
    "details": {
     "kind": "imessage",
     "outbox_id": "<id:imessage-4>",
-    "reason": "mistake"
+    "reason": "mistake",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew imessage “iMessage to Hiking crew”",
@@ -453,7 +467,8 @@
     "reason": "mistake",
     "recipients": [
      "jana@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew invitation “Autumn fair”",
@@ -465,7 +480,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "mail",
-    "outbox_id": "<id:mail-4>"
+    "outbox_id": "<id:mail-4>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued mail message expired without an answer",
@@ -477,7 +493,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-5>"
+    "outbox_id": "<id:imessage-5>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued imessage message expired without an answer",
@@ -489,7 +506,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "calendar",
-    "outbox_id": "<id:calendar-4>"
+    "outbox_id": "<id:calendar-4>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued calendar message expired without an answer",

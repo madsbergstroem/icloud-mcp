@@ -169,6 +169,12 @@ Where the seam is not general yet:
 - `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
   as calendar changes do.
 
+A card for an action of a registered type (kind `external`) keeps one order for every type: badge and title, the type's first
+row (who or what it reaches), the text, the other rows, warnings, the time left, then Discard and the approve button. Its
+outcome lines name the type's badge: "Not sure it reached {badge}. Nothing will be sent again; look there first." when it is
+unclear, and "Did not go out: {reason}" with Try again and Discard when it provably never went out. A type the server no
+longer has shows its id, its age and only Discard. The mock behind these states is in docs/SENDGATE.md (P1).
+
 ## Service plugins
 
 Every service the owner connects can be a plugin of one kind (`src/icloud_mcp/plugins/__init__.py`), found through the entry point

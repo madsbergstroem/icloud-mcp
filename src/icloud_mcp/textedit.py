@@ -223,6 +223,6 @@ def register_text_api(mcp: Any, d: Any, audit: Any) -> None:
             undone = new.edited_from is None          # "Bring it back", or the original typed in again by hand: either way it is the agent's text again
             audit.record("approval.edit_undone" if undone else "approval.edited", actor="owner", via=rec.get("via", ""),
                          summary=f"Brought back the original text of {what}" if undone else f"Edited {what} before sending",
-                         kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None))
+                         kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=new.sha256)
         return d.api_ok({"sha": new.sha256, "changed": changed,
                          "note": ("Brought back what was asked for." if restore else "Saved. It goes out exactly as shown.") if changed else "No change."})
