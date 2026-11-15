@@ -7,7 +7,8 @@ The owner dashboard is an Ionic Core app at `/dashboard`. It talks to the server
 
 | Decision | Why |
 | --- | --- |
-| Ionic Core 9 in iOS mode is the only UI library | One library for every control, so no screen grows its own buttons, toggles or sheets. It works in plain JavaScript without a build step |
+| Ionic Core 9 is the only UI library, in the mode of the device | One library for every control, so no screen grows its own buttons, toggles or sheets. It works in plain JavaScript without a build step. Ionic picks the look per device: iOS on an iPhone or iPad, Material on a desktop or an Android phone, each with its own transitions and gestures. No mode is forced |
+| A select opens at the field on a wide screen | From 900 px (`wide()`) a select is a list at the field (`selectUi()`), on a phone the sheet from below |
 | No hand-made controls | Buttons, toggles, segments, inputs, selects, lists, alerts, toasts and sheets are Ionic components. Own markup is limited to the pieces in "Own pieces" below |
 | Vendored and pinned (`static/vendor/`) | The CSP allows `script-src 'self'` only, and the server reaches no CDN. A version bump is its own change, with every screen checked on a phone and a desktop |
 | A JSON API instead of HTML forms | Ionic's controls do not take part in plain form posts: `ion-button` submits without `name`/`value`, and `ion-toggle` keeps its checkbox in the shadow DOM. Sessions, CSRF, passkeys, approvals and the audit log stay on the server |
