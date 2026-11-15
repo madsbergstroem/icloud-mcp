@@ -112,6 +112,7 @@ Rules every package keeps:
 | 0 | Draw the line: `gate` package, provenance file, import rule | gate | none | yes |
 | 1 | Actions of any kind: plugin `actions`, `approval_request`, `approval_list_actions` | gate | 0 | yes |
 | 2 | Gateway connector from a configuration file; first user is a marketplace reply | connector | 1 | yes |
+| 2c | Versions of a request: the owner's edit and a changed target become new versions instead of a discard | gate | 2, 3 | yes |
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | later |
 | 5 | Calendar invitations on the same | connector | 1, 3 | later |
@@ -306,6 +307,45 @@ Acceptance criteria:
 | Integration | Fake gateway: queue, describe, approve, each outcome | +6 |
 | Integration | Health lines, key probe | +2 |
 
+### As built (2b)
+
+- Agent-key probe (`gate_connectors/probe.py`): one `list_tools` per key in `GATE_AGENT_KEY_PROBE`, in the background at start
+  and on every `icloud_check_health` call. Each action is `ok`, `bypassable` or `unchecked` (no key set, no run yet, or a key
+  that could not list). Cards read the last result.
+- Holding approval is a gate feature, not a gateway one: `ActionSpec.hold(ctx)` returns an `actions.Hold`, level `blocked` (the
+  card shows why, the approve button is off, the dashboard and `release` refuse with nothing claimed) or `note` (one line on the
+  card, never blocks). A hold that raises blocks. `approval_request` still queues a held request and answers
+  `warnings: ["bypassable"]` with a `warning` sentence (X10); `bypassable` is no refusal code.
+- Health: the area `gateway` lists one line per action (`problem`, `warning`, `ok`); the Server page puts problems first, then
+  warnings, and folds two or more fine lines into one that opens on a tap (H2).
+- The owner's lists: each `allow_setting` is a field of the connector's settings page `gateway`, one section per action
+  (S5). An empty list shows "Reaches nobody yet" with a link that focuses the field (E2, J1). Adding an entry or `*` without a
+  recent sign-in asks to confirm, and the confirm sheet names the action (`why`); removing one does not. The service page links
+  the lists ("Who it may reach").
+- Owner decisions after the review (2026-11-15): `GATE_PROBE_REQUIRED=true` makes "not checked" block; an approval whose
+  last probe run is older than 10 minutes (`MAX_AGE`) runs the probe first, so a grant added since cannot slip through; a run
+  in which the bypassing key cannot list keeps the action bypassable; runs list the keys at once and a caller that waited for a
+  run takes its result (10 s). The owner's lists apply after a restart, like every dashboard setting, and the page says so.
+- Deviation from E1: the card's "not checked" line is a `hold` note, not the type's `warnings`. A warning turns the send into
+  "Send anyway…", and a note that never blocks must not.
+- S-a is replaced by package 2c: until then a changed target still ends the request as discarded (`target_changed`).
+- `dev/preview_dashboard.py --gateway bypass|clean|unchecked` shows all of it with made-up data.
+
+## Package 2c: versions of a request
+
+The owner asked for this after the 2b mock: a request is never thrown away because something changed; it gets a new version,
+and the old ones stay readable. Accepted layout: the current version on top, the versions as a list below it (mock variant A).
+
+- A request has versions 1..n. Each is immutable, has its own canonical bytes and sha256, and says who made it: the assistant
+  (v1), the owner's edit ("Edit text" makes a new version instead of overwriting; replaces "Bring it back"), a changed target
+  (the recheck before the send found new values: nothing is sent, the request waits again as a new version with the change
+  marked), or the assistant revising it (`approval_request` with `replaces: <outbox_id>`).
+- Approving needs the sha of the newest version; only that one can be sent. Older versions are read-only on the card.
+- Changes D7 and S1: `target_changed` no longer ends a request and no longer frees its key; the store gains a versions table
+  (user_version 2, with a migration). Activity and the audit log name every version with its sha256.
+- Tests: a recheck difference leaves the request waiting as version n+1 with nothing sent; approving with an older sha is
+  refused; an edit makes a version and the assistant's version stays readable; `replaces` from another request's key is refused.
+
 ## Package 3: store
 
 One SQLite file, `DATA_DIR/approvals.db` (mode 600, WAL), through the standard library's `sqlite3`. The `Outbox` class keeps its
@@ -473,6 +513,7 @@ Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`
 | `policy(ctx)` | Further rules on the parameters: a function that returns why a request is not permitted, or None. |
 | `prepare(ctx, params)` | Optional. Asks the service what the target is and returns the parameters that are stored, so the card shows the service's words. Fields it adds are `readOnly` in the schema; an agent that sets one is refused. Raise `ExternalError(message, code, path)` to refuse. |
 | `recheck(ctx, params)` | Optional. Called after the owner approved and before the executor. Return `target_changed` when the target is not what the owner saw: nothing is carried out and the request ends as discarded with that reason. |
+| `hold(ctx)` | Optional. Whether approving is off right now: an `actions.Hold` with level `blocked` (the card says why and approving is refused, nothing is carried out, the request keeps waiting) or `note` (one line on the card), or None. Read on every look and every approval; one that raises blocks. |
 
 `ctx.value(key, default)` reads one of the plugin's own settings. Agents name an action `action` in `approval_request` and
 `approval_list_actions`; `approval_status` keeps the field `action_type` it already had, so existing agents read it unchanged.
@@ -498,7 +539,8 @@ left out.
 | `GATE_ACTIONS_FILE` | The file. Unset: no file actions. |
 | `GATE_GATEWAY_URL` | The gateway's MCP address. Required with the file; a user or password in it is masked in every error. |
 | `GATE_EXEC_KEY` | The key that asks the service and carries actions out. Required with the file; masked in every error. |
-| `GATE_AGENT_KEY_PROBE` | Optional: one or more keys (comma-separated) with the grants agents have. Use a key that can only list tools. `--probe` reports any action whose send tool such a key can see: agents could then bypass the approval. |
+| `GATE_AGENT_KEY_PROBE` | Optional: one or more keys (comma-separated) with the grants agents have. Use a key that can only list tools. The server lists them at start and on every health check; an action whose send tool such a key can see cannot be approved until the grant is gone, and `--probe` reports it too. Unset: cards and health say the grants were not checked. |
+| `GATE_PROBE_REQUIRED` | Optional, `true` to make "not checked" (no probe key, no run yet, a key that could not list) block approving like a bypassable action. Default: a note only. |
 
 The file is one object: `$schema` (optional, the schema's address for editors), `version` and `actions` (the list). `version` is 1; the format is frozen at the keys below, and anything
 more is a Python plugin (`ActionSpec`). Each action:
@@ -626,14 +668,14 @@ can cite them.
 
 - H1 (package 1): one card order for every action type, set by the renderer: badge and title, recipient row (from `describe` copies, else a `recipient_fields` row), text, other rows, warnings, time left, Discard and the approve button. Load check (package 2): `recipient_fields` without a readable row stops the start. Test: a file-defined card renders in that order; the load check fails on a file without a recipient row.
 - H2 (package 2): health lines sort problem, warning, ok; ok lines fold into one count line. Test: one bypassable action among four shows first.
-- S-a (package 2): after a recheck discard, the item stays on Home for the session as "Not sent: the target changed since you looked. Your assistant has to ask again." Test: dashboard state after S1 shows it.
+- S-a (package 2; replaced by package 2c, owner 2026-11-15): after a recheck discard, the item stays on Home for the session as "Not sent: the target changed since you looked. Your assistant has to ask again." Test: dashboard state after S1 shows it.
 - S-b/S-c/S-d (packages 1 and 2): file-defined actions use DESIGN.md's After Approve states; the unclear line comes from the type ("Not sure it reached {badge}. Nothing will be sent again; look there first."), replacing wording that names Messages or a conversation; a `failed` return shows "Did not go out: {reason}" above the buttons. Test per state.
 - S-e (package 2, with D3): while D3 holds, the approve button is off and the card shows the D3 sentence with a link to health; "agent grants not checked" is a note and never blocks. Test: both cards.
 - S-g (package 1): an unknown action shows its stored type id and age, with Discard. Test.
 - S-h (package 1): `approval_list_actions` with no actions returns `{actions: []}` and a one-line hint. Test.
 - J1 (package 2): the E2 hint links to the list field; the loosening confirm names the action. Test.
 - B1 (package 2): `badge` renders with the existing `.tag` in one neutral style; `approve_label` at most 12 characters, checked at load. Test.
-- A1 (package 1): one refusal shape for agents, `{status: "refused", sent: false, reason, message, path?}`, codes `unknown_action`, `schema`, `read_only`, `not_allowed`, `policy`, `channel_tool`, `bypassable`, `describe_failed`, `key_conflict`, `queue_full`; one test per code.
+- A1 (package 1): one refusal shape for agents, `{status: "refused", sent: false, reason, message, path?}`, codes `unknown_action`, `schema`, `read_only`, `not_allowed`, `policy`, `channel_tool`, `describe_failed`, `key_conflict`, `queue_full`; one test per code.
 - C1 (packages 1 and 2): every new owner and agent string is listed in one table in the PR and passes the humanizer skill before build.
 - P1 (before package 1 UI code): one standalone HTML mock of the card in every state (waiting, edited, sending, sent, unclear, did-not-go-out, discarded-by-recheck, warning note, blocked by D3, unknown action) and the settings hint, approved by the owner; the same list is the "one click per state" checklist.
 - Deferred: S-f refusal counts on the dashboard.

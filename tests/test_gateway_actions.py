@@ -18,7 +18,7 @@ from icloud_mcp import plugins as P  # noqa: E402
 from icloud_mcp.gate_connectors import __main__ as cli  # noqa: E402
 from icloud_mcp.gate_connectors import actions as G  # noqa: E402
 from icloud_mcp.gate_connectors.gateway import Gateway  # noqa: E402
-from test_dashboard import api, client, signed_in, web  # noqa: E402,F401  (web is a fixture)
+from test_dashboard import PASSWORD, api, client, signed_in, web  # noqa: E402,F401  (web is a fixture)
 from test_external_approvals import audit_text  # noqa: E402
 
 EXAMPLE = json.loads((ROOT / "docs" / "examples" / "actions.example.json").read_text())
@@ -61,6 +61,8 @@ def market(tmp_path, monkeypatch):
         m.timeouts.append(timeout)
         return Gateway(url, key, timeout, make_http=m.gw.make_http)
     monkeypatch.setattr(G, "Gateway", via_fake)
+    from icloud_mcp.gate_connectors import probe as _probe
+    monkeypatch.setattr(_probe, "FRESH", -1.0)               # every health check runs the probe again (reuse has its own test)
     for k, v in {"GATE_ACTIONS_FILE": str(path), "GATE_GATEWAY_URL": URL, "GATE_EXEC_KEY": EXEC}.items():
         monkeypatch.setenv(k, v)
     P._loaded.cache_clear()
@@ -389,3 +391,253 @@ def test_the_probe_fails_when_the_gateway_is_down(tmp_path, monkeypatch, capsys)
     monkeypatch.setenv("GATE_EXEC_KEY", EXEC)
     assert cli.main(["x", "check", str(write_file(tmp_path, EXAMPLE)), "--probe"], make_http=m.gw.make_http) == 1
     assert "could not list tools" in capsys.readouterr().err
+
+
+# -- package 2b: agent-key probe, approval held, health lines, the owner's lists ---------------------------------------------------
+def with_probe(monkeypatch, *keys):
+    monkeypatch.setenv("GATE_AGENT_KEY_PROBE", ",".join(keys))
+    P._loaded.cache_clear()
+
+
+async def health(mcp):
+    return (await call(mcp, "icloud_check_health"))["areas"]["gateway"]
+
+
+async def item(app, item_id):
+    async with client(app) as c:
+        await signed_in(c)
+        return (await c.get(url(item_id))).json()
+
+
+async def test_without_a_probe_key_the_card_and_health_say_not_checked_and_nothing_blocks(web, market):
+    """protects=E1 unset, S-e: "not checked" is a note and never blocks; fails_when=it blocks approval, or neither health nor the card
+    says so; no_claim=none beyond protects."""
+    app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    got = await call(mcp, "approval_request", **ASK)
+    assert "warnings" not in got
+    it = await item(app, got["outbox_id"])
+    assert "held" not in it and "no probe key is set" in " ".join(it["notes"])
+    h = await health(mcp)
+    assert h["ok"] is True and [x["level"] for x in h["actions"]] == ["warning"]
+    _, r = await approve(app, mcp)
+    assert r.status_code == 200 and len(market.sends()) == 1
+
+
+async def test_a_probe_key_that_sees_the_send_tool_holds_approval_until_the_grant_is_gone(web, market, monkeypatch, caplog):
+    """protects=D3, X10, S-e, E1: the request is queued with warnings, approval sends nothing, the card says why, health reports a
+    problem; after the grant is removed and the probe runs again, approval works. No probe key value appears anywhere.
+    fails_when=a held request is sent, or stays held after a clean probe; no_claim=a gateway that hides a tool from the list."""
+    market.gw.grants["Bearer " + AGENT] = {"market-call_operation", "market-call_write_operation"}
+    with_probe(monkeypatch, AGENT)
+    app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    h = await health(mcp)
+    assert h["ok"] is False and h["actions"][0]["level"] == "problem"
+    got = await call(mcp, "approval_request", **ASK)
+    assert got["status"] == "queued_for_owner_approval" and got["warnings"] == ["bypassable"]
+    it = await item(app, got["outbox_id"])
+    assert "agent key can call this tool" in it["held"]
+    _, r = await approve(app, mcp)
+    assert r.status_code == 409 and market.sends() == [] and len(mcp._icloud_dashboard.sources["external"].pending()) == 1
+    market.gw.grants["Bearer " + AGENT] = {"market-call_operation"}
+    assert (await health(mcp))["ok"] is True
+    assert "held" not in await item(app, got["outbox_id"])
+    _, r = await approve(app, mcp)
+    assert r.status_code == 200 and len(market.sends()) == 1
+    texts = [json.dumps(got), json.dumps(h), r.text, audit_text(mcp), caplog.text]
+    assert not [t for t in texts if AGENT in t]
+
+
+async def test_two_probe_keys_one_bypassing_is_a_problem_and_a_key_that_cannot_list_is_not_checked(web, market, monkeypatch):
+    """protects=E1 with several keys; fails_when=one clean key hides the other's grant, or a key that cannot list reads ok;
+    no_claim=none beyond protects."""
+    other = "agent-key-made-up-second"
+    market.gw.grants["Bearer " + other] = {"market-call_operation", "market-call_write_operation"}
+    with_probe(monkeypatch, AGENT, other)
+    _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    assert (await health(mcp))["actions"][0]["level"] == "problem"
+    del market.gw.grants["Bearer " + other]                              # the bypassing key now cannot list: it stays bypassable
+    a = (await health(mcp))["actions"][0]
+    assert a["level"] == "problem"                                        # only a run where every key listed clears it
+
+
+def test_a_key_that_cannot_list_never_clears_bypassable_and_a_clean_run_does():
+    """protects=D3 after the adversarial review: a transient failure of the bypassing key keeps approval off; fails_when=a failed
+    list reopens approval, or a fully clean run keeps it closed; no_claim=none beyond protects."""
+    from icloud_mcp.gate_connectors import probe as PR
+    answers = {"k": {"send"}}
+
+    class C:
+        def __init__(self, key):
+            self.key = key
+
+        def list_tools(self):
+            got = answers[self.key]
+            if got is None:
+                raise RuntimeError("down")
+            return got
+    pr = PR.Probe(["k"], [("a.one", "send")], C)
+    run = lambda: (setattr(pr, "checked_at", None), pr.run())   # noqa: E731  -- as if past the FRESH window
+    run()
+    assert pr.state("a.one").state == "bypassable"
+    answers["k"] = None
+    run()
+    assert pr.state("a.one").state == "bypassable" and pr.hold("a.one").level == "blocked"
+    answers["k"] = {"read"}
+    run()
+    assert pr.state("a.one").state == "ok" and pr.hold("a.one") is None
+    fresh = PR.Probe(["k"], [("a.one", "send")], C)
+    answers["k"] = None
+    fresh.run()
+    assert fresh.state("a.one") == PR.State("unchecked", "unreachable") and fresh.hold("a.one").level == "note"
+
+
+async def test_one_list_per_probe_key_per_run_and_the_start_does_not_wait_on_a_hanging_gateway(web, market, monkeypatch):
+    """protects=E-14; fails_when=a run lists more than once per key, or the start waits for the probe; no_claim=none beyond protects."""
+    other = "agent-key-made-up-second"
+    market.gw.grants["Bearer " + other] = {"market-call_operation"}
+    with_probe(monkeypatch, AGENT, other)
+    market.gw.mode, market.gw.delay = "slow", 3.0
+    import time as _t
+    t0 = _t.monotonic()
+    _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    assert _t.monotonic() - t0 < 2.0
+    market.gw.mode = None
+    import threading as _th
+    for t in [t for t in _th.enumerate() if t.name == "gate-probe"]:
+        t.join(10)                                         # the start's own run, still on the hanging gateway
+        assert not t.is_alive()
+    market.gw.lists.clear()
+    await health(mcp)
+    assert sorted(market.gw.lists) == sorted([AGENT, other])
+
+
+def test_health_lines_put_problems_first_then_warnings_then_ok():
+    """protects=H2 in the report; fails_when=a bypassable action among four is not first; no_claim=the dashboard's folding (clicked
+    in the browser)."""
+    from icloud_mcp.gate_connectors.probe import Probe, State
+    pr = Probe(["k"], [("a.one", "t1"), ("a.two", "t2"), ("a.three", "t3"), ("a.four", "t4")], lambda k: None)
+    pr._states = {"a.one": State("ok"), "a.two": State("unchecked", "unreachable"), "a.three": State("ok"), "a.four": State("bypassable")}
+    assert [x["action"] for x in pr.lines({})] == ["a.four", "a.two", "a.one", "a.three"]
+
+
+async def test_the_server_page_sorts_problems_first(web, market, monkeypatch):
+    """protects=H2 on the dashboard; fails_when=the bypassable action is not above the lines that are fine; no_claim=none beyond protects."""
+    market.gw.grants["Bearer " + AGENT] = {"market-call_operation", "market-call_write_operation"}
+    with_probe(monkeypatch, AGENT)
+    app, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    async with client(app) as c:
+        token = await signed_in(c)
+        await c.post("/dashboard/api/server/check", headers=api(token))
+        areas = (await c.get("/dashboard/api/server")).json()["areas"]
+    levels = [a["level"] for a in areas]
+    market_line = next(i for i, a in enumerate(areas) if a["area"] == "Market · Marketplace reply")
+    assert areas[market_line]["level"] == "problem" and areas[market_line]["note"] == "Bypassable"
+    assert levels == sorted(levels, key=lambda x: {"problem": 0, "warning": 1}.get(x, 2))
+
+
+async def test_the_owners_list_is_a_setting_that_says_it_reaches_nobody_and_widening_asks_to_confirm(web, market):
+    """protects=S5, E2, J1: each allow_setting is a field of the connector's settings page; empty shows the hint; widening without a
+    recent sign-in asks to confirm and names the action; narrowing does not. fails_when=any of these; no_claim=the hint's link focus
+    (clicked in the browser)."""
+    from test_settings import stale
+    app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="")
+    d = mcp._icloud_dashboard
+    async with client(app) as c:
+        token = await signed_in(c)
+        st = (await c.get("/dashboard/api/settings")).json()
+        g = next(x for x in st["groups"] if x["slug"] == "gateway")
+        f = next(x for x in g["fields"] if x["key"] == "MARKET_SEND_ALLOWLIST")
+        assert f["value"] == "" and "Marketplace reply" in f["empty_hint"] and g["summary"] == "1 reach nobody"
+        stale(d)
+        r = await c.post("/dashboard/api/settings/gateway", headers=api(token), json={"values": {"MARKET_SEND_ALLOWLIST": "c-1"}})
+        assert r.status_code == 403 and r.json()["confirm"] is True and "Marketplace reply" in r.json()["why"]
+        await c.post("/dashboard/api/signin", headers=api(token), json={"password": PASSWORD})
+        r = await c.post("/dashboard/api/settings/gateway", headers=api(token), json={"values": {"MARKET_SEND_ALLOWLIST": "c-1,c-2"}})
+        assert r.status_code == 200
+        stale(d)
+        r = await c.post("/dashboard/api/settings/gateway", headers=api(token), json={"values": {"MARKET_SEND_ALLOWLIST": "c-1"}})
+        assert r.status_code == 200                                               # narrowing needs no confirm
+
+
+def test_a_hold_that_raises_blocks_and_one_that_answers_nonsense_is_ignored():
+    """protects=the gate's hold contract: approving never depends on a function that failed; fails_when=a raising hold lets approval
+    through, or a value that is not a Hold blocks; no_claim=none beyond protects."""
+    from icloud_mcp.gate import actions as A
+    def boom():
+        raise RuntimeError("x")
+    reg = lambda hold: A.Registration(None, None, lambda: (), hold=hold)   # noqa: E731
+    assert reg(lambda approving: boom()).hold_now().level == "blocked"
+    assert reg(lambda approving: "blocked").hold_now() is None and reg(None).hold_now() is None
+    assert reg(lambda approving: A.Hold("note", "unchecked", "n")).hold_now().level == "note"
+
+
+@pytest.mark.parametrize("old,new,widens", [("", "c-1", True), ("c-1", "*", True), ("c-1", "c-1,c-2", True), ("c-1", "c-2", True),
+                                             ("c-1", "C-1", False), ("c-1,c-2", "c-2", False), ("c-1", " c-1 ,", False), ("", "", False)])
+def test_only_adding_someone_counts_as_widening(old, new, widens, market):
+    """protects=S5 widening-only confirm; fails_when=adding * or an entry is not loosening, or a removal or a case change asks;
+    no_claim=none beyond protects."""
+    found = G.load(os.environ["GATE_ACTIONS_FILE"])
+    spec_ = next(sp for sp in G.settings_group(found).specs if sp.key == "MARKET_SEND_ALLOWLIST")
+    assert spec_.loosens(old, new) is widens
+
+
+async def test_a_hold_that_turns_on_after_the_owner_looked_stops_the_release_itself(web, market):
+    """protects=the second hold check in release, behind the dashboard's: a probe that flips between the look and the click sends
+    nothing; fails_when=release claims or sends while held; no_claim=none beyond protects."""
+    from icloud_mcp.gate import actions as A
+    _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    await call(mcp, "approval_request", **ASK)
+    src = mcp._icloud_dashboard.sources["external"]
+    q = src.pending()[0]
+    reg = src.registry.get("market.message.send")
+    object.__setattr__(reg, "hold", lambda approving: A.Hold("blocked", "bypassable", "held now"))
+    with pytest.raises(A.ExternalError, match="held now"):
+        src.release(q)
+    assert market.sends() == [] and len(src.pending()) == 1
+
+
+def test_a_run_right_after_another_takes_its_result():
+    """protects=the performance review's queueing: callers that waited for a run reuse it; fails_when=a second call right after
+    lists again; no_claim=none beyond protects."""
+    from icloud_mcp.gate_connectors import probe as PR
+    calls = []
+
+    class C:
+        def __init__(self, key):
+            calls.append(key)
+
+        def list_tools(self):
+            return {"read"}
+    pr = PR.Probe(["k1", "k2"], [("a.one", "send")], C)
+    pr.run()
+    pr.run()
+    assert sorted(calls) == ["k1", "k2"] and pr.state("a.one").state == "ok"
+
+
+def test_required_mode_blocks_when_not_checked_and_an_old_ok_is_checked_again_before_approving(monkeypatch):
+    """protects=the owner's 2b decisions (2026-11-15): GATE_PROBE_REQUIRED turns "not checked" into a block, and an approval after
+    MAX_AGE probes first; fails_when=required mode only notes, or a grant added after an old clean run is approved; no_claim=none
+    beyond protects."""
+    from icloud_mcp.gate_connectors import probe as PR
+    seen = {"k": {"read"}}
+
+    class C:
+        def __init__(self, key):
+            self.key = key
+
+        def list_tools(self):
+            if seen[self.key] is None:
+                raise RuntimeError("down")
+            return seen[self.key]
+    strict = PR.Probe(["k"], [("a.one", "send")], C, required=True)
+    assert strict.hold("a.one").level == "blocked"                       # no run yet
+    nokey = PR.Probe([], [("a.one", "send")], C, required=True)
+    assert nokey.hold("a.one").level == "blocked" and "GATE_PROBE_REQUIRED" in nokey.hold("a.one").text
+    pr = PR.Probe(["k"], [("a.one", "send")], C)
+    pr.run()
+    assert pr.hold("a.one") is None
+    seen["k"] = {"read", "send"}                                           # a grant added after the clean run
+    assert pr.hold("a.one") is None                                        # a look does not probe
+    monkeypatch.setattr(PR, "MAX_AGE", -1.0)
+    monkeypatch.setattr(PR, "FRESH", -1.0)                                # as if both windows had passed
+    assert pr.hold("a.one", approving=True).level == "blocked"             # an approval after MAX_AGE does

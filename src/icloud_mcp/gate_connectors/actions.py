@@ -33,6 +33,7 @@ from ..gate import actions as A
 from .gateway import Gateway, GatewayError
 
 ENV_FILE, ENV_URL, ENV_KEY, ENV_PROBE = "GATE_ACTIONS_FILE", "GATE_GATEWAY_URL", "GATE_EXEC_KEY", "GATE_AGENT_KEY_PROBE"
+ENV_REQUIRED = "GATE_PROBE_REQUIRED"
 RESERVED_SETTINGS = {"SEND_ALLOWLIST", "IMESSAGE_SEND_ALLOWLIST", "BEEPER_SEND_ALLOWLIST"}   # the core's and Beeper's own lists
 SCALARS = {"string", "number", "integer", "boolean"}
 CHECK = "python -m icloud_mcp.gate_connectors check"
@@ -327,10 +328,12 @@ class Executor:
         return A.Result("unclear", f"Not sure it reached {fa.badge}: its answer did not say. Look there first; nothing will be sent again.")
 
 
-def spec(conn: Connection, fa: FileAction) -> Any:
-    """The ActionSpec the gate registers for one action of the file."""
+def spec(conn: Connection, fa: FileAction, probe: Any = None) -> Any:
+    """The ActionSpec the gate registers for one action of the file. `probe` (probe.Probe) holds approving while an agent key
+    can call the action's tool."""
     from ..plugins import ActionSpec
     return ActionSpec(
+        hold=(lambda ctx, approving=False: probe.hold(fa.action, approving)) if probe is not None else None,
         action_type=fa.action_type, executor=lambda ctx: Executor(conn, fa),
         allowed=lambda ctx: [x.strip() for x in ctx.value(fa.allow_setting).split(",") if x.strip()],
         prepare=(lambda ctx, p: prepare(conn, fa, p)) if fa.describe else None,
@@ -362,18 +365,56 @@ def check_start(env: Mapping[str, str] | None = None) -> list[FileAction]:
         raise SystemExit(f"{ENV_FILE} {path}: {e}. Check it with: {CHECK} {path}") from None
 
 
+def settings_group(found: list[FileAction]) -> Any:
+    """The owner's lists, one per action of the file, on the connector's own settings page (S5). Widening a list asks the owner to
+    confirm (loosens); an empty one reaches nobody and says so (E2)."""
+    from ..settings import Group, Spec
+
+    def widens(old: str, new: str) -> bool:           # an entry or * added; removing one only narrows, so it asks nothing
+        split = lambda v: {x.strip().casefold() for x in v.split(",") if x.strip()}   # noqa: E731
+        return bool(split(new) - split(old))
+    specs = [Spec(fa.allow_setting, f"Who “{fa.title}” may reach", "list",
+                  f"{fa.badge} ids ({', '.join(fa.recipient_fields)}). Empty means nobody, * anyone.",
+                  loosens=widens, section=f"{fa.badge} · {fa.title}",
+                  empty_hint=f"Your assistant can ask for “{fa.title}”, but every request is refused until you list someone here.")
+             for fa in found]
+
+    def summary(v: Any) -> str:
+        empty = [fa for fa in found if not v(fa.allow_setting).strip()]
+        return f"{len(empty)} reach nobody" if empty else (f"{len(found)} actions" if len(found) > 1 else "1 action")
+    return Group("gateway", "Gateway actions", "Actions of services behind the MCP gateway. Each reaches only who you list here. "
+                 "A change applies after the server restarts.",
+                 specs, summary=summary)
+
+
 def plugin() -> Any:
     """The connector as a service plugin: one ActionSpec per enabled action of GATE_ACTIONS_FILE."""
     from ..plugins import Plugin
     env = os.environ
     found = load(env[ENV_FILE].strip()) if env.get(ENV_FILE, "").strip() else []   # a LoadError skips the plugin; check_start stops the server
-    conn = Connection(env.get(ENV_URL, "").strip(), env.get(ENV_KEY, "").strip())
+    from .probe import Probe
+    url = env.get(ENV_URL, "").strip()
+    conn = Connection(url, env.get(ENV_KEY, "").strip())
     live = [fa for fa in found if fa.enabled]
+    probe = Probe([k.strip() for k in env.get(ENV_PROBE, "").split(",")], [(fa.action, fa.tool) for fa in live],
+                  lambda key: Gateway(url, key, 10), required=env.get(ENV_REQUIRED, "").strip().lower() in ("1", "true", "yes"))
+    titles = {fa.action: f"{fa.badge} · {fa.title}" for fa in live}
+
+    def health(s: Any) -> dict[str, Any]:
+        probe.run()                                   # on every icloud_check_health call (E1)
+        lines = probe.lines(titles)
+        problems = [x for x in lines if x["level"] == "problem"]
+        return {"ok": not problems, "actions": lines,
+                **({"error": f"{len(problems)} action(s) can be carried out by agents without you"} if problems else {})}
+    if live:
+        probe.start()
     return Plugin(
         id="gateway", name="Gateway actions", status="Set up by whoever runs this server",
         limits="Actions come from the file whoever runs this server wrote; each reaches only who you list.",
         description="Actions of services behind the MCP gateway, carried out after your approval.",
-        actions=tuple(spec(conn, fa) for fa in live),
+        actions=tuple(spec(conn, fa, probe) for fa in live),
+        health=health if live else None,
         settings_keys=frozenset(fa.allow_setting for fa in found),
+        settings_group=(lambda: settings_group(found)) if found else None,
         enabled=lambda s: bool(live),
         secrets=lambda s: secrets_of(env))

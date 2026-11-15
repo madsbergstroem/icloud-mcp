@@ -89,7 +89,7 @@ class FakeGateway:
             pass
         hit = tool is not None and (self.only is None or tool in self.only)
         lose = self.mode == "lose" and hit
-        if self.mode == "slow" and hit:
+        if self.mode == "slow" and (hit or (method == "tools/list" and self.only is None)):   # a hanging gateway answers no list either
             await asyncio.sleep(self.delay)
         async with app.router.lifespan_context(app):
             await app(scope, again, drop if lose else send)
