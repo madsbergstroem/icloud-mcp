@@ -136,3 +136,6 @@ export function titleBlock(h1, p) {
 }
 
 export function wide() { return window.matchMedia("(min-width: 900px)").matches; }
+
+// How an ion-select opens: a list at the field on a wide screen, the sheet from below on a phone. Every select uses this.
+export function selectUi() { return wide() ? "popover" : "action-sheet"; }

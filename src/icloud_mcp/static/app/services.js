@@ -3,7 +3,7 @@
 // go to /accounts/... and restart the server; a plugin set up by
 // whoever runs the server, so its page only shows the networks and edits who it may write to.
 import { get, post } from "./api.js";
-import { esc, toast, fail, ask, section, titleBlock, row } from "./ui.js";
+import { esc, toast, fail, ask, section, titleBlock, row, selectUi } from "./ui.js";
 import { page, macRows, macAside, wireSwitches } from "./settings.js";
 import { sendingSection, readingSection, wireSending, wireReading } from "./picker.js";
 
@@ -248,7 +248,7 @@ class ConnectForm extends HTMLElement {
     const areas = AREAS.map(([k, label]) => `<ion-item><ion-toggle data-area="${k}" ${holder(k) ? "" : "checked"}>${label}${holder(k)
       ? `<br><small class="sub">Now from ${esc(holder(k).name)}. Turn on to move it here.</small>` : ""}</ion-toggle></ion-item>`).join("");
     // another provider: a preset only fills in the servers, which stay editable below
-    const provider = icloud ? "" : `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-select data-preset label="Provider" interface="action-sheet" value="custom">
+    const provider = icloud ? "" : `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-select data-preset label="Provider" interface="${selectUi()}" value="custom">
         <ion-select-option value="custom">Custom</ion-select-option>${this.r.connect.presets.map((p) =>
           `<ion-select-option value="${esc(p.id)}">${esc(p.label)}</ion-select-option>`).join("")}</ion-select></ion-item></ion-list>
         <p class="note">A preset fills in the servers under Advanced server settings. You can still change them.</p>`;

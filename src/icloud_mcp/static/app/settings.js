@@ -1,7 +1,7 @@
 // Activity, Settings and the pages Settings opens: notifications, passkeys, apps, the password, one settings area, the server.
 // The pages of the connected services are in services.js.
 import { get, post, session, loadSession, token, confirmNow } from "./api.js";
-import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide } from "./ui.js";
+import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide, selectUi } from "./ui.js";
 import { serviceEntries } from "./services.js";
 import { app } from "./state.js";
 
@@ -245,7 +245,7 @@ class Group extends HTMLElement {
     const attrs = `data-key="${esc(f.key)}" ${dis}`;
     if (f.kind === "bool") return `<ion-item><ion-toggle ${attrs} ${f.value ? "checked" : ""}>${esc(f.label)}</ion-toggle></ion-item>`;
     if (f.kind === "choice") {
-      return `<ion-item><ion-select ${attrs} label="${esc(f.label)}" interface="action-sheet" value="${esc(String(f.value).toLowerCase())}">
+      return `<ion-item><ion-select ${attrs} label="${esc(f.label)}" interface="${selectUi()}" value="${esc(String(f.value).toLowerCase())}">
         ${f.choices.map(([c, l]) => `<ion-select-option value="${esc(c)}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>`;
     }
     if (f.kind === "textarea") return `<ion-item><ion-textarea ${attrs} label="${esc(f.label)}" label-placement="stacked" auto-grow="true" value="${esc(f.value)}"></ion-textarea></ion-item>`;
