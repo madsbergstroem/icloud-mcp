@@ -23,7 +23,7 @@ DIRS = ("src", "mac-helper", "menubar", "dev")
 
 # What the gate must not import: the services, the chat model, the Mac bridge, the server, its settings and pages, a plugin.
 FORBIDDEN = ("mail", "cal", "contacts", "imessage", "messages", "beeper", "bridge", "server", "config", "settings", "dashboard",
-             "dashboard_api", "approvals", "plugins")
+             "dashboard_api", "approvals", "plugins", "gate_connectors")
 
 MOVED = {"actions": "actions", "external": "external", "outbox": "outbox", "approval_status": "status",
          "approval_withdraw": "withdraw", "audit": "audit", "push": "push"}

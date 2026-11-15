@@ -177,6 +177,7 @@ class ActionRequest:
     params: Mapping[str, Any]
     requested_by: str | None = None
     key: str | None = None
+    attempt: int = 1                           # which execution this is: 1, then one more after each `failed` (the store counts)
 
 
 class Executor(Protocol):

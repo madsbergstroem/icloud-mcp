@@ -81,6 +81,8 @@ connector = [
   "src/icloud_mcp/beeper.py",
   "src/icloud_mcp/messages.py",
   "src/icloud_mcp/plugins/beeper/**",
+  "src/icloud_mcp/gate_connectors/**",
+  "dev/fake_gateway.py",
 ]
 mixed = [
   "src/icloud_mcp/admin.py",

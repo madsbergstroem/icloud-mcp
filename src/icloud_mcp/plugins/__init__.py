@@ -29,13 +29,14 @@ import functools
 import importlib
 import importlib.metadata
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
 
 GROUP = "icloud_mcp.plugins"
-BUILTIN = {"beeper": "icloud_mcp.plugins.beeper:plugin"}       # also in pyproject.toml; found here when running from source
+BUILTIN = {"beeper": "icloud_mcp.plugins.beeper:plugin", "gateway": "icloud_mcp.gate_connectors.actions:plugin"}       # also in pyproject.toml; found here when running from source
 
 
 # -- how a service is connected -----------------------------------------------------------------------------------------------
@@ -252,11 +253,12 @@ def entry_points() -> list[tuple[str, str]]:
 
 def load_plugins() -> list[Plugin]:
     """Every plugin, the built-in ones first, each id once."""
-    return list(_loaded((*BUILTIN.items(), *entry_points())))
+    marker = tuple(os.environ.get(k, "") for k in ("GATE_ACTIONS_FILE", "GATE_GATEWAY_URL", "GATE_EXEC_KEY"))
+    return list(_loaded((*BUILTIN.items(), *entry_points()), marker))     # a changed connector setup builds the plugins again
 
 
 @functools.lru_cache(maxsize=8)
-def _loaded(targets: tuple[tuple[str, str], ...]) -> tuple[Plugin, ...]:
+def _loaded(targets: tuple[tuple[str, str], ...], marker: tuple[str, ...] = ()) -> tuple[Plugin, ...]:
     out: dict[str, Plugin] = {}
     for name, target in targets:
         if name in out:

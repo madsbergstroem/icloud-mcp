@@ -260,7 +260,7 @@ class ExternalApprovals(ApprovalSource):
                 code = reason if reason in A.RECHECK_CODES else "target_changed"   # a code, never the plugin's own text
                 self._record(self.box.finish, claimed.id, "discarded", code)
                 raise A.Rechecked(code)
-        request = A.ActionRequest(claimed.id, type_id, plain, claimed.requested_by, claimed.key)
+        request = A.ActionRequest(claimed.id, type_id, plain, claimed.requested_by, claimed.key, max(1, getattr(claimed, "attempts", 0) or 1))
         try:
             result = reg.executor.execute(request)
         except Exception as e:  # noqa: BLE001  -- an exception proves nothing about the other side

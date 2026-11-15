@@ -483,6 +483,68 @@ while that one still waits; package 3 keeps keys after a request ended. The list
 and again when it is approved. Agents ask with `approval_list_actions` and `approval_request`; a type that a chat channel owns
 (`messages_send_request`) is left out of the list and refused by name. `tests/test_plugin_actions.py` is a worked example.
 
+## Connector file reference
+
+Package 2a is built (`src/icloud_mcp/gate_connectors/`). A service behind the MCP gateway becomes an action through one JSON
+file. `docs/examples/actions.example.json` is a working example with made-up data, and `docs/examples/actions.schema.json` is
+the file's JSON Schema (the loader's own, kept equal by a test). Check a file with
+`python -m icloud_mcp.gate_connectors check FILE`; add `--probe` to ask the gateway as well. Exit code 0 means fine, 2 the file
+cannot be used, 1 the probe found a problem: the execution key misses a tool, an agent key (`GATE_AGENT_KEY_PROBE`) sees a send
+tool, or an agent key could not be checked. A file that cannot be used stops the server start; elsewhere the connector is only
+left out.
+
+| Environment variable | What it is |
+|----------------------|------------|
+| `GATE_ACTIONS_FILE` | The file. Unset: no file actions. |
+| `GATE_GATEWAY_URL` | The gateway's MCP address. Required with the file; a user or password in it is masked in every error. |
+| `GATE_EXEC_KEY` | The key that asks the service and carries actions out. Required with the file; masked in every error. |
+| `GATE_AGENT_KEY_PROBE` | Optional: one or more keys (comma-separated) with the grants agents have. Use a key that can only list tools. `--probe` reports any action whose send tool such a key can see: agents could then bypass the approval. |
+
+The file is one object: `$schema` (optional, the schema's address for editors), `version` and `actions` (the list). `version` is 1; the format is frozen at the keys below, and anything
+more is a Python plugin (`ActionSpec`). Each action:
+
+| Key | Required | What it is |
+|-----|----------|------------|
+| `action` | yes | Its id, lower-case words joined by dots, unique in the file. Agents pass it to `approval_request`. |
+| `title`, `badge` | yes | The card's title (80 characters at most) and small label (20). |
+| `approve_label` | yes | The approve button, 12 characters at most. |
+| `tool` | yes | The gateway tool that carries it out. `describe.tool` must be another tool. |
+| `arguments` | yes | What `tool` is called with, with placeholders (below). |
+| `params_schema` | yes | The parameters as a JSON Schema object. Fields `describe` fills in are `readOnly`, only at the top level, of type string (with `maxLength`), number, integer or boolean. With `$params` in `arguments`, `additionalProperties` must be `false`. Only declared fields reach the service. |
+| `text_field` | no | The parameter the owner may edit before approving. |
+| `recipient_fields` | yes | The parameters that say who or what it reaches; checked against the owner's list. Each must be required and set by the agent (not `readOnly`). |
+| `rows` | yes | `[label, field]` pairs of the card. The first row names who or what it reaches: a recipient field or a field `describe` copies. The labels To, Guests, Will be delivered to and Conversation are the gate's own. |
+| `describe` | no | Asks the service about the target before the request is queued: `tool`, `arguments`, `copy` (readOnly field to dotted path of the answer) and `recheck` (copied fields compared again just before the send; a difference ends the request as discarded, target_changed). |
+| `result` | yes | Reads the tool's answer: `path` (dotted), `sent` (values that mean done) and `failed` (values that mean it provably had no effect; the request waits again). Values match in type and value (`true` is not `1`), and no value may be in both lists. Anything else, an error, or no answer is unclear and never repeated. List under `failed` only what the service guarantees had no side effect. |
+| `allow_setting` | yes | The setting that holds the owner's list for this action: ids, `*` for anyone, empty for nobody (the default). Its name ends in `_ALLOWLIST`, does not start with `GATE_` and is not one of the core's or Beeper's lists. Editing it on the dashboard comes with package 2b (S5); until then it is an environment variable. |
+| `enabled` | no | `false` keeps the action in the file without offering it. |
+| `timeout_seconds` | no | How long one call may take, 1 to 120, default 30. |
+
+Placeholders replace whole string values only:
+
+| Placeholder | Becomes |
+|-------------|---------|
+| `$params` | Every parameter the agent may set (the readOnly ones left out). |
+| `$params.<name>` | One of them; left out of the call when the agent did not set it. A readOnly field is refused. |
+| `$attempt_key` | `<outbox_id>.<attempt>`: a new key for each execution, so a gateway that dedupes on it sees one key per attempt. Not in `describe`. |
+| `$$...` | A literal `$...`. Any other value that starts with `$` is refused when the file is read. |
+
+| The call | The request |
+|----------|-------------|
+| The gateway could not be reached, or refused the key before the call | failed: it waits again |
+| The answer's `path` value is in `sent` | sent |
+| The answer's `path` value is in `failed` | failed: it waits again, and the next execution gets a new `$attempt_key` |
+| Anything else: another value, no value, an error answer, no answer after the call left | unclear: never repeated |
+| `describe` fails when an agent asks, or a copied value does not fit its field | refused, `describe_failed` (retryable); nothing queued, and nothing of the answer shown |
+| `describe` fails just before the send | not sent; the request waits again |
+
+A file that cannot be used stops the start with the file, the JSON pointer of the place and the check command; so does the
+file without `GATE_GATEWAY_URL` or `GATE_EXEC_KEY`. Whoever writes the file is trusted: it decides which tools are called.
+
+D1, the LiteLLM spike (2026-11-15, LiteLLM `main` at d49706f, v1.110 docs): the `pre_mcp_call` hook sees the tool, its arguments
+and the caller, but it can only change the arguments or headers or raise; it cannot answer a call with a queued result, and
+LiteLLM keeps no store or replay path for a call approved later. One of three, so the file connector stays.
+
 ## Refusal codes
 
 `approval_request` refuses with one JSON object, raised as a tool error: `{status: "refused", sent: false, reason, message, fix,

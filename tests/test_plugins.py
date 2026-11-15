@@ -104,14 +104,14 @@ def two_plugins(monkeypatch):
 
 
 def test_plugins_come_from_the_entry_points_after_the_built_in_ones(two_plugins):
-    assert [p.id for p in P.load_plugins()] == ["beeper", "chatty", "mailbox"]
-    assert isinstance(StubMail(), P.MailCapability) and P.load_plugins()[2].capabilities.names() == ["mail"]
+    assert [p.id for p in P.load_plugins()] == ["beeper", "gateway", "chatty", "mailbox"]       # gateway: file actions (gate_connectors)
+    assert isinstance(StubMail(), P.MailCapability) and P.load_plugins()[3].capabilities.names() == ["mail"]
     assert "CHATTY_SEND_ALLOWLIST" in P.settings_keys()
 
 
 def test_a_broken_plugin_is_skipped_and_the_rest_load(monkeypatch):
     monkeypatch.setattr(P, "entry_points", lambda: [("gone", "no_such_module:plugin"), ("mailbox", "test_plugins:mailbox_plugin")])
-    assert [p.id for p in P.load_plugins()] == ["beeper", "mailbox"]
+    assert [p.id for p in P.load_plugins()] == ["beeper", "gateway", "mailbox"]
 
 
 async def test_both_show_under_connected_services_and_on_connect(web, two_plugins):

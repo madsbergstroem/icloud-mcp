@@ -529,6 +529,8 @@ def _protects_notes(s: Settings, *paths: str | None) -> None:
 
 
 def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
+    from .gate_connectors.actions import check_start
+    check_start()                              # a connector file that cannot be used stops the start, naming the place and the fix
     """The MCP server with its tools. In local mode (stdio) there is no OAuth provider and no web pages: the desktop client that
     starts the process is the only one talking to it."""
     global _tool_timeout, _structured_content, _error_secrets, _error_ids, _executor, _mac_executor, _pause_file, _audit, _audit_provider

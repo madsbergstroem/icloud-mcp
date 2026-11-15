@@ -1,0 +1,82 @@
+{
+  "$schema": "https://example.org/sendgate/actions.schema.json",
+  "version": 1,
+  "actions": [
+    {
+      "action": "market.message.send",
+      "title": "Marketplace reply",
+      "badge": "Market",
+      "approve_label": "Send",
+      "tool": "market-call_write_operation",
+      "arguments": {
+        "site": "example-market",
+        "op": "sendMessage",
+        "args": "$params",
+        "idempotencyKey": "$attempt_key"
+      },
+      "params_schema": {
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "text"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "conversation_title": {
+            "type": "string",
+            "readOnly": true,
+            "maxLength": 200
+          }
+        }
+      },
+      "text_field": "text",
+      "recipient_fields": [
+        "conversation_id"
+      ],
+      "rows": [
+        [
+          "Listing",
+          "conversation_title"
+        ]
+      ],
+      "describe": {
+        "tool": "market-call_operation",
+        "arguments": {
+          "site": "example-market",
+          "op": "getConversation",
+          "args": {
+            "id": "$params.conversation_id"
+          }
+        },
+        "copy": {
+          "conversation_title": "data.title"
+        },
+        "recheck": [
+          "conversation_title"
+        ]
+      },
+      "result": {
+        "path": "write",
+        "sent": [
+          "accepted",
+          "applied"
+        ],
+        "failed": [
+          "not_sent",
+          "not_applied"
+        ]
+      },
+      "allow_setting": "MARKET_SEND_ALLOWLIST",
+      "timeout_seconds": 30
+    }
+  ]
+}
