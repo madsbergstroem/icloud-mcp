@@ -100,6 +100,8 @@ def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
                            "settings": group.slug if group is not None else "",
                            "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key,
                            "reading_keys": dict(m.reading_keys)}
+    elif p.actions and p.settings_group is not None:      # a plugin with actions only: its page links the owner's lists
+        out["actions"] = {"count": len(p.actions), "settings": p.settings_group().slug}
     return out
 
 
