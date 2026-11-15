@@ -48,7 +48,7 @@ export async function post(path, body, again) {
     return await parse(r);
   } catch (e) {
     if (e.status === 403 && e.body.confirm && !again && confirmer) {
-      await confirmer();                          // throws when the owner cancels
+      await confirmer(e.body.why);                // throws when the owner cancels; why names what the step changes
       await loadSession();                        // a fresh sign-in has a fresh token
       return post(path, body, true);
     }

@@ -171,6 +171,7 @@ class Service extends HTMLElement {
     const items = !l ? "" : l.problem && !l.items.length ? row({ title: esc(l.problem) })
       : l.items.map((x, i) => row({ title: esc(x.title), sub: esc(x.sub || ""), button: !!x.detail, attrs: x.detail ? `data-item="${i}"` : "" })).join("");
     const allow = m && m.settings ? (st.groups.find((x) => x.slug === m.settings) || {}).summary || "" : "";
+    const acts = p.actions, actsSummary = acts ? (st.groups.find((x) => x.slug === acts.settings) || {}).summary || "" : "";
     this.body.innerHTML = titleBlock(p.name, `${esc(p.description)} ${esc(p.status)}.`) + restartNotice(st)
       + (l ? section(l.label || "Accounts") + `<ion-list class="inset">${items}</ion-list>` + (l.note ? `<p class="note">${esc(l.note)}</p>` : "") : "")
       + (m && m.picker ? sendingSection(p, this.rec) + (m.reading_keys && m.reading_keys.on ? readingSection(p, st) : "")
@@ -178,7 +179,11 @@ class Service extends HTMLElement {
         ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: m.sending ? "On" : "Off", noteClass: m.sending ? "state-on" : "state-off" })}
         ${m.settings ? row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" }) : ""}
         ${row({ title: "Read chats", note: m.reading ? "On" : "Off", noteClass: m.reading ? "state-on" : "state-off" })}</ion-list>` : "")
+      + (acts ? section("What your assistant may do") + `<ion-list class="inset">
+        ${row({ title: "Ask for an action", sub: "Carried out only after your approval", note: String(acts.count) })}
+        ${row({ title: "Who it may reach", note: esc(actsSummary), button: true, attrs: "data-acts" })}</ion-list>` : "")
       + (p.limits ? `<p class="note">${esc(p.limits)}</p>` : "");
+    this.querySelector("[data-acts]")?.addEventListener("click", () => push(this, "icm-group", { page: acts.settings, title: "Who it may reach" }));
     this.querySelectorAll("[data-item]").forEach((n) => n.addEventListener("click", () => {
       const x = l.items[Number(n.dataset.item)];
       const al = document.createElement("ion-alert");

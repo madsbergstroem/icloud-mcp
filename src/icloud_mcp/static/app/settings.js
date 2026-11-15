@@ -223,7 +223,10 @@ class Group extends HTMLElement {
     for (const [name, list] of Object.entries(sections)) {
       const helps = list.filter((f) => f.help && !cfg.keys).map((f) => `${f.label}: ${f.help}`);
       const env = list.filter((f) => f.source === "environment").map((f) => f.label);
+      const empty = list.filter((f) => f.empty_hint && !String(f.value).trim());
       h += (name && Object.keys(sections).length > 1 ? section(name) : `<div style="height:14px"></div>`)
+        + empty.map((f) => `<div class="warnbox"><strong>Reaches nobody yet</strong>${esc(f.empty_hint)}
+          ${st.editable ? `<a href="#" data-focus="${esc(f.key)}">Add one</a>` : ""}</div>`).join("")
         + `<ion-list class="inset">${list.map((f) => this.field(f, st.editable)).join("")}</ion-list>`
         + (helps.length || env.length ? `<p class="note">${esc(helps.join(" "))}${env.length ? ` ${esc(env.join(", "))} ${env.length === 1 ? "comes" : "come"} from the server's environment.` : ""}</p>` : "");
     }
@@ -254,6 +257,12 @@ class Group extends HTMLElement {
   wire() {
     const save = this.querySelector("[data-save]");
     const mark = (k, val) => { this.changed[k] = val; if (save) save.disabled = false; };
+    this.querySelectorAll("[data-focus]").forEach((a) => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const input = this.querySelector(`ion-input[data-key="${a.dataset.focus}"]`);
+      input?.scrollIntoView({ block: "center" });
+      input?.setFocus();
+    }));
     this.querySelectorAll("ion-toggle[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.checked)));
     this.querySelectorAll("ion-select[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.value)));
     this.querySelectorAll("ion-input[data-key],ion-textarea[data-key]").forEach((n) => n.addEventListener("ionInput", (e) => mark(n.dataset.key, e.detail.value)));
@@ -380,8 +389,20 @@ class Server extends HTMLElement {
   async load() {
     let srv, st;
     try { [srv, st] = await Promise.all([get("/server"), get("/settings")]); } catch (e) { fail(e); return; }
-    const areas = srv.areas.length ? srv.areas.map((a) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(a.area)}</h2>${a.ok ? "" : `<p>${esc(a.error)}</p>`}</ion-label>
-      <ion-note slot="end" class="${a.ok ? "state-on" : ""}" ${a.ok ? "" : 'style="color:var(--negative)"'}>${a.ok ? `Reachable · ${(a.ms / 1000).toFixed(1)} s` : "Failed"}</ion-note></ion-item>`).join("")
+    // problems first, then warnings; the lines that are fine fold into one, opened with a tap
+    const line = (a) => {
+      const lvl = a.level || (a.ok ? "ok" : "problem");
+      const note = a.note || (lvl === "problem" ? "Failed" : `Reachable · ${(a.ms / 1000).toFixed(1)} s`);
+      const style = lvl === "problem" ? 'style="color:var(--negative)"' : lvl === "warning" ? 'style="color:var(--note-ink)"' : "";
+      return `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(a.area)}</h2>${lvl === "ok" ? "" : `<p>${esc(a.error)}</p>`}</ion-label>
+        <ion-note slot="end" class="${lvl === "ok" ? "state-on" : ""}" ${style}>${note}</ion-note></ion-item>`;
+    };
+    const fine = srv.areas.filter((a) => (a.level || (a.ok ? "ok" : "problem")) === "ok"), rest = srv.areas.filter((a) => !fine.includes(a));
+    const folded = rest.length && fine.length > 1;
+    const areas = srv.areas.length ? rest.map(line).join("") + (folded
+      ? `<ion-item button detail="false" data-fine><ion-label><h2>${fine.length} more</h2></ion-label><ion-note slot="end" class="state-on">All fine · show</ion-note></ion-item>`
+        + `<div data-fine-list hidden>${fine.map(line).join("")}</div>`
+      : fine.map(line).join(""))
       : `<ion-item><ion-label><p>Not checked since the server started.</p></ion-label></ion-item>`;
     this.body.innerHTML = titleBlock("Server", `${esc(srv.host)} · version ${esc(srv.version)}${srv.paused ? " · paused" : ""}`)
       + section("Services", srv.checked_at ? `checked ${esc(ago(srv.checked_at))}` : "") + `<ion-list class="inset">${areas}</ion-list>
@@ -391,6 +412,7 @@ class Server extends HTMLElement {
         <p class="note">Pausing makes every tool answer that the server is paused. Nobody is signed out.</p>`
       + st.server.map((grp) => section(grp.title) + `<ion-list class="inset">${grp.rows.map(([k, val]) => row({ title: esc(k), note: esc(val) })).join("")}</ion-list>`).join("")
       + `<p class="note">Set in the server's environment by whoever runs it. A browser cannot change these.</p>`;
+    this.querySelector("[data-fine]")?.addEventListener("click", (e) => { this.querySelector("[data-fine-list]").hidden = false; e.currentTarget.remove(); });
     this.querySelector("[data-check]").addEventListener("click", async (e) => {
       e.target.disabled = true;
       try { await post("/server/check"); toast("Checked."); this.load(); } catch (err) { fail(err); e.target.disabled = false; }

@@ -83,10 +83,13 @@ class ExternalApprovals(ApprovalSource):
         rows = [(label, _shown(params[name])) for label, name in at.rows if params.get(name) not in (None, "", [])]
         warnings = self._call(at.warnings, params, "The cautions for this request could not be worked out.")
         people = self._call(at.recipients, params, "")
+        hold = reg.hold_now()
+        notes = ["Approving carries this out. If it is not certain that it went through, it is never repeated."]
         return {"title": at.title, "badge": at.badge, "rows": rows, "label": ", ".join(str(p) for p in people if p),
                 "text": str(params.get(at.text_field) or "") if at.text_field else "",
-                "notes": ["Approving carries this out. If it is not certain that it went through, it is never repeated."],
-                "warnings": warnings, "needs_override": False}
+                "notes": ([hold.text] if hold and hold.level == "note" else []) + notes,
+                "warnings": warnings, "needs_override": False,
+                **({"held": hold.text} if hold and hold.level == "blocked" else {})}
 
     @staticmethod
     def _call(fn: Any, params: Mapping[str, Any], failed: str) -> list[str]:
@@ -243,6 +246,9 @@ class ExternalApprovals(ApprovalSource):
         if reg is None:
             raise A.ExternalError(f"This kind of action ({type_id}) is not available on this server any more. Discard it.")
         plain, _ = self._check(reg, params)                      # as things stand now, like the recipient list of a mail
+        hold = reg.hold_now(approving=True)
+        if hold and hold.level == "blocked":                      # nothing claimed: the request keeps waiting
+            raise A.ExternalError(f"Not carried out: {hold.text}")
         claimed = self.box.claim(q.id, "executing")
         if claimed is None:
             raise A.ExternalError("It is no longer waiting.")

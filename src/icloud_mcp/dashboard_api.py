@@ -46,8 +46,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
     def err(error: str, status: int, **extra: Any) -> JSONResponse:
         return JSONResponse({"ok": False, "error": error, **extra}, status_code=status, headers=headers)
 
-    def need_confirm() -> JSONResponse:
-        return err("confirm", 403, confirm=True, message="Confirm it is you: this step changes how your server is protected.")
+    def need_confirm(why: str = "") -> JSONResponse:
+        return err("confirm", 403, confirm=True, message="Confirm it is you: this step changes how your server is protected.",
+                   **({"why": why} if why else {}))
 
     def reader(request: Request) -> tuple[str, dict[str, Any]] | JSONResponse:
         got = signed_in(request)
@@ -200,6 +201,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
+                **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
     def described(only: str = "") -> list[tuple[Any, Any, dict[str, Any]]]:
@@ -269,7 +271,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src, q, v = found[0]
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
-               "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}), "files": [], "missing": [], "original": None,
+               "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
+               **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
                "account": mail_account(s) if src.kind == "mail" else ""}
         if src.kind == "mail":
@@ -339,6 +342,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return ok({"note": "Discarded. Nothing was sent."})
         if v.get("approvable") is False:
             return err("This cannot be approved. Discard it.", 409)
+        if v.get("held"):
+            return err(f"Not sent: {v['held']}", 409)
         if v["needs_override"] and body.get("override") is not True:
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
         if v.get("blocked"):
@@ -471,8 +476,15 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if isinstance(got, Response):
             return got
         health = d.last_health
-        areas = [{"area": a.replace("_", " ").capitalize(), "ok": bool(r.get("ok")), "ms": r.get("ms", 0),
-                  "error": "" if r.get("ok") else (r.get("error") or "")[:160]} for a, r in ((health or {}).get("areas") or {}).items()]
+        areas = []
+        for a, r in ((health or {}).get("areas") or {}).items():
+            if r.get("actions"):                     # an area that reports per action (the gateway connector): one line each
+                areas += [{"area": x["name"], "level": x["level"], "ok": x["level"] != "problem", "ms": 0, "error": x["text"][:160],
+                           "note": {"problem": "Bypassable", "warning": "Not checked"}.get(x["level"], "Fine")} for x in r["actions"]]
+                continue
+            areas.append({"area": a.replace("_", " ").capitalize(), "ok": bool(r.get("ok")), "level": "ok" if r.get("ok") else "problem",
+                          "ms": r.get("ms", 0), "error": "" if r.get("ok") else (r.get("error") or "")[:160]})
+        areas.sort(key=lambda x: {"problem": 0, "warning": 1}.get(x["level"], 2))     # problems first, then warnings (H2)
         return ok({"version": version(), "paused": d.paused(), "checked_at": (health or {}).get("_at"), "areas": areas,
                    "tools": len(mcp._tool_manager.list_tools()), "apps": [a["name"] for a in provider.connected_apps()],
                    "bridge": bridge_state(), "host": d.host})

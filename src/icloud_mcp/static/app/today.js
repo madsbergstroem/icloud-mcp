@@ -23,7 +23,7 @@ function finding(waiting) {
 function itemSub(w) {
   const to = w.to ? `to ${esc(w.to)}` : "";
   const text = w.kind === "mail" ? to : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
-  const extra = w.blocked ? "a file is missing" : w.warning && !w.group ? "check this first" : "";
+  const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !w.group ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
   return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + (w.group ? tag("Group", "warn") : "") + [text, by, extra].filter(Boolean).join(" · ");
 }
@@ -271,6 +271,8 @@ class Item extends HTMLElement {
     }
     let h = titleBlock(it.title, this.subline()) + `<div data-result>${this.resultHtml()}</div>`;
     const ext = it.kind === "external";
+    if (it.held) h += `<div class="warnbox held" id="held-why"><strong>${icon("warning-outline")} Agents can send this without you</strong>
+      ${esc(it.held)} Approving is off until then. Settings › Server shows it.</div>`;
     if (ext && it.approvable !== false) h += this.card();
     if (it.warnings.length) {
       const grp = it.group;
@@ -307,6 +309,11 @@ class Item extends HTMLElement {
     const careful = it.warnings.length || it.needs_override;
     const sending = this.result && this.result.state === "sending";
     // with a warning, Discard is the main button and the send asks first
+    if (it.held) {                                                   // approving is off until the setup is fixed: Discard is the main button
+      foot(`<div class="acts"><ion-button data-discard>Discard</ion-button><ion-button class="neutral" disabled aria-describedby="held-why">${esc(it.approve_label)}</ion-button></div>`);
+      this.wire(id);
+      return;
+    }
     if (it.approvable === false) {                                   // a kind of action this server no longer has: only Discard
       foot(`<div class="acts"><ion-button class="neutral" data-discard>Discard</ion-button></div>`);
       this.wire(id);

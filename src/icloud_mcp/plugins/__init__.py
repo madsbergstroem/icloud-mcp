@@ -102,6 +102,9 @@ class ActionSpec:
     - policy(ctx): further rules on the parameters (a reason a request is not permitted, or None), or None.
     - prepare(ctx, params): asks the service about the target and returns the parameters that are stored, so the card shows the
       service's words. Fields it adds are readOnly in the schema. Raise actions.ExternalError to refuse. Optional.
+    - hold(ctx, approving): whether approving is off right now (actions.Hold level "blocked", with the reason the card shows) or the card
+      needs a note (level "note"); None otherwise. Read on every look; approving is True just before a release, so the plugin
+      may check again then. Optional.
     - recheck(ctx, params): called after the owner approved and before the executor; returns 'target_changed' when the target is
       not what the owner saw (nothing is carried out and the request ends), else None. Optional.
     """
@@ -111,6 +114,7 @@ class ActionSpec:
     policy: Callable[[PluginContext], Callable[[Mapping[str, Any]], str | None] | None] = lambda c: None
     prepare: Callable[[PluginContext, Mapping[str, Any]], Mapping[str, Any]] | None = None
     recheck: Callable[[PluginContext, Mapping[str, Any]], str | None] | None = None
+    hold: Callable[[PluginContext, bool], Any] | None = None   # (ctx, approving) -> an actions.Hold or None, read every time
 
 
 # -- capabilities ---------------------------------------------------------------------------------------------------------------
@@ -253,7 +257,8 @@ def entry_points() -> list[tuple[str, str]]:
 
 def load_plugins() -> list[Plugin]:
     """Every plugin, the built-in ones first, each id once."""
-    marker = tuple(os.environ.get(k, "") for k in ("GATE_ACTIONS_FILE", "GATE_GATEWAY_URL", "GATE_EXEC_KEY"))
+    marker = tuple(os.environ.get(k, "") for k in ("GATE_ACTIONS_FILE", "GATE_GATEWAY_URL", "GATE_EXEC_KEY", "GATE_AGENT_KEY_PROBE",
+                                                   "GATE_PROBE_REQUIRED"))
     return list(_loaded((*BUILTIN.items(), *entry_points()), marker))     # a changed connector setup builds the plugins again
 
 

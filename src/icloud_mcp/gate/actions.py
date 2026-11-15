@@ -186,6 +186,16 @@ class Executor(Protocol):
 
 
 @dataclass(frozen=True)
+class Hold:
+    """What a type says about approving right now, apart from any one request. level "blocked": approving is off and `text` says
+    why (nothing is carried out; the request keeps waiting); level "note": a line the card shows, approving stays possible. `code`
+    is what an agent's answer names (approval_request's warnings)."""
+    level: str
+    code: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Registration:
     action_type: ActionType
     executor: Executor
@@ -199,6 +209,19 @@ class Registration:
     # ('target_changed'), else None. The request then ends as discarded and nothing is carried out.
     recheck: Callable[[Mapping[str, Any]], str | None] | None = None
     channel_tool: str | None = None            # the tool that owns this type (messages_send_request); approval_request refuses it
+    # whether approving is off right now (blocked) or needs a note, read every time; called with approving=True just before a
+    # release, so a type may check again then (the gateway connector probes when its last look is old)
+    hold: Callable[[bool], Hold | None] | None = None
+
+    def hold_now(self, approving: bool = False) -> Hold | None:
+        """The type's hold as it is now. One that raises blocks: approving must not depend on a function that failed."""
+        if self.hold is None:
+            return None
+        try:
+            got = self.hold(approving)
+        except Exception:  # noqa: BLE001
+            return Hold("blocked", "hold_failed", "Whether this may be approved could not be worked out. Try again in a moment.")
+        return got if isinstance(got, Hold) and got.level in ("blocked", "note") else None
 
     def allowed_set(self) -> set[str]:
         return {str(x).strip().casefold() for x in self.allowed()}
@@ -213,7 +236,7 @@ class ActionRegistry:
                  policy: Callable[[Mapping[str, Any]], str | None] | None = None, *,
                  prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
                  recheck: Callable[[Mapping[str, Any]], str | None] | None = None,
-                 channel_tool: str | None = None) -> None:
+                 channel_tool: str | None = None, hold: Callable[[bool], "Hold | None"] | None = None) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
         anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient. policy: further
@@ -226,7 +249,7 @@ class ActionRegistry:
         if read_only_fields(action_type) and prepare is None:
             raise ValueError(f"Action type {action_type.id} has readOnly fields but no prepare to fill them in.")
         allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
-        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool)
+        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold)
 
     def copy(self) -> "ActionRegistry":
         """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the
