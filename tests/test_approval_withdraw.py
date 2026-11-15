@@ -129,7 +129,7 @@ async def test_when_the_claim_is_lost_to_an_approve_nothing_looks_like_success(w
     box = mcp._icloud_outboxes["mail"]
     real = box.claim
 
-    def owner_first(item_id):
+    def owner_first(item_id, state=None):              # claim takes how it ends since the store (gate/store.py)
         real(item_id)                                  # the owner's release got there first ...
         return real(item_id)                           # ... so the tool's own claim comes back empty
     box.claim = owner_first

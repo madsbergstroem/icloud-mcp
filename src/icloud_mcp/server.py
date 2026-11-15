@@ -2952,6 +2952,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         return {"ok": all(r["ok"] for r in results.values()), "since_start_seconds": round(time.monotonic() - _STARTED),
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
+                **({"approval_store": {"ok": False, "problem": p}} if (p := getattr(getattr(mcp, "_icloud_outboxes", {}).get("external"), "problem", "")) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
@@ -3049,7 +3050,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                     log.warning("plugin %s: action %s skipped (%s)", p.id, getattr(spec.action_type, "id", "?"), type(e).__name__)
         if registry.types():
             from .external import ExternalApprovals
-            external = ExternalApprovals(Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="external-outbox.json"), registry)
+            from .gate.store import Store
+            external = ExternalApprovals(Store(s.data_dir, "external", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
+                                              legacy="external-outbox.json"), registry)
     mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
                             "imessage": approval["imessage_outbox"],
                             "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,

@@ -89,7 +89,7 @@ class Withdrawals:
         if stored and stored != client:
             raise ToolError("Another client queued this request, so it is not yours to take back. Leave it: the owner decides on the "
                             "dashboard. Tell the owner if it is wrong.")
-        claimed = self.ledger.outboxes[kind].claim(item_id)
+        claimed = self.ledger.outboxes[kind].claim(item_id, "withdrawn")
         if claimed is None:                              # the owner (or the clock) got there between the look and the claim
             return self._not_withdrawn(item_id)
         badge, title = describe(kind, claimed, self.external)

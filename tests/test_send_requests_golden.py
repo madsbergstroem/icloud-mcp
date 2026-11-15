@@ -50,10 +50,14 @@ async def send_beeper(mcp, chat_id, text, **kw):
 def stored(box):
     """Every entry of a queue as it is kept, without what changes from run to run (id and times), in the order queued."""
     drop = ("id", "created_at", "expires_at")
-    return [{k: v for k, v in q.to_json().items() if k not in drop} for q in box._items.values()]
+    items = box._items.values() if hasattr(box, "_items") else box.pending()      # the external source keeps its queue in the store
+    return [{k: v for k, v in q.to_json().items() if k not in drop} for q in items]
 
 
 def on_disk(box):
+    if box.path.suffix == ".db":                     # the store: read the rows back through a second store on the same file
+        from icloud_mcp.gate.store import Store
+        return stored(Store(str(box.dir), "external", 3600, 100))
     return [{k: v for k, v in d.items() if k not in ("id", "created_at", "expires_at")} for d in json.loads(box.path.read_text())["items"]]
 
 

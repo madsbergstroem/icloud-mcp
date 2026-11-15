@@ -52,8 +52,9 @@ REFUSALS: dict[str, str] = {
     "describe_failed": "The service could not be asked about the target. Nothing was queued; try again in a minute.",
     "key_conflict": "Use a new request_id, or ask again with the same parameters.",
     "queue_full": "Do not retry. Tell the owner to review the waiting requests on the dashboard.",
+    "store_unavailable": "The approval store could not take it. Nothing was queued; try again in a minute.",
 }
-RETRYABLE = ("describe_failed",)
+RETRYABLE = ("describe_failed", "store_unavailable")
 RECHECK_CODES = ("target_changed",)     # what a recheck may answer; anything else it returns is logged as target_changed
 
 
@@ -72,6 +73,14 @@ class ExternalConflict(ExternalError):
 
     def __init__(self, message: str, code: str = "key_conflict", path: str | None = "request_id"):
         super().__init__(message, code, path)
+
+
+class AlreadyDecided(ExternalError):
+    """The request_id names a request that has already ended. Nothing is queued; the answer is that request's outcome."""
+
+    def __init__(self, item_id: str, state: str):
+        super().__init__(f"This request_id belongs to a request that already ended ({state}). Nothing was queued.", "key_conflict", "request_id")
+        self.item_id, self.state = item_id, state
 
 
 class Rechecked(ExternalError):

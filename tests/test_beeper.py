@@ -304,7 +304,7 @@ async def test_with_the_settings_the_tool_and_the_source_appear_and_the_shared_r
     app, mcp, src = launch(web, hub)
     assert "messages_send_request" in [t.name for t in mcp._tool_manager.list_tools()]
     assert src.registry.get(B.ACTION_ID) is not None and hub.types() == []       # the server's own copy took the type
-    assert src.box.path.name == "external-outbox.json"
+    assert src.box.path.name == "approvals.db"
 
 
 # -- asking ----------------------------------------------------------------------------------------------------------------------------

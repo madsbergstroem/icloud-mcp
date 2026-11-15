@@ -26,6 +26,7 @@ from . import actions as A
 from .. import textedit as T
 from .status import Released
 from .source import ApprovalSource
+from . import store as S
 from .outbox import Outbox, OutboxFull, QueuedMessage
 
 log = logging.getLogger(__name__)
@@ -203,11 +204,24 @@ class ExternalApprovals(ApprovalSource):
         if key is not None and (old := next((x for x in self.box.pending() if x.key == key), None)) is not None \
                 and not self._same_request(old, reg.action_type, plain):
             raise A.ExternalConflict("This key was already used for a different request. Use a new key, or ask with the same parameters.")
+        extra = {"key_fingerprint": self.key_fingerprint(reg.action_type, plain)} if getattr(self.box, "keeps_keys", False) else {}
         try:
             return self.box.add(raw, people, None, key=key, approval_page="the dashboard's Approvals page",
-                                requested_by=requested_by, action_type=reg.action_type.id)
+                                requested_by=requested_by, action_type=reg.action_type.id, **extra)
         except OutboxFull as e:
             raise A.ExternalError(str(e), "queue_full") from e
+        except S.AlreadyDecided as e:
+            raise A.AlreadyDecided(e.item_id, e.state) from None
+        except S.KeyConflict:
+            raise A.ExternalConflict("This key was already used for a different request. Use a new key, or ask with the same parameters.") from None
+        except S.StoreUnavailable as e:
+            raise A.ExternalError(str(e), "store_unavailable") from None
+
+    @staticmethod
+    def key_fingerprint(at: A.ActionType, params: Mapping[str, Any]) -> str:
+        """What a key stands for: the parameters without the text (the owner may edit it) and without what the service fills in."""
+        skip = {at.text_field} | A.read_only_fields(at)
+        return S.fingerprint({k: v for k, v in params.items() if k not in skip})
 
     @staticmethod
     def _same_request(old: QueuedMessage, at: A.ActionType, params: Mapping[str, Any]) -> bool:
@@ -222,14 +236,14 @@ class ExternalApprovals(ApprovalSource):
 
     # -- the owner's decision ----------------------------------------------------------------------------------------------
     def discard(self, q):
-        self.box.claim(q.id)
+        self.box.claim(q.id, "discarded")
 
     def release(self, q):
         reg, type_id, params = self._entry(q)
         if reg is None:
             raise A.ExternalError(f"This kind of action ({type_id}) is not available on this server any more. Discard it.")
         plain, _ = self._check(reg, params)                      # as things stand now, like the recipient list of a mail
-        claimed = self.box.claim(q.id)
+        claimed = self.box.claim(q.id, "executing")
         if claimed is None:
             raise A.ExternalError("It is no longer waiting.")
         if claimed.sha256 != q.sha256:                           # edited between the owner's look and the click: that is not what was approved
@@ -243,7 +257,9 @@ class ExternalApprovals(ApprovalSource):
                 log.warning("The recheck of %s raised %s; the request waits again", type_id, type(e).__name__)
                 raise A.ExternalError("Not carried out: the service could not be asked about the target. Try again in a moment.") from None
             if reason:                                           # claimed and not put back: it ends here, nothing was carried out
-                raise A.Rechecked(reason if reason in A.RECHECK_CODES else "target_changed")   # a code, never the plugin's own text
+                code = reason if reason in A.RECHECK_CODES else "target_changed"   # a code, never the plugin's own text
+                self._record(self.box.finish, claimed.id, "discarded", code)
+                raise A.Rechecked(code)
         request = A.ActionRequest(claimed.id, type_id, plain, claimed.requested_by, claimed.key)
         try:
             result = reg.executor.execute(request)
@@ -255,8 +271,19 @@ class ExternalApprovals(ApprovalSource):
             result = A.Result("unclear", _UNCLEAR)
         line = _line(result.line)
         if result.status == "failed":
-            self.box.restore(claimed)                             # the other side never got it: safe to keep for a retry
+            self._record(self.box.restore, claimed)               # the other side never got it: safe to keep for a retry
             raise A.ExternalError(line or "Not carried out, still waiting.")
         if result.status == "unclear":
+            self._record(self.box.finish, claimed.id, "unclear")
             return Released(line or _UNCLEAR, "unconfirmed")
+        self._record(self.box.finish, claimed.id, "sent")
         return Released(line or "Done.", "sent")
+
+    @staticmethod
+    def _record(step: Any, *args: Any) -> None:
+        """Write how a request ended after the executor ran. The executor's answer stands even when this write fails: the owner is
+        told what happened, and the row, still `executing`, ends unclear at the next start and is never repeated."""
+        try:
+            step(*args)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not record how a request ended (%s); it stays executing until the next start", type(e).__name__)

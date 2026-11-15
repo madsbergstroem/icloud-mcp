@@ -100,6 +100,11 @@ class Requests:
         waiting = {q.id for q in self.external.box.pending()}
         try:
             q = self.external.queue_external(action, stored, None, key=request_id)
+        except A.AlreadyDecided as e:                    # the key's request has ended: its outcome, and nothing queued
+            status = "waiting" if e.state == "executing" else e.state
+            return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
+                    "notice": "Nothing was queued: this request_id belongs to a request that already ended. Do not ask again with it; "
+                              "approval_status with the outbox_id says more."}
         except A.ExternalError as e:
             raise refusal(e.code, str(e), e.path) from None
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "approve_at": self.link("external", q.id),

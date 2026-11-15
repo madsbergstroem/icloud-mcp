@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 and 1 are built; the others are not.
+shows. Packages 0, 1 and 3 are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
 
 ## Context
@@ -348,7 +348,7 @@ CREATE INDEX request_key ON request (source, key) WHERE key IS NOT NULL;
   answers with that request's status record. Mail, calendar and iMessage keep today's rule (a key matches waiting requests
   only), because their key names a saved draft that may be sent again.
 - On the first start the four JSON files are read into the table as `waiting` and renamed to `<name>.migrated`.
-  `dev/export_queue.py` writes the waiting rows back in the old format.
+  `python -m icloud_mcp.gate.export_queue DATA_DIR` writes the waiting rows back in the old format and ends them in the store.
 - Every log line of a request gains `sha256`: `tool.queued`, `approval.edited`, `approval.edit_undone`, `approval.sent`,
   `approval.failed`, `approval.discarded`, `approval.withdrawn`, `approval.expired`.
 
@@ -361,7 +361,7 @@ Acceptance criteria:
 4. After a request ended, `SELECT raw, recipients, followup, edited_from` for its row returns four NULLs.
 5. Starting on a `DATA_DIR` with the four JSON files of `tests/fixtures/legacy_approvals_golden.json` gives the same waiting
    requests, with the same ids and hashes, and four `.migrated` files.
-6. `dev/export_queue.py`, run after that start, writes files that the previous version loads with the same ids and hashes.
+6. `python -m icloud_mcp.gate.export_queue`, run after that start, writes files that the previous version loads with the same ids and hashes.
 7. For one request that was edited once and then approved, the log holds three lines whose `sha256` values are the first hash,
    the second hash and the second hash again.
 8. The 10 test files that name a queue file read through the store and pass.
@@ -372,6 +372,17 @@ Acceptance criteria:
 | Unit | Key rule per source | +3 |
 | Integration | Crash recovery, two approvals at once | +2 |
 | Integration | Migration from the golden files and back | +2 |
+
+### As built
+
+Package 3 is built for the external source only, as decision D5 says: `gate/store.py` holds plugin actions and Beeper
+messages; mail, calendar and iMessage keep their JSON files until packages 4 to 6, and criteria 5, 6 and 8 apply to
+`external-outbox.json` only until then. The table has three columns more than the sketch above, from the review obligations:
+`attempts` (E-4), `outcome_reason` (E-15) and `key_fingerprint` (E-10), and the key index is unique for the external source
+(E-11). `claim(id, state)` takes `executing`, `discarded` or `withdrawn`; `finish(id, state, reason)` ends a request that was
+being carried out. A row found `executing` at start ends `unclear` with reason `interrupted` and is logged once as an
+`approval.sent` with delivery `unconfirmed`; a `reported` column makes each such report and each expiry happen exactly once, also across a restart. Only the first store a process opens on a DATA_DIR recovers rows. A corrupt queue file is set aside and the start continues (E-1 replaces the "stops the start" of X15). `PRAGMA user_version` is 1; a newer database stops the start. The export lives in the package (`python -m icloud_mcp.gate.export_queue`), so it runs in the Docker image. `Store(data_dir, source, ...)` takes the source; the JSON `Outbox` keeps its
+`filename` until packages 4 to 6 move its sources. Health reports a queue file that could not be read as `approval_store`.
 
 ## Rules for whoever implements a package
 
@@ -403,7 +414,7 @@ git diff ORIG_HEAD...MERGE_HEAD -- src/icloud_mcp/outbox.py src/icloud_mcp/audit
 | 0 | Revert the commit; it moves files and adds two tests |
 | 1 | Revert; no stored data changes shape. Waiting requests of a type that is gone show as "Unknown action" and can be discarded, as today (`external.py:77-80`) |
 | 2 | Unset `GATE_ACTIONS_FILE`; the types are not registered and their waiting requests show as above |
-| 3 | Run `dev/export_queue.py`, stop, start the previous version. Requests that ended after the migration keep their log lines and lose nothing else |
+| 3 | Stop the server, run `python -m icloud_mcp.gate.export_queue DATA_DIR` (in the image: `docker run --rm -v <volume>:/data <image> python -m icloud_mcp.gate.export_queue /data`), start the previous version. The exported requests end in the store, so a later upgrade reads the file in again and never revives one the old version sent. Ended requests and their keys are lost to the previous version; their log lines stay |
 
 ## Effort
 
@@ -513,6 +524,11 @@ The `request_id` was already used for a request with other parameters. Use a new
 ### Refusal codes: queue_full
 
 Too many requests are waiting for the owner. Do not retry; tell the owner.
+
+### Refusal codes: store_unavailable
+
+The approval store could not take the request (a full disk, a database busy for too long). Adds `retryable: true` and
+`side_effects: "none"`; asking again later may pass.
 
 ## Review obligations
 

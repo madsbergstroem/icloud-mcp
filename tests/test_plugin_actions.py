@@ -292,6 +292,7 @@ REFUSAL_CASES = {
     "describe_failed": "fail",
     "key_conflict": "key",
     "queue_full": "full",
+    "store_unavailable": "store",
 }
 
 
@@ -310,6 +311,12 @@ async def test_every_refusal_code_answers_with_its_fix_and_queues_nothing(web, p
     elif case == "key":
         await call(mcp, "approval_request", **ASK, request_id="k-1")
         case = dict(action=ASK["action"], params={**ASK["params"], "slot": "11:00"}, request_id="k-1")
+    elif case == "store":
+        from icloud_mcp.gate import store as S
+        def busy(*a, **k):
+            raise S.StoreUnavailable("The approval store cannot take a request right now. Nothing was queued.")
+        src.box.add = busy
+        case = ASK
     elif case == "full":
         await call(mcp, "approval_request", **ASK)
         case = dict(action=ASK["action"], params={**ASK["params"], "slot": "11:00"})
@@ -444,3 +451,17 @@ def test_the_card_script_holds_the_reviewed_order_and_words():
     for needle in ("it.rows.slice(0, 1)", "it.rows.slice(1)", "Not sure it reached ${esc(it.badge)}.", "Nothing will be sent again; look there first.",
                    "<b>Did not go out:</b>", 'it.approvable === false', 'e.body.state === "discarded"'):
         assert needle in js, needle
+
+
+async def test_a_request_id_whose_request_was_sent_queues_nothing_and_answers_sent(web, parcel):
+    """protects=an agent that asks again with the same request_id after the owner approved never gets a second booking (package 3,
+    criterion 3); fails_when=a second card is queued; no_claim=after AUDIT_KEEP_DAYS, when the row and its key are gone."""
+    app, mcp, *_ = web(PARCEL_DEPOTS="d-17")
+    first = await call(mcp, "approval_request", **ASK, request_id="pickup-sent")
+    q = mcp._icloud_dashboard.sources["external"].pending()[0]
+    async with client(app) as c:
+        token = await signed_in(c)
+        assert (await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))).status_code == 200
+    again = await call(mcp, "approval_request", **ASK, request_id="pickup-sent")
+    assert (again["status"], again["sent"], again["outbox_id"], again["already_decided"]) == ("sent", True, first["outbox_id"], True)
+    assert mcp._icloud_dashboard.sources["external"].pending() == [] and len(BOOKED) == 1

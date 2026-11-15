@@ -100,6 +100,15 @@ class ApprovalLedger:
         self.audit = audit
         for kind, box in self.outboxes.items():
             box.on_expiry(lambda q, kind=kind: self._log_expiry(kind, q))
+            if hasattr(box, "on_recovered"):          # the store: requests a crash left half carried out
+                box.on_recovered(lambda q, kind=kind: self._log_recovered(kind, q))
+
+    def _log_recovered(self, kind: str, q: Any) -> None:
+        """A request that was being carried out when the server stopped: it may have gone out, so it reads unclear and is never
+        repeated. Logged as an approval.sent whose delivery is unconfirmed, as an unconfirmed send always is."""
+        self.audit.record("approval.sent", actor="server", summary=f"A {kind} request was being carried out when the server stopped; "
+                          "it may have gone through", kind=kind, outbox_id=q.id, delivery="unconfirmed",
+                          action_type=getattr(q, "action_type", None), sha256=getattr(q, "sha256", None))
 
     def _log_expiry(self, kind: str, q: Any) -> None:
         self.audit.record("approval.expired", actor="server", summary=f"A queued {kind} message expired without an answer",

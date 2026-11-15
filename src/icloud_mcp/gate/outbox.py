@@ -39,6 +39,7 @@ class QueuedMessage:
     edited_from: str | None = None    # the text the agent asked for, kept while the owner's edited text is what waits (textedit.py)
     requested_by: str | None = None   # the name the queueing client gave itself (a label against mix-ups, not a credential)
     action_type: str | None = None    # which registered kind of action this is, for a source that holds several (actions.py); the entry's own bytes say it too
+    attempts: int = 0                 # how often it was carried out (the store counts; a JSON entry writes it only above 0, so old bytes stay)
 
     def to_json(self) -> dict[str, Any]:
         return {"id": self.id, "created_at": self.created_at, "expires_at": self.expires_at,
@@ -46,7 +47,8 @@ class QueuedMessage:
                 "followup": self.followup, "sha256": self.sha256, **({"key": self.key} if self.key else {}),
                 **({"edited_from": self.edited_from} if self.edited_from is not None else {}),
                 **({"requested_by": self.requested_by} if self.requested_by else {}),
-                **({"action_type": self.action_type} if self.action_type else {})}
+                **({"action_type": self.action_type} if self.action_type else {}),
+                **({"attempts": self.attempts} if self.attempts else {})}
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "QueuedMessage":
@@ -54,7 +56,7 @@ class QueuedMessage:
         if hashlib.sha256(raw).hexdigest() != d["sha256"]:
             raise ValueError("outbox entry failed its integrity check")
         return cls(d["id"], d["created_at"], d["expires_at"], raw, list(d["recipients"]), d.get("followup"), d["sha256"], d.get("key"),
-                   d.get("edited_from"), d.get("requested_by"), d.get("action_type"))
+                   d.get("edited_from"), d.get("requested_by"), d.get("action_type"), int(d.get("attempts") or 0))
 
 
 class Outbox:
@@ -161,8 +163,9 @@ class Outbox:
             self._prune()
             return sorted(self._items.values(), key=lambda q: q.created_at)
 
-    def claim(self, item_id: str) -> QueuedMessage | None:
-        """Atomically remove and return an item, so it can be released at most once."""
+    def claim(self, item_id: str, state: str | None = None) -> QueuedMessage | None:
+        """Atomically remove and return an item, so it can be released at most once. state: how it ends, for the store
+        (store.py), which keeps ended requests; this JSON queue keeps none, so it only removes the item."""
         with self._lock:
             self._prune()
             q = self._items.pop(item_id, None)
@@ -183,6 +186,9 @@ class Outbox:
             self._items[item_id] = q
             self._save()
             return q
+
+    def finish(self, item_id: str, state: str, reason: str | None = None) -> None:
+        """How a claimed request ended, for the store (store.py). This queue already forgot it when it was claimed."""
 
     def restore(self, q: QueuedMessage) -> None:
         """Put a claimed item back (used when the send itself failed, so the owner can retry)."""
