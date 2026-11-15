@@ -1,6 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
-Status: proposal, 2026-11-13. "Sendgate" is the working title the dashboard already shows. Package 0 is built; the others are not.
+Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
+shows. Package 0 is built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
 
 ## Context
@@ -135,13 +136,14 @@ time; none of them is needed for a new service.
 
 ## Package 0: draw the line
 
-This package only moves files, so `git log --follow` still finds each file's history afterwards.
+This package only moves files; `git log --follow -M -C` still finds each file's history afterwards.
 
 - New package `src/icloud_mcp/gate/` with `actions.py`, `external.py`, `outbox.py`, `status.py` (from `approval_status.py`),
   `withdraw.py` (from `approval_withdraw.py`), `audit.py`, `push.py` and `source.py`, which holds the `ApprovalSource` base
   class that was in `dashboard.py:159-201`.
 - `textedit.py` stays outside: it imports `mail` for the mail source's text. It is `mixed` until package 6 moves that part.
-  The gate still imports it (`TextLocked`, `TextInvalid`, `clean`), so the gate cannot leave this server on its own before then.
+  The gate still imports it (`TextLocked`, `TextInvalid`, `clean`), and through it `mail`; it also imports `callctx`
+  (`gate/outbox.py:22`, `gate/withdraw.py:36`). Both ties keep the gate inside this server until package 6 removes them.
 - The old module paths stay as aliases (`sys.modules[__name__]` is the new module), as `icloud_mcp.beeper` does today, so
   imports and monkeypatches written against them reach the module that runs.
 - `dev/provenance.toml` maps path patterns to the bins `upstream`, `mergeable`, `gate`, `connector`, `mixed` and `fork`.
@@ -379,8 +381,8 @@ Acceptance criteria:
 3. Any change to a test, a golden file, a timeout, a threshold or a suppression is reported on its own line, with its reason,
    before any other result.
 4. A reported command comes with what it printed: exit status, counts, the failing line.
-5. One commit touches one bin of `dev/provenance.toml`. A change that needs two bins is two commits; a move touches the bins it
-   moves between and nothing else.
+5. One commit touches one bin of `dev/provenance.toml`, and every commit passes the full suite. A change that needs the `gate`
+   and a `mixed` file lands as two commits, gate first; a move touches the bins it moves between and nothing else.
 6. `CONTRIBUTING.md` applies in full: made-up data only, noreply author, no co-author trailers, `python dev/privacy_check.py`.
 
 ## Merging upstream
@@ -446,3 +448,90 @@ To be asked once packages 0 to 3 run in the fork.
 2. If yes: is a `gate` package inside the repository acceptable, with the import rule of package 0?
 3. Which of the `mergeable` candidates are welcome as pull requests of their own, whatever the answer to 1?
 4. Is SQLite for the queue acceptable, given that upstream's `outbox.py` is a JSON file of 129 lines?
+
+## Review obligations
+
+A review on 2026-11-13 (`/autoplan`: CEO, design, developer experience and engineering) accepted the obligations below. They
+bind the package each one names and win over the package text above where the two differ. The ids are kept so pull requests
+can cite them.
+
+### Direction and scope
+
+- E1 (package 2, folded into its bullets, criteria, tests and effort): an always-reported agent-key check (not a start blocker) per action from `GATE_ACTIONS_FILE`. `GATE_AGENT_KEY_PROBE` takes one or more keys (comma-separated) with the grants agents have. It runs at start and on every `icloud_check_health` call; cards read the last result held in memory; before the first probe finishes, or when the gateway cannot be reached for it, the card and health say "agent grants not checked" as a warning. The card warning goes through the action type's existing `warnings` function (`gate/actions.py:71`), so the gate learns nothing about gateways. Unset: health reports "agent grants not checked" as a warning (the server still starts). A probe key that can list the action's `tool`: health reports a problem and the card warns that agents can bypass the gate. Tests: unset gives the warning; a fake gateway that lists the send tool to a probe key gives the problem line and the card warning; two keys, one of them bypassing, give the problem; clean keys give ok; no probe key value appears in any error, log line or answer. `no_claim`: listing is checked, not calling; a gateway that hides a tool from the list but still allows the call passes this check. Effort +60 min work, +10 min review.
+- E2 (package 2): an action whose allow setting is empty shows "reaches nobody yet" in that connector's settings section on the dashboard (where Beeper's `BEEPER_SEND_ALLOWLIST` is edited today, `plugins/beeper/__init__.py:51`). Test: empty shows the hint; `*` or one entry removes it. Effort +30 min.
+- S5 (package 2): each `allow_setting` is registered at start as a setting of the gateway connector's own settings section, the way Beeper's plugin registers `BEEPER_SEND_ALLOWLIST`; the gate itself imports no `settings`. Widening the list (adding an entry or `*`) counts as loosening, like the Beeper list: the dashboard asks the owner to confirm with a recent sign-in (`settings.py:391`, `:509`, `api_need_confirm`). Test: widening without a recent sign-in is refused with the confirm answer; narrowing is not.
+- S1 (package 2, overrides plan line 276): when a `recheck` field differs at execution, nothing is sent and the request ends as `discarded` with the reason "the target changed since you looked; ask again". It is not `failed`, because `failed` would put it back unchanged and every later approval would fail the same way. The log gets `approval.discarded` with that reason and the request's `sha256`; `approval_status` answers `discarded` with the reason. Test: a title change at execution sends nothing, the request is not waiting afterwards, and a fresh `approval_request` queues a new card with the new title.
+- S2 (package 2): `describe` failing or timing out at queue time refuses the request (nothing queued, the answer says why). At execution, before the send, a `describe` failure or timeout gives `failed` (nothing was sent) and the request waits. One test for each.
+- Cl1 (package 2): `$request_id` is `<outbox_id>.<attempt>`, where `attempt` counts executions of this request (1 for the first, +1 after each `failed`). It is never the agent's optional `request_id`. A retry after `failed` therefore reaches the tool with a new key, while a gateway that dedupes on the key still sees one key per attempt. Test: `not_sent`, then a second approval, reaches the fake gateway twice with keys `.1` and `.2`.
+- K1 (package 3): an external request's lasting key ends when its row is deleted after `AUDIT_KEEP_DAYS`; after that the same `request_id` queues again. Intended; test with a row aged past the limit.
+- Cl2 (package 1): in `ActionSpec.allowed`, `*` means anyone and empty means nobody. Packages 4 to 6 must reconcile mail's `SEND_ALLOWLIST`, where empty means anyone.
+- Cl3 (package 1): `readOnly` is enforced by explicit code before schema validation; `jsonschema` does not refuse a `readOnly` field by itself.
+- C3/S3 (package 3): the `Outbox` interface changes: the constructor takes `source` instead of `filename` (call sites `server.py:1346`, `:2628`, `:3020`), and `claim` gains the target state (`claim(id)` for discard, `claim(id, "executing")` for approval; this replaces `claim(id, "execute")` in the package 3 transition table). `OUTBOX_MAX` stays a per-source limit. Test: a full mail queue does not block an external request.
+- F-CEO-4 (package 3): `Outbox.add` keeps `approval_page` and the full-queue message that names it (`gate/outbox.py:130,145`). Test: a full queue's error names the page passed in.
+- F3 (package 3 rollback row): after a rollback through `dev/export_queue.py`, ended requests and their lasting keys are gone; a repeated `request_id` queues again.
+- F-CEO-5 (package 0 text): `callctx` is named next to `textedit` as a tie that keeps the gate inside this server (`gate/outbox.py:22`, `gate/withdraw.py:36`).
+- C4: the owner kept the original order: every package is built and run in the fork first, and upstream is asked afterwards.
+- Deferred, not in this plan: E3 per-action daily cap; E4 reusable fake-gateway fixture (with package 7). Skipped: E5 proxy reframing (taste D1).
+- K0 (before the first real package-2 action): agents' LiteLLM keys lose every write tool the connector file names; only `GATE_EXEC_KEY` keeps them. An owner task in the gateway's own configuration, outside this repository. Verification: `icloud_check_health` reports the probe keys clean for every action.
+- D3 (accepted; package 2): an action whose `tool` a probe key can list is registered, but its approval is refused with "agents can call this tool directly; remove the grant first". Test: approval of such a request sends nothing and the card says why; after the probe turns clean, approval works.
+- D1 (accepted; before package 2): a written 60-minute spike of the LiteLLM `pre_mcp_call` hook (what it sees, whether it can hold a call and return a queued result, how the idempotency key maps), from LiteLLM's own docs. The config-file route stays unless the spike shows all three.
+- N4 (package 2): connector file format version 1 is frozen at the keys in the plan; anything beyond goes into a Python plugin through `ActionSpec`. A second real service is named in the PR before package 2 merges. Packages 8 and 9 run only on demand.
+- D5 (accepted; package 3): the store takes the `external` source first; mail, calendar and iMessage move to it with packages 4 to 6. Criteria 5, 6 and 8 of package 3 then apply to `external-outbox.json` only until those packages.
+- N7: at the start of each package, make-vs-buy is re-checked against gateway HITL features, one dated line in the PR.
+
+### Cards and states
+
+- H1 (package 1): one card order for every action type, set by the renderer: badge and title, recipient row (from `describe` copies, else a `recipient_fields` row), text, other rows, warnings, time left, Discard and the approve button. Load check (package 2): `recipient_fields` without a readable row stops the start. Test: a file-defined card renders in that order; the load check fails on a file without a recipient row.
+- H2 (package 2): health lines sort problem, warning, ok; ok lines fold into one count line. Test: one bypassable action among four shows first.
+- S-a (package 2): after a recheck discard, the item stays on Home for the session as "Not sent: the target changed since you looked. Your assistant has to ask again." Test: dashboard state after S1 shows it.
+- S-b/S-c/S-d (packages 1 and 2): file-defined actions use DESIGN.md's After Approve states; the unclear line comes from the type ("Not sure it reached {badge}. Nothing will be sent again; look there first."), replacing wording that names Messages or a conversation; a `failed` return shows "Did not go out: {reason}" above the buttons. Test per state.
+- S-e (package 2, with D3): while D3 holds, the approve button is off and the card shows the D3 sentence with a link to health; "agent grants not checked" is a note and never blocks. Test: both cards.
+- S-g (package 1): an unknown action shows its stored type id and age, with Discard. Test.
+- S-h (package 1): `approval_list_actions` with no actions returns `{actions: []}` and a one-line hint. Test.
+- J1 (package 2): the E2 hint links to the list field; the loosening confirm names the action. Test.
+- B1 (package 2): `badge` renders with the existing `.tag` in one neutral style; `approve_label` at most 12 characters, checked at load. Test.
+- A1 (package 1): one refusal shape for agents, `{status: "refused", sent: false, reason, message, path?}`, codes `unknown_action`, `schema`, `read_only`, `not_allowed`, `policy`, `channel_tool`, `bypassable`, `describe_failed`, `key_conflict`, `queue_full`; one test per code.
+- C1 (packages 1 and 2): every new owner and agent string is listed in one table in the PR and passes the humanizer skill before build.
+- P1 (before package 1 UI code): one standalone HTML mock of the card in every state (waiting, edited, sending, sent, unclear, did-not-go-out, discarded-by-recheck, warning note, blocked by D3, unknown action) and the settings hint, approved by the owner; the same list is the "one click per state" checklist.
+- Deferred: S-f refusal counts on the dashboard.
+
+### Agents and connector authors
+
+- X1 (package 2): `python -m icloud_mcp.gate_connectors check <file> [--probe]` runs the same loader as the start, prints each action and its card preview, exits 0 or 2 with errors on stderr; `--probe` calls `describe` and the agent-key probe once. The start error names this command as its fix. Test: a broken file exits 2 with the JSON pointer; a good file exits 0.
+- X2 (package 2, supersedes deferral E4): the fake gateway used by package 2's tests lives in `dev/fake_gateway.py` and is usable by a connector author. Test: package 2's tests import it from there.
+- X3 (package 2): `docs/examples/actions.example.json` with made-up data; a test loads it with the real loader.
+- X4 (package 1): `icloud_check_health` says "approval tools off: the dashboard is not enabled" when the tools are not registered. Test.
+- X5 (package 2): the file's substitution is `$attempt_key` (value `<outbox_id>.<attempt>`, per Cl1); `request_id` names only the agent's key. Test.
+- X6 (packages 1 and 2): the action identifier is `action` on every surface an agent or file author sees (the file key `id` becomes `action`); `action_type` stays internal.
+- X7 (package 1 docs): the allow-list rule is written once: empty means nobody, `*` means anyone; mail's `SEND_ALLOWLIST` (empty means anyone) is named as the exception until package 6.
+- X8 (package 2): substitution replaces whole values only; `$$` is a literal `$`; paths are dotted with no array index in v1; anything else is refused at load. One test per rule.
+- X9 (package 1): the `channel_tool` refusal names the tool to use; `approval_list_actions` leaves channel-owned types out.
+- X10 (package 2, with D3): a request for a bypassable action is queued, its answer carries `warnings: ["bypassable"]`, and approval is blocked (S-e); `bypassable` is removed from the refusal codes.
+- X11 (package 1): `PluginContext` is defined with its fields; `prepare(ctx, params) -> params`; `ActionSpec` and `PluginContext` carry a note "public from package 1, versioned in package 7".
+- X12 (packages 1 to 3): every A1 refusal has a `fix` line and is raised as `ToolError` (MCP `isError`), like the repo's other tools; `describe_failed` adds `retryable: true` and `side_effects: "none"` and passes on only the gateway's error class and status, never its body; start errors name the file, JSON pointer, env var and fix command and exit non-zero; a set `GATE_ACTIONS_FILE` with a missing `GATE_GATEWAY_URL` or `GATE_EXEC_KEY` stops the start naming the variable; userinfo or tokens in `GATE_GATEWAY_URL` are masked; an executor exception is logged as class name plus `outbox_id` only. Tests: one per code checks `fix` and the error flag; a gateway body marker never reaches the agent; a raised exception carrying a key or a param value leaves neither in the log.
+- X13 (package 1): `docs/SENDGATE.md` gets a "Refusal codes" section with one anchor per code; each refusal links it.
+- X14 (packages 1 and 2): docs sections "Writing a plugin action" and "Connector file reference" (every key, substitution grammar, the outcome table failed/unclear/sent, env vars, example); the JSON Schema of the file is published next to the loader and `$schema` is accepted. A test checks that every schema key and every refusal code appears in the docs.
+- X15 (package 3): migration copies the JSON entries into the table in one transaction, then renames each file to `.migrated`; on restart, a `.json` next to rows with the same ids is reconciled by id and hash and never imported twice; a corrupt JSON stops the start naming the file and `dev/export_queue.py`. SQLite runs with a `busy_timeout`; a full disk refuses new requests as `store_unavailable` (retryable, side effects none); the start refuses a database file readable by others. `delivery` is documented as mandatory on every `approval.sent` line. Tests: crash between commit and rename; busy; mode check.
+- X16 (package 2): `result` is required for every action in file format v1. Test: a file without `result` stops the start.
+- D6 (accepted; package 2): v1 adds optional per-action `enabled` (default true) and `timeout_seconds` before the format freezes (N4); per-action expiry stays out.
+- X17 (end of package 2): the owner measures TTHW once (example to card with the fake gateway) and records it in the PR.
+
+### Engineering
+
+- E-1 (package 3, replaces the "corrupt JSON stops the start" part of X15): a corrupt queue file at migration is renamed `<name>.corrupt-<time>`, never imported or sent; the start continues; health shows a problem naming the file. Test.
+- E-2 (packages 1 and 2): `Registration` gains optional `recheck(params) -> reason | None`, called by `release` after the claim and before `execute`; a reason ends the request `executing -> discarded` with `outcome_reason = "target_changed"`. The executor contract stays sent/failed/unclear. `approval_status` for `target_changed` says "the owner did not see this target; ask again only if the owner still wants it". Test.
+- E-3 (package 1, moved from package 3): every log line of a request carries its `sha256`; `approval.edited` the new hash, `approval.edit_undone` the restored one. Test: edit once, approve: three lines with first, second, second hash.
+- E-4 (packages 2 and 3): `attempts` counts executions; JSON entry writes it only when above 0 (golden bytes unchanged); SQLite `attempts INTEGER NOT NULL DEFAULT 0`, bumped inside the claim. Test.
+- E-5 (package 3): exclusive `fcntl.flock` on `DATA_DIR/approvals.lock` at start; a second process refuses to start naming the lock; crash recovery runs only under the lock. Test with two processes.
+- E-6 (package 2): queue order is schema, readOnly, allow list, policy, then `describe`; X1 `--probe` warns when `describe.tool` equals an action `tool`; docs say the file author is trusted. Test: a non-allowed id never reaches the fake gateway.
+- E-7 (package 2 docs): recommend a list-only probe key that mirrors the agents' grants.
+- E-8 (package 0 text): replace "`git log --follow` still finds each file's history" with `git log --follow -M -C` or drop it; name the transitive `textedit -> mail` import next to F-CEO-5 as a known edge removed by package 6.
+- E-9 (all packages): every commit passes the full suite; a change that needs `gate` and a `mixed` file lands as two commits, gate first.
+- E-10 (package 3): `key_fingerprint = sha256(canonical(params without text_field))` stored at queue time and kept after the content is NULLed; a repeated key with other params against an ended row answers `key_conflict`. Test.
+- E-11 (package 3): `CREATE UNIQUE INDEX request_key_external ON request(key) WHERE source = 'external' AND key IS NOT NULL`; mail, calendar and iMessage keep a non-unique index; lookup and insert in one `BEGIN IMMEDIATE`; one connection with `check_same_thread=False` under the existing RLock. Test: two threads, one key, one row.
+- E-12 (package 3): expiry and the `AUDIT_KEEP_DAYS` deletion run lazily under the lock on every read and write (today's `_prune` pattern); `approval.expired` with `sha256` written exactly once; a `failed` return past `expires_at` ends as `expired`, not `waiting`. Tests.
+- E-13 (package 3): `dev/export_queue.py` refuses while any row is `executing` and prints how many ended and `unclear` requests the rollback loses. Test.
+- E-14 (package 2): one `list_tools` per probe key per probe run; the start finishes while the fake gateway hangs. Tests count calls and time the start.
+- E-15 (package 3): `outcome_reason TEXT` holds a code, never a parameter or text, and survives NULLing; WAL `-wal` and `-shm` files are mode 600. Tests.
+- E-16 (package 2 docs and X1): values in `result.failed` must be ones where the tool guarantees no side effect; `check` prints the mapping for the operator to confirm. AC4 `no_claim`: the recheck narrows, not closes, the window before the send.
+- D7 (accepted; package 3): an external key stays bound for `waiting`, `executing`, `sent`, `unclear`, and for `discarded` by the owner and `withdrawn` (answering the status record); it is freed after `discarded` with `target_changed` and after `expired`, so the agent can ask again. Tests for both paths.
