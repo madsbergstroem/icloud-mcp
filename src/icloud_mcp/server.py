@@ -3047,7 +3047,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 try:
                     registry.register(spec.action_type, spec.executor(ctx), (lambda spec=spec, ctx=ctx: spec.allowed(ctx)), spec.policy(ctx),
                                       prepare=functools.partial(spec.prepare, ctx) if spec.prepare else None,
-                                      recheck=functools.partial(spec.recheck, ctx) if spec.recheck else None)
+                                      recheck=functools.partial(spec.recheck, ctx) if spec.recheck else None,
+                                      hold=functools.partial(spec.hold, ctx) if spec.hold else None)
                 except Exception as e:  # noqa: BLE001  -- one broken action must not take the server down
                     log.warning("plugin %s: action %s skipped (%s)", p.id, getattr(spec.action_type, "id", "?"), type(e).__name__)
         if registry.types():

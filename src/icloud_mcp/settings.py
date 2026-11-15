@@ -45,6 +45,7 @@ class Spec:
     max: int | None = None
     section: str = ""             # groups fields into cards on a settings page
     hidden: bool = False          # set through another control (the sending choice)
+    empty_hint: str = ""          # for a list: shown above the field while it is empty (an action that reaches nobody yet)
 
 
 def _on(v: str) -> bool:
@@ -417,7 +418,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
             shown = v.replace("\\n", "\n")
         return {"key": sp.key, "label": sp.label, "kind": sp.kind, "help": sp.help, "value": _on(v) if sp.kind == "bool" else shown,
                 "display": display(sp, v), "source": src, "section": sp.section, "choices": [list(c) for c in sp.choices],
-                "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored}
+                "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored,
+                **({"empty_hint": sp.empty_hint} if sp.empty_hint else {})}
 
     def group_json(g: Group, stored: dict[str, str], full: bool) -> dict[str, Any]:
         set_up = not (g.needs_bridge and not s.bridge_token)
@@ -480,7 +482,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         if not changes:
             return d.api_ok({"note": "Nothing changed."})
         if looser and not d.recent(rec):
-            return d.api_need_confirm()
+            return d.api_need_confirm("This lets more through: " + ", ".join(sp.label for sp in looser) + ".")
         if problem := await asyncio.to_thread(validate, new, known_tools()):
             key, why = problem
             return d.api_err(f"Not saved: {why}", 400, fields={key: why} if key else {})
