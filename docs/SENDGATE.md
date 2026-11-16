@@ -113,6 +113,7 @@ Rules every package keeps:
 | 1 | Actions of any kind: plugin `actions`, `approval_request`, `approval_list_actions` | gate | 0 | yes |
 | 2 | Gateway connector from a configuration file; first user is a marketplace reply | connector | 1 | yes |
 | 2c | Versions of a request: the owner's edit and a changed target become new versions instead of a discard | gate | 2, 3 | yes |
+| 2d | The owner edits every field before approving: subject, To, Cc, Bcc, and every field an action type marks editable | gate | 2c | later |
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | later |
 | 5 | Calendar invitations on the same | connector | 1, 3 | later |
@@ -345,6 +346,35 @@ and the old ones stay readable. Accepted layout: the current version on top, the
   (user_version 2, with a migration). Activity and the audit log name every version with its sha256.
 - Tests: a recheck difference leaves the request waiting as version n+1 with nothing sent; approving with an older sha is
   refused; an edit makes a version and the assistant's version stays readable; `replaces` from another request's key is refused.
+
+### As built (2c)
+
+- Store version 2 (`gate/store.py`): table `version` (request, n, time, author `assistant` | `owner` | `service`, sha256, raw).
+  `add` writes version 1, `replace` the next (the owner's edit, or the agent's revision with author `assistant`), and the new
+  `revise` puts a request that was being carried out back to waiting as a version by the service. Ending a request drops the
+  raw of every version and keeps author, time and hash; the hourly purge deletes versions of deleted requests. A version 1 file
+  gets one version per request at the first start; a version 2 file is refused by an older server, as before (export first).
+- Recheck contract (`Registration.recheck`): None (unchanged), the parameters with the service's new values (a new version
+  waits; `actions.Revised`, dashboard answers 409 with `revised`, `version`, and the log gets `approval.revised` with both
+  hashes), or a code (the request ends as before). The gateway connector returns new values; a key stays bound, so asking
+  again with the same `request_id` returns the same request.
+- `approval_request(..., replaces=<outbox_id>)`: a new version of a waiting request of the same caller, action and key, after
+  every check a new request gets (the list, the policy, describe). Refusal code `not_replaceable`. The answer has `replaced`
+  and `version`.
+- Card (second mock, variant A, owner 2026-11-16, after the first build read as too heavy): the card as before 2c; a
+  "Changed since you looked" box only when the service changed something, naming old and new value, with the new value marked;
+  one row "Earlier versions" under the card that opens a "History" sheet, newest first, in sentences ("Market changed the
+  listing", "You changed the text", "Your assistant asked"); an older one opens read-only on a tap, and the assistant's first
+  text offers "Use this text again" when it was edited. The owner's edits in a row are one version, and going back to the text
+  before them removes it. Buttons are not in capitals in the Material look either.
+- Mail, calendar and iMessage keep their single edit until packages 4 to 6 move them to the store.
+
+## Package 2d: edit every field (later)
+
+The owner asked for it on 2026-11-16: not only the text, also the subject, To and Cc of a mail and the agent-set fields of any
+action. A changed recipient goes through the owner's list and the policy again before the new version is stored (and for a file
+action through `describe`), so an edit cannot reach someone the list does not allow. Each edit is a version (2c). Mail moves to
+the store with package 6, so its fields join versions there; until then the mail card keeps its text-only edit. Needs a mock first.
 
 ## Package 3: store
 
@@ -624,6 +654,11 @@ The service could not be asked about the target. Adds `retryable: true` and `sid
 ### Refusal codes: key_conflict
 
 The `request_id` was already used for a request with other parameters. Use a new key, or ask with the same parameters.
+
+### Refusal codes: not_replaceable
+
+`replaces` names no request of this agent's that still waits for the same action, or one with another `request_id`. Nothing was
+changed. Ask without `replaces` for a new request.
 
 ### Refusal codes: queue_full
 

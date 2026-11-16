@@ -293,6 +293,7 @@ REFUSAL_CASES = {
     "key_conflict": "key",
     "queue_full": "full",
     "store_unavailable": "store",
+    "not_replaceable": dict(action=ASK["action"], params=ASK["params"], replaces="no-such-request"),
 }
 
 

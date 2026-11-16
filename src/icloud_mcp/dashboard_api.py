@@ -24,7 +24,9 @@ from starlette.responses import JSONResponse, Response
 
 from . import textedit as T
 from .approval_withdraw import REASON_WORDS
-from .gate.actions import Rechecked
+from dataclasses import replace as dc_replace
+
+from .gate.actions import Rechecked, Revised
 from .dashboard_accounts import mail_account
 
 log = logging.getLogger(__name__)
@@ -91,6 +93,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "approval.withdrawn":
             why = REASON_WORDS.get(str((e.get("details") or {}).get("reason")), "")
             return "Withdrawn", "Withdrawn by your assistant" + (f": {why}." if why else ".") + " Nothing was sent."
+        if action == "approval.revised":
+            return "Changed", "The target changed after you looked. Nothing was sent; it waits with the new details."
         if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "target_changed":
             return "Not sent", "The target changed after you looked. Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
@@ -256,6 +260,34 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "kinds": kinds,
                    "mac": "off" if not mac.get("set_up") else ("online" if mac.get("online") else "offline")})
 
+    def versions_of(src: Any, q: Any) -> list[dict[str, Any]] | None:
+        """The versions of a request as the card lists them (package 2c), oldest first, each with what changed against the one
+        before; None for a source without versions or a request that has only one."""
+        box = getattr(src, "box", None)
+        if box is None or not hasattr(box, "versions"):
+            return None
+        vs = box.versions(q.id)
+        if len(vs) < 2:
+            return None
+        looks: list[dict[str, Any] | None] = []
+        for v in vs:
+            try:
+                looks.append(src.describe(dc_replace(q, raw=v["raw"], sha256=v["sha256"])) if v["raw"] is not None else None)
+            except Exception:  # noqa: BLE001  -- a version that cannot be read is listed without its content
+                looks.append(None)
+        out = []
+        for i, v in enumerate(vs):
+            cur, prev = looks[i], looks[i - 1] if i else None
+            changes = []
+            if cur is not None and prev is not None:
+                before = dict(prev["rows"])
+                changes = [{"label": k, "old": before.get(k, ""), "new": val} for k, val in cur["rows"] if before.get(k) != val]
+                if cur["text"] != prev["text"]:
+                    changes.append({"label": "Text", "old": prev["text"], "new": cur["text"]})
+            out.append({"n": v["n"], "by": v["author"], "at": v["created_at"], "changes": changes,
+                        "rows": [[k, val] for k, val in (cur or {}).get("rows", [])], "text": (cur or {}).get("text", "")})
+        return out
+
     def mail_parts(q: Any) -> Any:
         return email.message_from_bytes(q.raw, policy=policy.default)
 
@@ -275,6 +307,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
                "account": mail_account(s) if src.kind == "mail" else ""}
+        if versions := await asyncio.to_thread(versions_of, src, q):
+            out["versions"] = versions
+            if versions[-1]["by"] == "service":
+                out["changed"] = versions[-1]["changes"]
         if src.kind == "mail":
             dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
             added = {x["index"]: x["asked"] for x in dq["added_files"]}
@@ -350,6 +386,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err("Not sent: a file is still missing. Add it first.", 409)
         try:
             note = await asyncio.to_thread(src.release, q)
+        except Revised as e:                       # checked again just before sending: the service has new values; a new version waits
+            audit.record("approval.revised", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed, "
+                         f"it waits as version {e.n}", kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None),
+                         sha256=q.sha256, new_sha256=e.sha256, reason="target_changed", version=e.n)
+            return err(str(e), 409, state="waiting", revised=True, version=e.n)
         except Rechecked as e:                     # checked again just before sending: not the target the owner saw; it ends here
             audit.record("approval.discarded", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed",
                          kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=q.sha256, reason=e.reason)

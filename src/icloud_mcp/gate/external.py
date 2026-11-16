@@ -262,8 +262,20 @@ class ExternalApprovals(ApprovalSource):
                 self.box.restore(claimed)
                 log.warning("The recheck of %s raised %s; the request waits again", type_id, type(e).__name__)
                 raise A.ExternalError("Not carried out: the service could not be asked about the target. Try again in a moment.") from None
-            if reason:                                           # claimed and not put back: it ends here, nothing was carried out
-                code = reason if reason in A.RECHECK_CODES else "target_changed"   # a code, never the plugin's own text
+            if isinstance(reason, Mapping) and hasattr(self.box, "revise"):   # the service's new values: a new version waits
+                try:
+                    fresh, _ = self._check(reg, dict(reason))
+                except A.ExternalError:                  # new values the type does not take: nothing to show, it ends as before
+                    fresh = None
+                raw = A.canonical(type_id, fresh) if fresh is not None else b""
+                if fresh is not None and len(raw) <= A.MAX_RAW_BYTES:
+                    revised = self._record(self.box.revise, claimed, raw, self.key_fingerprint(reg.action_type, fresh))
+                    if revised is None:
+                        raise A.ExternalError("Not sent: the target changed since you looked, and the request is no longer waiting.")
+                    n = len(self.box.versions(claimed.id))
+                    raise A.Revised(n, claimed.id, revised.sha256)
+            if reason or isinstance(reason, Mapping):           # claimed and not put back: it ends here, nothing was carried out
+                code = reason if isinstance(reason, str) and reason in A.RECHECK_CODES else "target_changed"   # a code, never the plugin's own text
                 self._record(self.box.finish, claimed.id, "discarded", code)
                 raise A.Rechecked(code)
         request = A.ActionRequest(claimed.id, type_id, plain, claimed.requested_by, claimed.key, max(1, getattr(claimed, "attempts", 0) or 1))
@@ -286,10 +298,10 @@ class ExternalApprovals(ApprovalSource):
         return Released(line or "Done.", "sent")
 
     @staticmethod
-    def _record(step: Any, *args: Any) -> None:
+    def _record(step: Any, *args: Any) -> Any:
         """Write how a request ended after the executor ran. The executor's answer stands even when this write fails: the owner is
         told what happened, and the row, still `executing`, ends unclear at the next start and is never repeated."""
         try:
-            step(*args)
+            return step(*args)
         except Exception as e:  # noqa: BLE001
             log.warning("could not record how a request ended (%s); it stays executing until the next start", type(e).__name__)

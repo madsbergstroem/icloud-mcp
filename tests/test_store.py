@@ -436,3 +436,108 @@ def test_the_export_command_runs_from_the_package_and_reports_what_it_loses(tmp_
     again = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(tmp_path)], capture_output=True, text=True, env=env, timeout=60)
     assert again.returncode == 1 and "exists already" in again.stderr                    # never overwrites an export
     assert subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue"], capture_output=True, env=env, timeout=60).returncode == 2
+
+
+def test_versions_record_each_content_and_lose_it_when_the_request_ends(tmp_path):
+    """protects=package 2c: add is version 1 (assistant), replace adds one (owner by default), revise one (service) and puts the
+    request back to waiting; ending keeps author and hash and drops the content; fails_when=a version is overwritten, revise sends
+    the request anywhere but waiting, or content outlives the request; no_claim=none beyond protects."""
+    st = make(tmp_path)
+    q = add(st)
+    st.replace(q.id, q.sha256, b"edited", edited_from=None)
+    claimed = st.claim(q.id, "executing")
+    back = st.revise(claimed, b"from the service")
+    assert back is not None and st.state_of(q.id) == ("waiting", None)
+    vs = st.versions(q.id)
+    assert [(v["n"], v["author"], v["raw"]) for v in vs] == [(1, "assistant", vs[0]["raw"]), (2, "owner", b"edited"), (3, "service", b"from the service")]
+    assert st.pending()[0].sha256 == vs[-1]["sha256"]
+    st.claim(q.id, "discarded")
+    assert [v["raw"] for v in st.versions(q.id)] == [None, None, None] and len({v["sha256"] for v in st.versions(q.id)}) == 3
+
+
+def test_a_version_1_file_gets_one_version_per_request(tmp_path):
+    """protects=the store migration 1 -> 2; fails_when=a request of a version 1 file has no version, or the file stays at 1;
+    no_claim=a file written by a version 2 server opened by a version 1 server (refused by user_version, tested elsewhere)."""
+    st = make(tmp_path)
+    q = add(st)
+    db = sqlite3.connect(tmp_path / S.DB_FILE)
+    db.execute("DROP TABLE version")
+    db.execute("PRAGMA user_version = 1")
+    db.commit()
+    db.close()
+    again = make(tmp_path)
+    assert [(v["n"], v["author"], v["sha256"]) for v in again.versions(q.id)] == [(1, "assistant", q.sha256)]
+    assert sqlite3.connect(tmp_path / S.DB_FILE).execute("PRAGMA user_version").fetchone()[0] == S.VERSION == 2
+
+
+def test_the_owners_edits_in_a_row_are_one_version_and_going_back_removes_it(tmp_path):
+    """protects=package 2c, owner decision 2026-11-16 (variant A): edits in a row fold into one version; bringing back the text
+    before them leaves no version behind; fails_when=each edit adds a version, or going back adds one; no_claim=none beyond protects."""
+    st = make(tmp_path)
+    q = add(st)
+    a = st.replace(q.id, q.sha256, b"first edit", edited_from="x")
+    b = st.replace(q.id, a.sha256, b"second edit", edited_from="x")
+    assert [(v["author"], v["raw"]) for v in st.versions(q.id)][1:] == [("owner", b"second edit")]
+    st.replace(q.id, b.sha256, q.raw, edited_from=None)
+    assert [v["author"] for v in st.versions(q.id)] == ["assistant"] and st.pending()[0].sha256 == q.sha256
+
+
+def test_versions_go_with_their_request_and_every_way_of_ending_drops_their_content(tmp_path):
+    """protects=package 2c review: withdraw and expiry drop version content like a discard; the purge removes versions of deleted
+    requests and keeps the others; fails_when=content survives an ending, or the purge touches a waiting request's versions;
+    no_claim=export, which ends requests through the same _end."""
+    st = make(tmp_path, ttl=1)
+    gone, kept = add(st, "one"), add(st, "two")
+    st.claim(gone.id, "withdrawn")
+    assert [v["raw"] for v in st.versions(gone.id)] == [None]
+    time.sleep(1.1)
+    st.pending()                                                # expiry runs on read
+    assert [v["raw"] for v in st.versions(kept.id)] == [None]
+    st2 = make(tmp_path / "b")
+    w = add(st2, "waits")
+    old = add(st2, "old")
+    st2.claim(old.id, "discarded")
+    st2._db.execute("UPDATE request SET decided_at = 0 WHERE id = ?", (old.id,))
+    st2._purged_at = 0
+    st2.pending()
+    assert st2.versions(old.id) == [] and len(st2.versions(w.id)) == 1
+
+
+def test_revise_needs_an_executing_request_and_ends_one_past_its_expiry(tmp_path):
+    """protects=store.revise edges; fails_when=a waiting request is revised, or an expired one waits again; no_claim=none."""
+    st = make(tmp_path, ttl=1)
+    q = add(st)
+    assert st.revise(q, b"x") is None                          # not executing
+    claimed = st.claim(q.id, "executing")
+    time.sleep(1.1)
+    assert st.revise(claimed, b"x") is None and st.state_of(q.id)[0] == "expired"
+    with pytest.raises(ValueError):
+        st.replace(q.id, q.sha256, b"y", author="someone")
+
+
+def test_an_owner_edit_after_a_service_version_is_a_new_version(tmp_path):
+    """protects=the fold only joins the owner's own edits in a row; fails_when=an edit rewrites the service's version;
+    no_claim=none beyond protects."""
+    st = make(tmp_path)
+    q = add(st)
+    back = st.revise(st.claim(q.id, "executing"), b"service")
+    st.replace(q.id, back.sha256, b"owner", edited_from="x")
+    assert [(v["author"], v["raw"]) for v in st.versions(q.id)][1:] == [("service", b"service"), ("owner", b"owner")]
+
+
+def test_the_migration_covers_ended_and_edited_rows_and_runs_once(tmp_path):
+    """protects=1 -> 2 backfill: an ended row gets a version without content, an edited one is the owner's, a second open adds
+    nothing; fails_when=any of these; no_claim=none beyond protects."""
+    st = make(tmp_path)
+    ended, edited = add(st, "a"), add(st, "b")
+    st.claim(ended.id, "discarded")
+    st._db.execute("UPDATE request SET edited_from = 'asked' WHERE id = ?", (edited.id,))
+    db = sqlite3.connect(tmp_path / S.DB_FILE)
+    db.execute("DROP TABLE version")
+    db.execute("PRAGMA user_version = 1")
+    db.commit()
+    db.close()
+    for _ in range(2):
+        again = make(tmp_path)
+        assert [(v["author"], v["raw"]) for v in again.versions(ended.id)] == [("assistant", None)]
+        assert [v["author"] for v in again.versions(edited.id)] == ["owner"]

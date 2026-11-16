@@ -12,7 +12,7 @@ identity, as behind tailscale serve: the dashboard signs you in on the way. --ow
 password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
 one column with what was taken back and what was sent today. "Find servers" finds made-up servers for an address at example.net
 and nothing for any other. --gateway adds the connector file's example action (a marketplace reply, waiting) and a second action
-whose list is empty, behind a made-up gateway whose agent key can call the send tool (bypass), cannot (clean), or is not set
+whose list is empty (the listing is sold after the first look, so the first Send shows a new version), behind a made-up gateway whose agent key can call the send tool (bypass), cannot (clean), or is not set
 (unchecked). --demo-plugins adds two made-up service plugins (Chatty with messages, Mailbox with mail), loaded
 the way an installed plugin is. Account changes are checked against made-up servers (a password starting with "wron" is refused)
 and saved to the preview's own folder; the restart that follows is skipped. Needs the test extras (pip install -e '.[test]')."""
@@ -75,9 +75,13 @@ if args.gateway != "none":                 # the connector file's example behind
                _AGENT: {"market-call_operation"} | ({"market-call_write_operation"} if args.gateway == "bypass" else set())}
     _gw = _FakeGW(_grants)
 
+    _asked = {"n": 0}
+
     @_gw.tool("market-call_operation")
-    def _read(site: str, op: str, args: dict) -> dict:
-        return {"data": {"title": {"c-1": "Bike trailer, two seats"}.get(args.get("id"), "Garden chairs")}}
+    def _read(site: str, op: str, args: dict) -> dict:              # the listing is sold after the first look: Send makes version 2
+        _asked["n"] += 1
+        title = "Bike trailer, two seats" if _asked["n"] == 1 else "Bike trailer, sold"
+        return {"data": {"title": title if args.get("id") == "c-1" else "Garden chairs"}}
 
     @_gw.tool("market-call_write_operation")
     def _write(site: str, op: str, args: dict, idempotencyKey: str = "") -> dict:

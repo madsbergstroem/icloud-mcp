@@ -6,13 +6,22 @@ States, and who moves a request between them:
 
     waiting   -> executing      the owner approved (claim(id, "executing"); attempts goes up by one)
     executing -> sent | unclear the executor answered (finish)
-    executing -> discarded      checked again before sending, the target had changed (finish, reason target_changed)
+    executing -> waiting        checked again before sending, the target had changed: a new version with the service's values
+                                waits instead (revise, package 2c); nothing was sent
+    executing -> discarded      a recheck that answers only a code (finish, reason target_changed)
     executing -> waiting        the executor answered failed: it provably never went out (restore); past its expiry it ends expired
     waiting   -> discarded | withdrawn | expired    the owner, the agent that asked, or the clock
     waiting   -> discarded      written back to the JSON file for a rollback (reason exported; its key is freed)
 
 A request that ends keeps its id, source, type, state, times, hash, key, fingerprint and reason code, and loses its content (raw,
 recipients, followup, edited_from become NULL). Ended rows are deleted after keep_days, the span the activity log keeps.
+
+Versions (package 2c): every content a request has had is a row of `version` (request, n from 1, time, author, sha256, raw).
+The agent's request is version 1 (author assistant), the owner's edit a new one (owner), a recheck that found other values at the
+service one more (service), and an agent's revision with `replaces` another (assistant). The owner's edits in a row are one
+version (it follows the latest edit), and going back to the text before them removes it; every other version never changes.
+The request row holds the newest, and only its sha256 can be approved. When a request ends its versions keep author, time and hash and lose raw.
+Store version 2 adds the table; a version 1 file gets one version per request from what its row holds.
 
 What else holds:
 
@@ -56,7 +65,8 @@ from .outbox import OutboxFull, QueuedMessage
 log = logging.getLogger(__name__)
 
 DB_FILE, LOCK_FILE = "approvals.db", "approvals.lock"
-VERSION = 1                                  # PRAGMA user_version this code writes and reads
+VERSION = 2                                  # PRAGMA user_version this code writes and reads (2: the version table)
+AUTHORS = ("assistant", "owner", "service")
 STATES = ("waiting", "executing", "sent", "unclear", "discarded", "withdrawn", "expired")
 
 SCHEMA = """
@@ -82,6 +92,15 @@ CREATE TABLE IF NOT EXISTS request (
 );
 CREATE INDEX IF NOT EXISTS request_waiting ON request (source, state, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS request_key_external ON request (key) WHERE source = 'external' AND key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS version (
+  request_id  TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  created_at  REAL NOT NULL,
+  author      TEXT NOT NULL CHECK (author IN ('assistant','owner','service')),
+  sha256      TEXT NOT NULL,
+  raw         BLOB,
+  PRIMARY KEY (request_id, n)
+);
 """
 # what keeps a key bound after its request ended; anything else frees it
 _FREEING = "state = 'expired' OR (state = 'discarded' AND outcome_reason IN ('target_changed', 'exported'))"
@@ -167,6 +186,9 @@ class Store:
             raise RuntimeError(f"{self.path} was written by a newer version of this server (store version {have}). Start that version, "
                                "or run its export before going back.")
         db.executescript(SCHEMA)
+        if have == 1:                                 # store version 1: one version per request, from what its row holds
+            db.execute("INSERT OR IGNORE INTO version (request_id, n, created_at, author, sha256, raw) "
+                       "SELECT id, 1, created_at, CASE WHEN edited_from IS NULL THEN 'assistant' ELSE 'owner' END, sha256, raw FROM request")
         db.execute(f"PRAGMA user_version = {VERSION}")
         for suffix in ("-wal", "-shm"):
             side = Path(f"{self.path}{suffix}")
@@ -198,6 +220,21 @@ class Store:
         """Inside a transaction: end a request, keep what says what it was, drop its content."""
         self._db.execute("UPDATE request SET state = ?, decided_at = ?, outcome_reason = ?, raw = NULL, recipients = NULL, "
                          "followup = NULL, edited_from = NULL WHERE id = ?", (state, time.time(), reason, item_id))
+        self._db.execute("UPDATE version SET raw = NULL WHERE request_id = ?", (item_id,))
+
+    def _version(self, item_id: str, sha: str, raw: bytes, author: str) -> int:
+        """Inside a transaction: add the next version of a request. Returns its number."""
+        n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM version WHERE request_id = ?", (item_id,)).fetchone()[0]
+        self._db.execute("INSERT INTO version (request_id, n, created_at, author, sha256, raw) VALUES (?,?,?,?,?,?)",
+                         (item_id, n, time.time(), author, sha, raw))
+        return n
+
+    def versions(self, item_id: str) -> list[dict[str, Any]]:
+        """Every version of a request, oldest first: n, created_at, author, sha256, raw (None once the request ended)."""
+        with self._lock:
+            return [{"n": r["n"], "created_at": r["created_at"], "author": r["author"], "sha256": r["sha256"],
+                     "raw": bytes(r["raw"]) if r["raw"] is not None else None}
+                    for r in self._db.execute("SELECT * FROM version WHERE request_id = ? ORDER BY n", (item_id,))]
 
     # -- reports that must happen once ------------------------------------------------------------------------------------
     _KINDS = {"expired": "state = 'expired'", "recovered": "state = 'unclear' AND outcome_reason = 'interrupted'"}
@@ -253,6 +290,7 @@ class Store:
                     with self._tx():
                         self._db.execute("DELETE FROM request WHERE source = ? AND state NOT IN ('waiting', 'executing') AND decided_at < ?",
                                          (self.source, now - self.keep_days * 86400))
+                        self._db.execute("DELETE FROM version WHERE request_id NOT IN (SELECT id FROM request)")
         except sqlite3.OperationalError as e:
             log.warning("approval store: expiry skipped this time (%s)", type(e).__name__)
             return
@@ -297,6 +335,7 @@ class Store:
                                  "requested_by, raw, recipients, followup) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                  (q.id, self.source, action_type, "waiting", q.created_at, q.expires_at, sha, key, key_fingerprint,
                                   label, raw, json.dumps(recipients), json.dumps(followup) if followup is not None else None))
+                self._version(q.id, sha, raw, "assistant")
         except sqlite3.OperationalError as e:
             log.warning("the approval store could not take a request (%s)", type(e).__name__)
             raise StoreUnavailable("The approval store cannot take a request right now. Nothing was queued.") from None
@@ -354,8 +393,12 @@ class Store:
         if lapsed:
             self._report("expired")
 
-    def replace(self, item_id: str, sha256: str, raw: bytes, **fields: Any) -> QueuedMessage | None:
-        """Swap a waiting request's content for a new version (the owner's edit), only when it is still the version read."""
+    def replace(self, item_id: str, sha256: str, raw: bytes, author: str = "owner", key_fingerprint: str | None = None,
+                **fields: Any) -> QueuedMessage | None:
+        """Add a new version of a waiting request (the owner's edit, or the agent's revision with author assistant), only when
+        it is still the version read. The older versions stay."""
+        if author not in AUTHORS:
+            raise ValueError(f"author {author!r}")
         new_sha = hashlib.sha256(raw).hexdigest()
         with self._lock, self._tx():
             r = self._db.execute("SELECT * FROM request WHERE id = ? AND source = ? AND state = 'waiting' AND sha256 = ?",
@@ -363,9 +406,42 @@ class Store:
             if r is None:
                 return None
             q = dc_replace(self._q(r), raw=raw, sha256=new_sha, **fields)
-            self._db.execute("UPDATE request SET raw = ?, sha256 = ?, followup = ?, edited_from = ? WHERE id = ?",
-                             (raw, new_sha, json.dumps(q.followup) if q.followup is not None else None, q.edited_from, item_id))
+            self._db.execute("UPDATE request SET raw = ?, sha256 = ?, followup = ?, edited_from = ?, "
+                             "key_fingerprint = COALESCE(?, key_fingerprint) WHERE id = ?",
+                             (raw, new_sha, json.dumps(q.followup) if q.followup is not None else None, q.edited_from, key_fingerprint, item_id))
+            last = self._db.execute("SELECT * FROM version WHERE request_id = ? ORDER BY n DESC LIMIT 1", (item_id,)).fetchone()
+            if author == "owner" and last is not None and last["author"] == "owner":
+                before = self._db.execute("SELECT sha256 FROM version WHERE request_id = ? AND n = ?", (item_id, last["n"] - 1)).fetchone()
+                if before is not None and before["sha256"] == new_sha:      # back to what was there before the owner's edits
+                    self._db.execute("DELETE FROM version WHERE request_id = ? AND n = ?", (item_id, last["n"]))
+                else:                                                       # edits in a row are one version
+                    self._db.execute("UPDATE version SET raw = ?, sha256 = ?, created_at = ? WHERE request_id = ? AND n = ?",
+                                     (raw, new_sha, time.time(), item_id, last["n"]))
+            else:
+                self._version(item_id, new_sha, raw, author)
             return q
+
+    def revise(self, q: QueuedMessage, raw: bytes, key_fingerprint: str | None = None) -> QueuedMessage | None:
+        """A recheck found other values at the service while the request was being carried out (nothing was sent): it waits
+        again as a new version by the service. Past its expiry it ends expired instead. None when it was not executing."""
+        new_sha = hashlib.sha256(raw).hexdigest()
+        lapsed = False
+        with self._lock, self._tx():
+            r = self._db.execute("SELECT * FROM request WHERE id = ? AND state = 'executing'", (q.id,)).fetchone()
+            if r is None:
+                return None
+            if r["expires_at"] <= time.time():
+                self._end(q.id, "expired")
+                lapsed = True
+                out = None
+            else:
+                self._db.execute("UPDATE request SET state = 'waiting', raw = ?, sha256 = ?, key_fingerprint = COALESCE(?, key_fingerprint) "
+                                 "WHERE id = ?", (raw, new_sha, key_fingerprint, q.id))
+                self._version(q.id, new_sha, raw, "service")
+                out = dc_replace(self._q(r), raw=raw, sha256=new_sha)
+        if lapsed:
+            self._report("expired")
+        return out
 
     # -- the JSON file, in and out ------------------------------------------------------------------------------------------
     def _migrate(self, legacy: Path) -> None:
@@ -404,6 +480,8 @@ class Store:
                     self._db.execute("INSERT INTO request (action_type, created_at, expires_at, sha256, key, requested_by, raw, recipients, "
                                      "followup, edited_from, id, source, state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'waiting')",
                                      (*values, q.id, self.source))
+                if not self._db.execute("SELECT 1 FROM version WHERE request_id = ? AND sha256 = ?", (q.id, q.sha256)).fetchone():
+                    self._version(q.id, q.sha256, q.raw, "assistant")
                 read_in += 1
         os.replace(legacy, legacy.with_name(f"{legacy.name}.migrated"))
         log.info("approval store: %d %s request(s) read in from %s", read_in, self.source, legacy.name)

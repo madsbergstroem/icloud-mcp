@@ -221,8 +221,11 @@ class Item extends HTMLElement {
     const long = own.length > 900;
     // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
     const ext = it.kind === "external";
-    const rows = ext ? it.rows.slice(0, 1).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") : this.rowsHtml();
-    const more = ext ? it.rows.slice(1).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") : "";
+    // a value the service changed since the owner looked is marked (package 2c)
+    const fresh = new Set((it.changed || []).map((c) => c.label));
+    const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
+    const rows = ext ? it.rows.slice(0, 1).map(dd).join("") : this.rowsHtml();
+    const more = ext ? it.rows.slice(1).map(dd).join("") : "";
     const text = it.kind === "imessage" ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
       : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
     const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : it.kind === "imessage" ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
@@ -233,6 +236,41 @@ class Item extends HTMLElement {
       ${ext && !own ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>`}
       ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
       ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
+  }
+
+  // The history of a request (package 2c), newest first, in sentences. Tapping an older one shows it; only the assistant's first
+  // text offers to come back. Only what the card shows can be sent.
+  showHistory() {
+    const it = this.it, vs = it.versions;
+    const first = vs[0];
+    const said = (v) => {
+      const c = v.changes, row = c.find((x) => x.label !== "Text"), text = c.find((x) => x.label === "Text");
+      if (v.n === 1) return ["Your assistant asked", v.text || (v.rows[0] || [])[1] || ""];
+      if (v.by === "service") return [`${it.badge} changed ${row ? `the ${row.label.toLowerCase()}` : "the target"}`, row ? `${row.old} → ${row.new}. Nothing was sent.` : "Nothing was sent."];
+      if (v.by === "assistant") return ["Your assistant revised it", text ? `“${text.new}”` : c.map((x) => `${x.label}: ${x.new}`).join(" · ")];
+      if (text && text.new === first.text) return ["You went back to your assistant's text", `“${text.new}”`];
+      return ["You changed the text", text ? `“${text.new}”` : ""];
+    };
+    const items = vs.slice().reverse().map((v) => {
+      const [h, p] = said(v), open = v.n !== vs.length && (v.text || v.rows.length);
+      return `<ion-item ${open ? `button detail="true" data-v="${v.n}"` : ""}><ion-label class="ion-text-wrap"><h2>${esc(h)}</h2><p>${esc(p)}</p>
+        <div data-show="${v.n}" hidden></div></ion-label><ion-note slot="end" class="num">${esc(clock(v.at))}</ion-note></ion-item>`;
+    }).join("");
+    sheet("History", `<ion-list class="inset" style="margin-top:12px!important">${items}</ion-list>
+      <p class="note">Only what you see on the card can be sent.</p>`, (m) => {
+      m.querySelectorAll("[data-v]").forEach((el) => el.addEventListener("click", () => {
+        const v = vs.find((x) => x.n === Number(el.dataset.v)), box = m.querySelector(`[data-show="${v.n}"]`);
+        if (!box.hidden) { box.hidden = true; return; }
+        const rows = v.rows.map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd>`).join("");
+        const back = it.edit && it.edit.edited && v.text === it.edit.original;   // the text "Bring it back" restores, wherever it is
+        box.innerHTML = `<div class="msg" style="margin:10px 0 0">${rows ? `<dl>${rows}</dl>` : ""}${v.text ? `<div class="body">${esc(v.text)}</div>` : ""}</div>
+          ${back ? `<ion-button fill="clear" size="small" data-back>Use this text again</ion-button>` : ""}`;
+        box.hidden = false;
+        box.querySelector("[data-back]")?.addEventListener("click", (e) => {
+          e.stopPropagation(); m.dismiss(); bringBack(this.key, this.it, (reload) => { if (reload) this.load(); });
+        });
+      }));
+    });
   }
 
   // How the last approve went, above the message
@@ -273,7 +311,11 @@ class Item extends HTMLElement {
     const ext = it.kind === "external";
     if (it.held) h += `<div class="warnbox held" id="held-why"><strong>${icon("warning-outline")} Agents can send this without you</strong>
       ${esc(it.held)} Approving is off until then. Settings › Server shows it.</div>`;
+    if (it.changed && it.changed.length) h += `<div class="warnbox"><strong>${icon("warning-outline")} Changed since you looked</strong>
+      ${it.changed.map((c) => `${esc(c.label)} is now <b>${esc(c.new)}</b> (was ${esc(c.old)}).`).join(" ")} Nothing was sent. Check it again before approving.</div>`;
     if (ext && it.approvable !== false) h += this.card();
+    if (it.versions) h += `<ion-list class="inset" style="margin-top:12px!important"><ion-item button detail="true" data-history>
+      <ion-label>Earlier versions</ion-label><ion-note slot="end" class="num">${it.versions.length - 1}</ion-note></ion-item></ion-list>`;
     if (it.warnings.length) {
       const grp = it.group;
       h += `<div class="warnbox"><strong>${icon("warning-outline")} ${grp ? "Group chat: everyone in it receives this" : "Check before sending"}</strong>
@@ -288,7 +330,7 @@ class Item extends HTMLElement {
         <input type="file" hidden data-input="${m.index}"></div>`).join("");
     }
     if (!ext) h += this.card();
-    if (it.edit && it.edit.edited) {
+    if (it.edit && it.edit.edited && !it.versions) {
       h += section("What your assistant asked for", `<ion-button fill="clear" size="small" data-restore>Bring it back</ion-button>`)
         + `<div class="msg"><div class="asked">${esc(it.edit.original)}</div></div>`;
     }
@@ -332,6 +374,7 @@ class Item extends HTMLElement {
     $("[data-quote]")?.addEventListener("click", (e) => { $("[data-quoted]").hidden = false; e.target.remove(); });
     $("[data-edit]")?.addEventListener("click", () => { this.mode = "edit"; this.result = null; this.render(); });
     $("[data-restore]")?.addEventListener("click", () => bringBack(this.key, this.it, (reload) => { if (reload) this.load(); }));
+    $("[data-history]")?.addEventListener("click", () => this.showHistory());
     $("[data-approve]")?.addEventListener("click", () => this.approve(false));
     $("[data-retry]")?.addEventListener("click", () => this.approve(false));
     $("[data-done]")?.addEventListener("click", () => { app.holding = null; this.result = null; this.leave(); });
@@ -413,6 +456,11 @@ class Item extends HTMLElement {
         return;
       }
       this.result = null;
+      if (e.status === 409 && e.body && e.body.revised) {             // checked again: the service changed it; the new version waits
+        await this.load();
+        toast("Not sent: it changed since you looked. Check the new version.");
+        return;
+      }
       if (e.status === 409 && e.body && e.body.state === "discarded") {   // checked again before sending: not what you saw; it ended
         app.note = `${clock(Date.now() / 1000)} · ${e.message}`; app.noteBad = true; app.noteUntil = Date.now() + 15000;
         this.leave();

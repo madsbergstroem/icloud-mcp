@@ -53,6 +53,7 @@ REFUSALS: dict[str, str] = {
     "key_conflict": "Use a new request_id, or ask again with the same parameters.",
     "queue_full": "Do not retry. Tell the owner to review the waiting requests on the dashboard.",
     "store_unavailable": "The approval store could not take it. Nothing was queued; try again in a minute.",
+    "not_replaceable": "replaces names a request of yours that still waits, for the same action; otherwise ask without replaces.",
 }
 RETRYABLE = ("describe_failed", "store_unavailable")
 RECHECK_CODES = ("target_changed",)     # what a recheck may answer; anything else it returns is logged as target_changed
@@ -81,6 +82,16 @@ class AlreadyDecided(ExternalError):
     def __init__(self, item_id: str, state: str):
         super().__init__(f"This request_id belongs to a request that already ended ({state}). Nothing was queued.", "key_conflict", "request_id")
         self.item_id, self.state = item_id, state
+
+
+class Revised(ExternalError):
+    """Checked again just before the executor was called, the service had other values than the owner looked at. Nothing was
+    carried out; the request waits again as version `n` with the service's values (package 2c), for the owner to look at."""
+
+    def __init__(self, n: int, item_id: str, sha256: str = ""):
+        super().__init__("Not sent: the target changed since you looked. It waits again with the new details; check it before approving.",
+                         "policy")
+        self.n, self.item_id, self.sha256 = n, item_id, sha256
 
 
 class Rechecked(ExternalError):
@@ -205,8 +216,10 @@ class Registration:
     # the agent's parameters -> the parameters that are stored: asks the service what the target is, so the card shows the
     # service's words. Fields it adds are readOnly in the schema; an agent that sets one is refused. Raises ExternalError to refuse.
     prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
-    # called after the owner approved and before the executor: a reason code when the target is no longer what the owner saw
-    # ('target_changed'), else None. The request then ends as discarded and nothing is carried out.
+    # called after the owner approved and before the executor, on the parameters the owner looked at: None when the target is
+    # unchanged; the parameters with the service's new values (a mapping) when it changed, so the request waits again as a new
+    # version (package 2c); or a reason code ('target_changed') when no new version can be made: the request then ends as
+    # discarded. Nothing is carried out in either case.
     recheck: Callable[[Mapping[str, Any]], str | None] | None = None
     channel_tool: str | None = None            # the tool that owns this type (messages_send_request); approval_request refuses it
     # whether approving is off right now (blocked) or needs a note, read every time; called with approving=True just before a

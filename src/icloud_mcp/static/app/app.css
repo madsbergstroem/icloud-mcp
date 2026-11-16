@@ -52,7 +52,7 @@ ion-badge[hidden] { display: none; }
 ion-content { --padding-bottom: 24px; }
 
 /* buttons: the accent one is Ionic's primary; the quiet one is a raised button with a hairline; text buttons read in the accent ink */
-ion-button { --border-radius: 12px; font-weight: 600; }
+ion-button { --border-radius: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; }   /* Material too: no capitals */
 ion-button.neutral { --background: var(--raised); --background-activated: var(--raised); --background-hover: var(--raised); --color: var(--text);
   --border-color: var(--border); --border-style: solid; --border-width: 1px; }
 ion-button.neutral.negative { --color: var(--negative); }
@@ -135,6 +135,7 @@ ion-item.sel { --background: var(--active); }                          /* the op
 .warnbox ul { margin: 0; padding-left: 18px; }
 .warnbox.held { background: var(--neg-bg); color: var(--neg-ink); }
 .warnbox a { color: inherit; text-decoration: underline; font-weight: 600; }
+mark.changed { background: var(--ok-bg); color: var(--ok-ink); border-radius: 4px; padding: 0 3px; }
 .slot { margin: 12px 16px 0; border: 1.5px dashed var(--control); border-radius: var(--radius); background: var(--surface); padding: 14px 16px;
   display: flex; align-items: center; gap: 14px; }
 .slot.drag { border-color: var(--accent); background: var(--raised); }
