@@ -88,6 +88,15 @@ def url(item_id):
     return f"/dashboard/api/items/external:{item_id}"
 
 
+async def approve_held(app, mcp, change):
+    """Approve after `change` ran: the owner looked, then the service changed."""
+    q = mcp._icloud_dashboard.sources["external"].pending()[0]
+    change()
+    async with client(app) as c:
+        token = await signed_in(c)
+        return q, await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
+
+
 async def approve(app, mcp):
     q = mcp._icloud_dashboard.sources["external"].pending()[0]
     async with client(app) as c:
@@ -144,16 +153,25 @@ async def test_a_gateway_that_cannot_be_reached_is_failed_and_a_lost_answer_is_u
     assert len(market.sends()) == 1 and mcp._icloud_dashboard.sources["external"].pending() == []
 
 
-async def test_a_title_that_changed_after_the_owner_looked_sends_nothing(web, market):
-    """protects=criterion 4 and S1: the owner approves what they saw; fails_when=the send happens, or the request waits again;
+async def test_a_title_that_changed_after_the_owner_looked_sends_nothing_and_waits_as_a_new_version(web, market):
+    """protects=criterion 4 and package 2c: the owner approves what they saw; a change at the service is a new version, not a
+    discard; fails_when=the send happens, the request ends, the old hash still approves, or the card hides the change;
     no_claim=a change between the recheck and the send."""
     app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
     got = await call(mcp, "approval_request", **ASK)
-    market.titles["c-1"] = "Bike trailer, sold"
-    _, r = await approve(app, mcp)
-    assert r.status_code == 409 and r.json()["state"] == "discarded" and market.sends() == []
-    status = await call(mcp, "approval_status", id=got["outbox_id"])
-    assert (status["status"], status["reason"]) == ("discarded", "target_changed")
+    q, r = await approve_held(app, mcp, lambda: market.titles.__setitem__("c-1", "Bike trailer, sold"))
+    assert r.status_code == 409 and r.json()["state"] == "waiting" and r.json()["version"] == 2 and market.sends() == []
+    assert (await call(mcp, "approval_status", id=got["outbox_id"]))["status"] == "waiting"
+    it = await item(app, got["outbox_id"])
+    assert [v["by"] for v in it["versions"]] == ["assistant", "service"]
+    assert it["changed"] == [{"label": "Listing", "old": "Bike trailer, two seats", "new": "Bike trailer, sold"}]
+    assert it["rows"][0] == ["Listing", "Bike trailer, sold"] and it["sha"] != q.sha256
+    async with client(app) as c:
+        token = await signed_in(c)
+        stale = await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
+        assert stale.status_code == 409 and market.sends() == []          # the version the owner looked at first cannot be approved
+        ok = await c.post(url(q.id) + "/approve", json={"sha": it["sha"]}, headers=api(token))
+    assert ok.status_code == 200 and len(market.sends()) == 1
 
 
 async def test_an_empty_list_lets_nobody_through_and_star_lets_anyone(web, market, monkeypatch):
@@ -336,20 +354,53 @@ async def test_a_copied_value_of_another_shape_refuses_without_showing_it(web, m
     assert got["reason"] == "describe_failed" and "secret-long-title" not in json.dumps(got)
 
 
-async def test_a_new_card_after_a_discard_has_its_own_hash_and_the_audit_names_the_reason(web, market):
-    """protects=S1: after the target changed, the agent asks again and the owner sees the new title; fails_when=the old card comes
-    back, the hash repeats, or the audit lacks the reason; no_claim=the dashboard's wording."""
+async def test_a_revision_is_in_the_audit_with_both_hashes_and_the_key_stays_bound(web, market):
+    """protects=package 2c, D7: the log names the version the owner looked at and the new one; the agent asking again with the same
+    request_id gets the same request; fails_when=the audit lacks a hash, or a second request appears; no_claim=the wording."""
     app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
-    await call(mcp, "approval_request", **ASK)
-    first = mcp._icloud_dashboard.sources["external"].pending()[0]
-    market.titles["c-1"] = "Bike trailer, one seat"
-    await approve(app, mcp)
-    assert "target_changed" in audit_text(mcp)
-    await call(mcp, "approval_request", **ASK)
-    second = mcp._icloud_dashboard.sources["external"].pending()[0]
-    assert second.id != first.id and second.sha256 != first.sha256
-    _, r = await approve(app, mcp)
-    assert r.status_code == 200 and len(market.sends()) == 1
+    got = await call(mcp, "approval_request", **ASK, request_id="k-1")
+    q, _ = await approve_held(app, mcp, lambda: market.titles.__setitem__("c-1", "Bike trailer, one seat"))
+    new = mcp._icloud_dashboard.sources["external"].pending()[0]
+    log = audit_text(mcp)
+    assert "approval.revised" in log and q.sha256 in log and new.sha256 in log
+    again = await call(mcp, "approval_request", **ASK, request_id="k-1")
+    assert again["outbox_id"] == got["outbox_id"] and len(mcp._icloud_dashboard.sources["external"].pending()) == 1
+
+
+async def test_the_owners_edit_is_a_version_and_the_assistants_stays_readable(web, market):
+    """protects=package 2c: "Edit text" adds a version; the first stays on the card; fails_when=the edit overwrites, or the list
+    lacks the assistant's text; no_claim=none beyond protects."""
+    app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    got = await call(mcp, "approval_request", **ASK)
+    q = mcp._icloud_dashboard.sources["external"].pending()[0]
+    async with client(app) as c:
+        token = await signed_in(c)
+        r = await c.put(url(q.id) + "/text", json={"sha": q.sha256, "text": "Is it free on Sunday too?"}, headers=api(token))
+        assert r.status_code == 200, r.text
+    it = await item(app, got["outbox_id"])
+    assert [(v["by"], v["text"]) for v in it["versions"]] == [("assistant", ASK["params"]["text"]), ("owner", "Is it free on Sunday too?")]
+    assert it["versions"][1]["changes"] == [{"label": "Text", "old": ASK["params"]["text"], "new": "Is it free on Sunday too?"}]
+    assert "changed" not in it
+
+
+async def test_the_assistant_can_revise_its_own_waiting_request_and_nothing_else(web, market):
+    """protects=package 2c replaces: a revision is a new version of the same request, through every check; fails_when=a second
+    request appears, the revision skips the owner's list, or another request_id or action is accepted; no_claim=two agents behind
+    one client label."""
+    app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    got = await call(mcp, "approval_request", **ASK, request_id="k-1")
+    revised = {"action": ASK["action"], "params": {**ASK["params"], "text": "Still free on Saturday? I can come at nine."}}
+    r = await call(mcp, "approval_request", **revised, request_id="k-1", replaces=got["outbox_id"])
+    assert r["outbox_id"] == got["outbox_id"] and r["replaced"] is True and r["version"] == 2
+    assert len(mcp._icloud_dashboard.sources["external"].pending()) == 1
+    it = await item(app, got["outbox_id"])
+    assert [v["by"] for v in it["versions"]] == ["assistant", "assistant"] and it["text"] == revised["params"]["text"]
+    assert (await refused(mcp, **revised, request_id="k-2", replaces=got["outbox_id"]))["reason"] == "not_replaceable"
+    off_list = {"action": ASK["action"], "params": {**ASK["params"], "conversation_id": "c-2"}}
+    assert (await refused(mcp, **off_list, replaces=got["outbox_id"]))["reason"] == "not_allowed"
+    _, done = await approve(app, mcp)
+    assert done.status_code == 200
+    assert (await refused(mcp, **revised, replaces=got["outbox_id"]))["reason"] == "not_replaceable"   # it no longer waits
 
 
 def test_a_broken_file_skips_the_plugin_but_stops_the_server_start(tmp_path, monkeypatch, web):
@@ -641,3 +692,28 @@ def test_required_mode_blocks_when_not_checked_and_an_old_ok_is_checked_again_be
     monkeypatch.setattr(PR, "MAX_AGE", -1.0)
     monkeypatch.setattr(PR, "FRESH", -1.0)                                # as if both windows had passed
     assert pr.hold("a.one", approving=True).level == "blocked"             # an approval after MAX_AGE does
+
+
+async def test_a_recheck_that_answers_an_empty_mapping_sends_nothing(web, market):
+    """protects=the adversarial review's empty-mapping finding: anything but None from a recheck stops the send; fails_when=the
+    executor runs; no_claim=none beyond protects."""
+    _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    await call(mcp, "approval_request", **ASK)
+    src = mcp._icloud_dashboard.sources["external"]
+    q = src.pending()[0]
+    object.__setattr__(src.registry.get("market.message.send"), "recheck", lambda params: {})
+    with pytest.raises(Exception):
+        src.release(q)
+    assert market.sends() == []
+
+
+async def test_the_assistants_revision_is_in_the_log_with_the_hash_it_replaced(web, market):
+    """protects=the adversarial review's audit finding for replaces; fails_when=the log lacks replaced, the version or the old hash;
+    no_claim=none beyond protects."""
+    _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
+    got = await call(mcp, "approval_request", **ASK)
+    first = mcp._icloud_dashboard.sources["external"].pending()[0].sha256
+    await call(mcp, "approval_request", action=ASK["action"], params={**ASK["params"], "text": "Free on Sunday?"}, replaces=got["outbox_id"])
+    log = audit_text(mcp)
+    assert '"replaced": true' in log.replace("'", '"').lower() or "replaced" in log
+    assert first in log and "previous_sha256" in log

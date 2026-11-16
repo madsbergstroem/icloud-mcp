@@ -11,7 +11,7 @@ For each action of the file this builds an ActionSpec (plugins/__init__.py), so 
   into the request (they are readOnly in the schema), so the card shows the service's words. A failure refuses the request
   (describe_failed, retryable; nothing queued).
 - recheck = `describe` again, after the owner approved and before the send: when a field named in `recheck` differs, nothing is
-  sent and the request ends as discarded (target_changed). A failure puts it back (nothing was sent).
+  sent and the request waits again as a new version with the service's values (package 2c). A failure puts it back.
 - executor = one call of `tool` with `arguments`, its answer read through `result`: a value in `sent` is sent, one in `failed` is
   failed (it waits again), anything else is unclear (never repeated). A gateway that could not be reached or refused the key
   before the call is failed; once the call may have left, unclear.
@@ -297,12 +297,14 @@ def prepare(conn: Connection, fa: FileAction, params: Mapping[str, Any]) -> dict
         raise A.ExternalError(f"The service behind {fa.action} could not be asked about the target. Nothing was queued.", "describe_failed") from None
 
 
-def recheck(conn: Connection, fa: FileAction, params: Mapping[str, Any]) -> str | None:
+def recheck(conn: Connection, fa: FileAction, params: Mapping[str, Any]) -> dict[str, Any] | None:
+    """None when the fields named in `recheck` are what the owner saw; else the parameters with every copied field as the
+    service has it now, for a new version."""
     fields = (fa.describe or {}).get("recheck") or []
     if not fields:
         return None
     now = _describe(conn, fa, params)                 # a failure raises: the gate puts the request back, nothing was sent
-    return "target_changed" if any(now.get(f) != params.get(f) for f in fields) else None
+    return {**params, **now} if any(not _same(now.get(f), params.get(f)) for f in fields) else None
 
 
 class Executor:
