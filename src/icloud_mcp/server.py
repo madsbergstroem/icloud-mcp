@@ -212,7 +212,8 @@ def _addresses(v: Any) -> list[str]:
 def _queued_ids(text: str) -> dict[str, Any]:
     """outbox_id and sha256 of the request a tool's answer says it queued, for its line in the activity log; {} when unknown."""
     try:
-        item_id = json.loads(text).get("outbox_id")
+        answer = json.loads(text)
+        item_id = answer.get("outbox_id")
     except (ValueError, AttributeError):
         return {}
     if not isinstance(item_id, str):
@@ -220,7 +221,11 @@ def _queued_ids(text: str) -> dict[str, Any]:
     for box in _audit_outboxes.values():
         q = next((x for x in box.pending() if x.id == item_id), None) if box is not None else None
         if q is not None:
-            return {"outbox_id": item_id, "sha256": q.sha256}
+            out: dict[str, Any] = {"outbox_id": item_id, "sha256": q.sha256}
+            if answer.get("replaced") and hasattr(box, "versions"):     # the agent's revision (package 2c): which version it replaced
+                vs = box.versions(item_id)
+                out.update(replaced=True, version=len(vs), **({"previous_sha256": vs[-2]["sha256"]} if len(vs) > 1 else {}))
+            return out
     return {"outbox_id": item_id}
 
 
