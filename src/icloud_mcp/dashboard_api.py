@@ -393,6 +393,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             out["versions"] = versions
             if versions[-1]["by"] == "service":
                 out["changed"] = versions[-1]["changes"]
+            elif versions[-1]["by"] == "owner":                  # package 2d: the rows the owner changed are marked, without a warning
+                out["edited_rows"] = [c["label"] for c in versions[-1]["changes"] if c["label"] != "Text"]
         if src.kind == "mail":
             dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
             added = {x["index"]: x["asked"] for x in dq["added_files"]}

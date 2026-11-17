@@ -406,9 +406,10 @@ class Store:
             if r is None:
                 return None
             q = dc_replace(self._q(r), raw=raw, sha256=new_sha, **fields)
-            self._db.execute("UPDATE request SET raw = ?, sha256 = ?, followup = ?, edited_from = ?, "
+            self._db.execute("UPDATE request SET raw = ?, sha256 = ?, followup = ?, edited_from = ?, recipients = ?, "
                              "key_fingerprint = COALESCE(?, key_fingerprint) WHERE id = ?",
-                             (raw, new_sha, json.dumps(q.followup) if q.followup is not None else None, q.edited_from, key_fingerprint, item_id))
+                             (raw, new_sha, json.dumps(q.followup) if q.followup is not None else None, q.edited_from,
+                              json.dumps(q.recipients), key_fingerprint, item_id))
             last = self._db.execute("SELECT * FROM version WHERE request_id = ? ORDER BY n DESC LIMIT 1", (item_id,)).fetchone()
             if author == "owner" and last is not None and last["author"] == "owner":
                 before = self._db.execute("SELECT sha256 FROM version WHERE request_id = ? AND n = ?", (item_id, last["n"] - 1)).fetchone()

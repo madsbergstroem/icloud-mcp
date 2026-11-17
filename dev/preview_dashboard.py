@@ -87,6 +87,8 @@ if args.gateway != "none":                 # the connector file's example behind
     def _write(site: str, op: str, args: dict, idempotencyKey: str = "") -> dict:
         return {"write": "applied"}
     _doc = json.load(open(os.path.join(ROOT, "docs", "examples", "actions.example.json")))
+    _doc["actions"][0]["rows"].append(["Chat", "conversation_id"])           # package 2d: the owner may change the chat as well
+    _doc["actions"][0]["editable_fields"] = ["offer", "conversation_id"]
     _offer = _copy.deepcopy(_doc["actions"][0])
     _offer.update(action="market.offer.send", title="Marketplace offer", allow_setting="MARKET_OFFER_ALLOWLIST")
     _doc["actions"].append(_offer)
@@ -246,7 +248,8 @@ if args.beeper in ("ok", "no-key", "refused"):              # a Beeper message t
     asyncio.run(mcp.call_tool("messages_send_request", {"chat_id": "beeper:!single:beeper.test", "text": "See you at the north gate at nine."}))
 if args.gateway != "none":                                   # a marketplace reply, through the real tool
     asyncio.run(mcp.call_tool("approval_request", {"action": "market.message.send",
-                                                   "params": {"conversation_id": "c-1", "text": "Is the trailer still free on Saturday?"}}))
+                                                   "params": {"conversation_id": "c-1", "offer": 35,
+                                                              "text": "Is the trailer still free on Saturday?"}}))
 if "external" in d.sources:                                  # and a request whose type this server no longer has: "Other"
     from icloud_mcp import actions as AT
     d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")

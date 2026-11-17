@@ -143,11 +143,104 @@ class ExternalApprovals(ApprovalSource):
             A.check_params(reg.action_type, changed)
         except A.ExternalError as e:
             raise T.TextInvalid(f"That text does not fit this request ({e}).") from e
-        return A.canonical(type_id, changed), None
+        return A.canonical(type_id, changed, A.owner_allowed(q.raw)), None
+
+    # -- every field the owner may change (package 2d) ---------------------------------------------------------------------
+    def fields_of(self, q) -> list[dict[str, Any]]:
+        """The fields the owner may change before approving, as the edit form shows them: the rows first, then the text.
+        [] when there is nothing beyond the text (the text alone keeps its own editor)."""
+        try:
+            reg, _, params = self._entry(q)
+        except A.ExternalError:
+            return []
+        if reg is None or not reg.action_type.editable_fields:
+            return []
+        at = reg.action_type
+        props = at.params_schema.get("properties") or {}
+        labels = {name: label for label, name in at.rows}
+        own = {x.casefold() for x in A.owner_allowed(q.raw)}
+        people = self._people(at, params)
+        order = [n for _, n in at.rows if n in A.editable(at)] + ([at.text_field] if at.text_field else [])
+        out = []
+        for name in dict.fromkeys(order):
+            spec = props.get(name) or {}
+            value = params.get(name)
+            out.append({"name": name, "label": labels.get(name, "Text"), "type": spec.get("type", "string"),
+                        "value": "" if value is None else value, "text": name == at.text_field,
+                        "limit": self.text_limit_of(q) if name == at.text_field else spec.get("maxLength"),
+                        "required": name in (at.params_schema.get("required") or []),
+                        "recipient": name in at.recipient_fields,
+                        "owner_allowed": str(value).strip().casefold() in own and str(value).strip() in people})
+        return out
+
+    @staticmethod
+    def _people(at: A.ActionType, params: Mapping[str, Any]) -> list[str]:
+        try:
+            return [str(p).strip() for p in at.recipients(params) if str(p).strip()]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def with_fields(self, q, changes: Any) -> tuple[bytes, str, list[str], list[str], list[str]]:
+        """The stored request with the owner's changes: (raw, key fingerprint, people, labels of the fields that changed, people
+        the owner allowed by hand). A recipient the owner types in who is not on the list is allowed for this request only;
+        the owner's other rules (the policy) still apply, and the service is asked about the target again.
+        Raises TextLocked when nothing here can be changed, TextInvalid for a change that does not fit."""
+        reg, type_id, params = self._entry(q)
+        if reg is None or not reg.action_type.editable_fields:
+            raise T.TextLocked(self.text_block(q) or "This kind of request has no fields to change.")
+        at = reg.action_type
+        if not isinstance(changes, Mapping) or not changes:
+            raise T.TextInvalid("Nothing to change was sent.")
+        allowed = set(A.editable(at))
+        if bad := sorted(set(changes) - allowed):
+            raise T.TextInvalid(f"{bad[0]} cannot be changed here.")
+        labels = {name: label for label, name in at.rows}
+        new = dict(params)
+        for name, value in changes.items():
+            if isinstance(value, str):
+                value = T.clean(value, allow_empty=True, limit=self.text_limit, strip=name != at.text_field)
+            if value == "" and name not in (at.params_schema.get("required") or []):
+                new.pop(name, None)
+            else:
+                new[name] = value
+        order = [n for _, n in at.rows if n in allowed] + ([at.text_field] if at.text_field else [])     # as the form lists them
+        changed = [labels.get(n, "Text") for n in dict.fromkeys(order) if new.get(n) != params.get(n)]
+        if not changed:
+            return q.raw, self.key_fingerprint(at, params), self._people(at, params), [], A.owner_allowed(q.raw)
+        try:
+            A.check_params(at, new)
+        except A.ExternalError as e:
+            raise T.TextInvalid(f"That does not fit this request ({e}).") from e
+        before = self._people(at, params)
+        after = self._people(at, new)
+        if after != before and reg.prepare is not None:          # a new target: the service tells what it is, as for the agent
+            agent = {k: v for k, v in new.items() if k not in A.read_only_fields(at)}
+            try:
+                new = dict(reg.prepare(agent))
+            except A.ExternalError as e:
+                raise T.TextInvalid(str(e).replace(" Nothing was queued.", "")) from None
+            except Exception:  # noqa: BLE001
+                raise T.TextInvalid("The service could not be asked about the new target.") from None
+        try:
+            listed = reg.allowed_set()
+        except Exception:  # noqa: BLE001
+            raise T.TextInvalid("Your list for this action could not be read.") from None
+        kept = {x.casefold() for x in A.owner_allowed(q.raw)}
+        introduced = {p.casefold() for p in after} - {p.casefold() for p in before}
+        own = [p for p in after if p.casefold() not in listed and "*" not in listed and (p.casefold() in introduced or p.casefold() in kept)]
+        try:
+            plain, people = self._check(reg, new, own)
+        except A.ExternalError as e:
+            raise T.TextInvalid(str(e)) from None
+        raw = A.canonical(type_id, plain, own)
+        if len(raw) > A.MAX_RAW_BYTES:
+            raise T.TextInvalid(f"The request would be larger than {A.MAX_RAW_BYTES} bytes.")
+        return raw, self.key_fingerprint(at, plain), people, changed, own
 
     # -- queueing: the one way in --------------------------------------------------------------------------------------------
-    def _check(self, reg: A.Registration, params: Any) -> tuple[dict[str, Any], list[str]]:
-        """The parameters as plain JSON and the people the request reaches, when both are acceptable as things stand now."""
+    def _check(self, reg: A.Registration, params: Any, owner_allowed: Any = ()) -> tuple[dict[str, Any], list[str]]:
+        """The parameters as plain JSON and the people the request reaches, when both are acceptable as things stand now.
+        owner_allowed: recipients the owner typed in by hand for this version; the list does not apply to them, the rules do."""
         at = reg.action_type
         plain = A.check_params(at, params)
         try:
@@ -155,7 +248,8 @@ class ExternalApprovals(ApprovalSource):
         except Exception as e:  # noqa: BLE001
             raise A.ExternalError("Who this request reaches could not be worked out.", "schema", "params") from e
         people = list(dict.fromkeys(p for p in people if p))
-        self._check_people(reg, people)
+        own = {str(x).strip().casefold() for x in owner_allowed}
+        self._check_people(reg, [p for p in people if p.casefold() not in own])
         try:
             why = reg.policy(plain) if reg.policy is not None else None
         except Exception as e:  # noqa: BLE001  -- a rule that cannot be read permits nothing, and its error text stays here
@@ -223,7 +317,7 @@ class ExternalApprovals(ApprovalSource):
     @staticmethod
     def key_fingerprint(at: A.ActionType, params: Mapping[str, Any]) -> str:
         """What a key stands for: the parameters without the text (the owner may edit it) and without what the service fills in."""
-        skip = {at.text_field} | A.read_only_fields(at)
+        skip = set(A.editable(at)) | A.read_only_fields(at)
         return S.fingerprint({k: v for k, v in params.items() if k not in skip})
 
     @staticmethod
@@ -233,7 +327,7 @@ class ExternalApprovals(ApprovalSource):
             type_id, theirs = A.read(old.raw)
         except A.ExternalError:
             return False
-        skip = {at.text_field} | A.read_only_fields(at)          # the owner may edit the text; the service fills in readOnly fields
+        skip = set(A.editable(at)) | A.read_only_fields(at)      # the owner may edit these; the service fills in readOnly fields
         drop = lambda p: {k: v for k, v in p.items() if k not in skip}            # noqa: E731
         return type_id == at.id and drop(theirs) == drop(params)
 
@@ -245,7 +339,8 @@ class ExternalApprovals(ApprovalSource):
         reg, type_id, params = self._entry(q)
         if reg is None:
             raise A.ExternalError(f"This kind of action ({type_id}) is not available on this server any more. Discard it.")
-        plain, _ = self._check(reg, params)                      # as things stand now, like the recipient list of a mail
+        own = A.owner_allowed(q.raw)
+        plain, _ = self._check(reg, params, own)                 # as things stand now, like the recipient list of a mail
         hold = reg.hold_now(approving=True)
         if hold and hold.level == "blocked":                      # nothing claimed: the request keeps waiting
             raise A.ExternalError(f"Not carried out: {hold.text}")
@@ -264,10 +359,10 @@ class ExternalApprovals(ApprovalSource):
                 raise A.ExternalError("Not carried out: the service could not be asked about the target. Try again in a moment.") from None
             if isinstance(reason, Mapping) and hasattr(self.box, "revise"):   # the service's new values: a new version waits
                 try:
-                    fresh, _ = self._check(reg, dict(reason))
+                    fresh, _ = self._check(reg, dict(reason), own)
                 except A.ExternalError:                  # new values the type does not take: nothing to show, it ends as before
                     fresh = None
-                raw = A.canonical(type_id, fresh) if fresh is not None else b""
+                raw = A.canonical(type_id, fresh, own) if fresh is not None else b""
                 if fresh is not None and len(raw) <= A.MAX_RAW_BYTES:
                     revised = self._record(self.box.revise, claimed, raw, self.key_fingerprint(reg.action_type, fresh))
                     if revised is None:

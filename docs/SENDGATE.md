@@ -113,7 +113,7 @@ Rules every package keeps:
 | 1 | Actions of any kind: plugin `actions`, `approval_request`, `approval_list_actions` | gate | 0 | yes |
 | 2 | Gateway connector from a configuration file; first user is a marketplace reply | connector | 1 | yes |
 | 2c | Versions of a request: the owner's edit and a changed target become new versions instead of a discard | gate | 2, 3 | yes |
-| 2d | The owner edits every field before approving: subject, To, Cc, Bcc, and every field an action type marks editable | gate | 2c | later |
+| 2d | The owner edits every field before approving: subject, To, Cc, Bcc, and every field an action type marks editable | gate | 2c | yes (gateway actions; mail with 6) |
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | later |
 | 5 | Calendar invitations on the same | connector | 1, 3 | later |
@@ -369,12 +369,31 @@ and the old ones stay readable. Accepted layout: the current version on top, the
   before them removes it. Buttons are not in capitals in the Material look either.
 - Mail, calendar and iMessage keep their single edit until packages 4 to 6 move them to the store.
 
-## Package 2d: edit every field (later)
+## Package 2d: edit every field
 
 The owner asked for it on 2026-11-16: not only the text, also the subject, To and Cc of a mail and the agent-set fields of any
 action. A changed recipient goes through the owner's list and the policy again before the new version is stored (and for a file
 action through `describe`), so an edit cannot reach someone the list does not allow. Each edit is a version (2c). Mail moves to
 the store with package 6, so its fields join versions there; until then the mail card keeps its text-only edit. Needs a mock first.
+
+### As built (2d, gateway actions)
+
+- Mock (owner 2026-11-17, Artifact „Sendgate Paket 2d“): variant A, „Edit“ opens one form like a mail being written, the label and
+  the value on one line, the text below. Changed by the owner's comment on the mock: the list guards against the assistant, not
+  the owner. A recipient the owner types in who is not on the list is allowed for that request only, with a note on the form; the
+  list itself does not change. The type's other rules (`policy`) still apply, and the service is asked about the new target
+  again (`prepare`), so the card shows the new listing.
+- Connector file: `editable_fields` (see the reference below); `ActionType.editable_fields` and `recipient_fields` for plugins.
+- The version's canonical bytes carry `owner_allowed` (sorted, left out when empty, so older entries keep their bytes and hash).
+  Approving reads it from the version it approves: only those recipients skip the list. A recipient the assistant set is
+  checked against the list as before, also after the owner edited something else. A recheck's new version keeps it.
+- `PUT /dashboard/api/items/{key}/fields {"sha", "fields": {name: value}}`: one owner version for the whole save (edits in a row
+  stay one version, as in 2c). Refused with nothing stored: a field that is not editable, a value the schema does not take, an
+  older `sha`. The log line `approval.edited` names the labels of what changed (never the values) and how many recipients the
+  owner allowed by hand.
+- A request's key stands for its parameters without the editable fields, so the assistant asking again with the same key after
+  the owner's edit finds the same request.
+- A type without `editable_fields` keeps the text editor of 2c unchanged.
 
 ## Package 3: store
 
@@ -583,7 +602,8 @@ more is a Python plugin (`ActionSpec`). Each action:
 | `tool` | yes | The gateway tool that carries it out. `describe.tool` must be another tool. |
 | `arguments` | yes | What `tool` is called with, with placeholders (below). |
 | `params_schema` | yes | The parameters as a JSON Schema object. Fields `describe` fills in are `readOnly`, only at the top level, of type string (with `maxLength`), number, integer or boolean. With `$params` in `arguments`, `additionalProperties` must be `false`. Only declared fields reach the service. |
-| `text_field` | no | The parameter the owner may edit before approving. |
+| `text_field` | no | The parameter shown as the request's text, which the owner may edit before approving. |
+| `editable_fields` | no | Further parameters the owner may change before approving (package 2d), edited in one form with the text. Each is set by the agent (not `readOnly`), of type string, number, integer or boolean, and shown in `rows`. A recipient field in the list lets the owner change who it reaches: someone typed in by hand who is not on the list is allowed for that request only. |
 | `recipient_fields` | yes | The parameters that say who or what it reaches; checked against the owner's list. Each must be required and set by the agent (not `readOnly`). |
 | `rows` | yes | `[label, field]` pairs of the card. The first row names who or what it reaches: a recipient field or a field `describe` copies. The labels To, Guests, Will be delivered to and Conversation are the gate's own. |
 | `describe` | no | Asks the service about the target before the request is queued: `tool`, `arguments`, `copy` (readOnly field to dotted path of the answer) and `recheck` (copied fields compared again just before the send; a difference ends the request as discarded, target_changed). |

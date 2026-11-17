@@ -35,10 +35,18 @@
             "type": "string",
             "readOnly": true,
             "maxLength": 200
+          },
+          "offer": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000
           }
         }
       },
       "text_field": "text",
+      "editable_fields": [
+        "offer"
+      ],
       "recipient_fields": [
         "conversation_id"
       ],
@@ -46,6 +54,10 @@
         [
           "Listing",
           "conversation_title"
+        ],
+        [
+          "Offer (EUR)",
+          "offer"
         ]
       ],
       "describe": {

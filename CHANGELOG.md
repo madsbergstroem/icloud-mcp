@@ -5,6 +5,11 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Change every field before you approve (fork).** An action from the connector file can mark fields as editable
+  (`editable_fields`). „Edit“ then opens one form with those fields and the text, and the save is one new version. Someone you type
+  in yourself who is not on your list is allowed for that request only; your list does not change, and your assistant still cannot
+  reach them. Mail, iMessage and calendar keep their text editor until they move to the new store.
+
 - **One list of every account, and archiving chats (fork).** `icloud_list_accounts` lists every account of the server in one call:
   the mail, calendar and contacts accounts (provider, address, areas, which area each is the default of, read only) and every chat
   channel with what agents can do there and its accounts (for Beeper: network, your name there and the account id, read with the
