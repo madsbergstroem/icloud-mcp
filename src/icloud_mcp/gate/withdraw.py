@@ -24,7 +24,6 @@ other approval line.
 from __future__ import annotations
 
 import email
-import json
 from email import policy
 from typing import Annotated, Any, Literal, get_args
 
@@ -59,12 +58,9 @@ def describe(kind: str, q: Any, external: Any = None) -> tuple[str, str]:
             return _CALENDAR_BADGES.get(m.get("op"), "calendar"), str(m.get("summary") or "") or "(no title)"
         if kind == "external" and external is not None:           # the action type's own title, never a parameter
             reg = external.registry.get(read_action(q.raw)[0])
+            if reg is not None and reg.builtin:                   # a type of the server's own is named by its badge ('imessage')
+                return reg.action_type.badge.lower(), reg.action_type.title
             return ("action", reg.action_type.title) if reg is not None else ("action", "")
-        if kind == "imessage":
-            d = json.loads(q.raw.decode())
-            to = d.get("to") or {}
-            people = ", ".join(f"{p.get('name')} ({p.get('handle')})" if p.get("name") else str(p.get("handle", "")) for p in to.get("participants", []))
-            return "imessage", f"iMessage to {to.get('name') or people or d.get('chat_id') or d.get('handle') or ''}".strip()
     except Exception:  # noqa: BLE001  -- a title is a nicety: an entry that cannot be read is still withdrawn
         pass
     return "", ""
@@ -78,6 +74,15 @@ class Withdrawals:
         """What an id that is not waiting answers: the status approval_status gives it, and withdrawn false."""
         got = self.ledger.status(item_id)
         return {"id": item_id, "withdrawn": False, "status": got["status"], **({"note": got["note"]} if "note" in got else {})}
+
+    def _builtin(self, q: Any) -> bool:
+        """Whether a request is of a type the server registers itself, whose recipients come from the service and may be logged
+        (D4-2), not from an agent's parameters."""
+        try:
+            reg = self.external.registry.get(read_action(q.raw)[0]) if self.external is not None and getattr(q, "action_type", None) else None
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(reg is not None and reg.builtin)
 
     def withdraw(self, item_id: str, reason: str, client: str) -> dict[str, Any]:
         """Take a waiting request back. client: the name the calling client gave itself ('' when it gave none)."""
@@ -94,7 +99,7 @@ class Withdrawals:
             return self._not_withdrawn(item_id)
         badge, title = describe(kind, claimed, self.external)
         # the first recipient, as approval.sent records it, so Home can say whom it was for; never the text
-        rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind in ("mail", "calendar") else []
+        rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind in ("mail", "calendar") or self._builtin(claimed) else []
         self.ledger.audit.record("approval.withdrawn", actor="assistant", via=client,
                                  summary=f"Withdrew {badge} “{title}”" if title else f"Withdrew a queued {kind} request",
                                  kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None),

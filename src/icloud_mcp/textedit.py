@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import email
 import hmac
-import json
 import logging
 from email import policy
 from typing import Any
@@ -32,7 +31,6 @@ from starlette.responses import Response
 
 log = logging.getLogger(__name__)
 
-IMESSAGE_MAX_CHARS = 10000        # the limit messages_send_request has when it queues an iMessage
 CALENDAR_MAX_CHARS = 10000
 _NOTHING = "Nothing was changed."
 
@@ -64,17 +62,6 @@ def clean(text: Any, *, allow_empty: bool, limit: int, strip: bool = False) -> s
 def same(a: str, b: str) -> bool:
     """Two texts count as the same when only line-break style or the blank space at the end differs."""
     return a.replace("\r\n", "\n").rstrip() == b.replace("\r\n", "\n").rstrip()
-
-
-# -- iMessage: the queued JSON has a `text` field ---------------------------------------------------------------------------
-def imessage_text(raw: bytes) -> str:
-    return str(json.loads(raw.decode()).get("text", ""))
-
-
-def imessage_with_text(raw: bytes, text: str) -> bytes:
-    d = json.loads(raw.decode())
-    d["text"] = text
-    return json.dumps(d, ensure_ascii=False).encode()
 
 
 # -- calendar: the description of the one event in the stored iCalendar object -----------------------------------------------

@@ -16,7 +16,7 @@ from pathlib import Path
 from icloud_mcp.mail import MailService
 
 from test_dashboard import SAME, api, client, queue, signed_in, web  # noqa: F401  (web is a fixture)
-from test_text_edit import IMESSAGE_ENV, queue_calendar, queue_imessage
+from test_text_edit import answer_with, IMESSAGE_ENV, queue_calendar, queue_imessage
 
 GOLDEN = Path(__file__).parent / "fixtures" / "legacy_approvals_golden.json"
 _VOLATILE = {"t", "created_at", "expires_at", "expired_at", "at", "h", "prev", "cursor", "v", "time", "signed_in_at", "last_sent_at", "withdrawn", "when"}
@@ -49,7 +49,7 @@ def _expire(box, item_id):
 async def _scenario(web, monkeypatch) -> dict:
     app, mcp, _p, sent = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE_ENV)
     dash = mcp._icloud_dashboard
-    mail_src, msg_src, cal_src = dash.sources["mail"], dash.sources["imessage"], dash.sources["calendar"]
+    mail_src, msg_src, cal_src = dash.sources["mail"], dash.sources["external"], dash.sources["calendar"]     # iMessage: package 4b
     ids: dict[str, str] = {}
     rec: dict = {}
 
@@ -67,14 +67,13 @@ async def _scenario(web, monkeypatch) -> dict:
         return real_smtp(self, msg, rcpts)
 
     monkeypatch.setattr(MailService, "_smtp_send", smtp_send)
-    monkeypatch.setattr(type(msg_src.imessage), "release", lambda self, box, item_id, sha256=None: (
-        box.claim(item_id) and {"status": imessage["v"], "to": "Hiking crew", "note": ""}))
+    answer_with(msg_src, monkeypatch, imessage)
     monkeypatch.setattr(type(cal_src.cal), "release", lambda self, q: "Added “Autumn fair”. iCloud now emails jana@example.org.")
 
     mail_id = name("mail-1", queue(mcp, subject="Lunch", body="See you at noon"))
     msg_id = name("imessage-1", queue_imessage(mcp)[1].id)
     cal_id = name("calendar-1", queue_calendar(mcp)[1].id)
-    keys = {"mail": f"mail:{mail_id}", "imessage": f"imessage:{msg_id}", "calendar": f"calendar:{cal_id}"}
+    keys = {"mail": f"mail:{mail_id}", "imessage": f"external:{msg_id}", "calendar": f"calendar:{cal_id}"}
 
     async with client(app) as c:
         token = await signed_in(c)
@@ -113,7 +112,7 @@ async def _scenario(web, monkeypatch) -> dict:
         smtp["fail"] = False
         rec["approve"] = {
             "mail": await send("POST", f"/dashboard/api/items/{keys['mail']}/approve", {"sha": shas["mail"]}),
-            "imessage": await send("POST", f"/dashboard/api/items/{keys['imessage']}/approve", {"sha": shas["imessage"]}),
+            "imessage": await send("POST", f"/dashboard/api/items/{keys['imessage']}/approve", {"sha": shas["imessage"], "override": True}),
             "calendar": await send("POST", f"/dashboard/api/items/{keys['calendar']}/approve", {"sha": shas["calendar"]}),
         }
         rec["sent_mail"] = [[m["To"], m["Subject"]] for m, _rcpts in sent]
@@ -123,15 +122,16 @@ async def _scenario(web, monkeypatch) -> dict:
         # a send that is certain, discarded requests, taken-back requests and requests that run out of time
         imessage["v"] = "sent"
         msg2 = name("imessage-2", queue_imessage(mcp, "Second text")[1].id)
-        sha2 = (await get(f"/dashboard/api/items/imessage:{msg2}"))["body"]["sha"]
-        rec["approve_sent_imessage"] = await send("POST", f"/dashboard/api/items/imessage:{msg2}/approve", {"sha": sha2})
+        sha2 = (await get(f"/dashboard/api/items/external:{msg2}"))["body"]["sha"]
+        rec["approve_sent_imessage"] = await send("POST", f"/dashboard/api/items/external:{msg2}/approve", {"sha": sha2, "override": True})
         discarded = {"mail": name("mail-2", queue(mcp, subject="Discard me", body="x")),
                      "imessage": name("imessage-3", queue_imessage(mcp, "Discard this")[1].id),
                      "calendar": name("calendar-2", queue_calendar(mcp)[1].id)}
         rec["discard"] = {}
         for k, item_id in discarded.items():
-            sha = (await get(f"/dashboard/api/items/{k}:{item_id}"))["body"]["sha"]
-            rec["discard"][k] = await send("POST", f"/dashboard/api/items/{k}:{item_id}/discard", {"sha": sha})
+            src = "external" if k == "imessage" else k
+            sha = (await get(f"/dashboard/api/items/{src}:{item_id}"))["body"]["sha"]
+            rec["discard"][k] = await send("POST", f"/dashboard/api/items/{src}:{item_id}/discard", {"sha": sha})
         rec["status_discarded"] = {k: await _tool(mcp, "approval_status", id=item_id) for k, item_id in discarded.items()}
         taken = {"mail": name("mail-3", queue(mcp, subject="Take me back", body="y")),
                  "imessage": name("imessage-4", queue_imessage(mcp, "Take this back")[1].id),

@@ -35,6 +35,36 @@
        "details": [
         [
          "Request",
+         "<id:imessage-5>"
+        ],
+        [
+         "Action",
+         "imessage.send"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
+       "error": "",
+       "note": "",
+       "ok": true,
+       "t": "<volatile>",
+       "tag": "",
+       "target": "A queued request expired without an answer",
+       "time": "<volatile>",
+       "tone": "warn",
+       "what": "a queued request expired without an answer",
+       "when": "<volatile>",
+       "who": "server"
+      },
+      {
+       "action": "Expired",
+       "actor": "Server",
+       "details": [
+        [
+         "Request",
          "<id:calendar-4>"
         ],
         [
@@ -52,32 +82,6 @@
        "time": "<volatile>",
        "tone": "warn",
        "what": "a queued calendar message expired without an answer",
-       "when": "<volatile>",
-       "who": "server"
-      },
-      {
-       "action": "Expired",
-       "actor": "Server",
-       "details": [
-        [
-         "Request",
-         "<id:imessage-5>"
-        ],
-        [
-         "Hash",
-         "<short sha>"
-        ]
-       ],
-       "diff": [],
-       "error": "",
-       "note": "",
-       "ok": true,
-       "t": "<volatile>",
-       "tag": "",
-       "target": "A queued iMessage message expired without an answer",
-       "time": "<volatile>",
-       "tone": "warn",
-       "what": "a queued iMessage message expired without an answer",
        "when": "<volatile>",
        "who": "server"
       },
@@ -150,6 +154,14 @@
          "<id:imessage-4>"
         ],
         [
+         "Action",
+         "imessage.send"
+        ],
+        [
+         "Sent to",
+         "Hiking crew"
+        ],
+        [
          "Why",
          "queued by mistake"
         ],
@@ -164,10 +176,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
-       "target": "iMessage “iMessage to Hiking crew”",
+       "target": "iMessage “iMessage”",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "withdrew iMessage “iMessage to Hiking crew”",
+       "what": "withdrew iMessage “iMessage”",
        "when": "<volatile>",
        "who": "Your assistant"
       },
@@ -244,6 +256,10 @@
          "<id:imessage-3>"
         ],
         [
+         "Action",
+         "imessage.send"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -258,10 +274,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "iMessage “iMessage to Hiking crew”",
+       "target": "iMessage “iMessage”",
        "time": "<volatile>",
        "tone": "",
-       "what": "discarded iMessage “iMessage to Hiking crew”",
+       "what": "discarded iMessage “iMessage”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -304,6 +320,14 @@
          "<id:imessage-2>"
         ],
         [
+         "Action",
+         "imessage.send"
+        ],
+        [
+         "Sent to",
+         "Hiking crew"
+        ],
+        [
          "Result",
          "Sent"
         ],
@@ -322,10 +346,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "iMessage “iMessage to Hiking crew”",
+       "target": "iMessage “iMessage”",
        "time": "<volatile>",
        "tone": "",
-       "what": "approved iMessage “iMessage to Hiking crew”",
+       "what": "approved iMessage “iMessage”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -372,6 +396,14 @@
          "<id:imessage-1>"
         ],
         [
+         "Action",
+         "imessage.send"
+        ],
+        [
+         "Sent to",
+         "Hiking crew"
+        ],
+        [
          "Result",
          "Not confirmed: it may or may not have gone through"
         ],
@@ -390,10 +422,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Unclear",
-       "target": "iMessage “iMessage to Hiking crew”",
+       "target": "iMessage “iMessage”",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "approved iMessage “iMessage to Hiking crew”",
+       "what": "approved iMessage “iMessage”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -530,6 +562,10 @@
          "<id:imessage-1>"
         ],
         [
+         "Action",
+         "imessage.send"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -544,10 +580,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
-       "target": "iMessage “iMessage to Hiking crew”",
+       "target": "iMessage “iMessage”",
        "time": "<volatile>",
        "tone": "",
-       "what": "edited iMessage “iMessage to Hiking crew” before sending",
+       "what": "edited iMessage “iMessage” before sending",
        "when": "<volatile>",
        "who": "You"
       },
@@ -643,7 +679,7 @@
   },
   "imessage": {
    "body": {
-    "note": "Handed to Messages (not yet confirmed): iMessage to Hiking crew.",
+    "note": "Handed to Messages (not yet confirmed).",
     "ok": true,
     "state": "unclear"
    },
@@ -696,12 +732,13 @@
    "action": "approval.edited",
    "actor": "owner",
    "details": {
-    "kind": "imessage",
+    "action_type": "imessage.send",
+    "kind": "external",
     "outbox_id": "<id:imessage-1>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Edited imessage “iMessage to Hiking crew” before sending",
+   "summary": "Edited imessage “iMessage” before sending",
    "t": "<volatile>",
    "via": "password"
   },
@@ -765,13 +802,17 @@
    "action": "approval.sent",
    "actor": "owner",
    "details": {
+    "action_type": "imessage.send",
     "delivery": "unconfirmed",
-    "kind": "imessage",
+    "kind": "external",
     "outbox_id": "<id:imessage-1>",
+    "recipients": [
+     "Hiking crew"
+    ],
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Approved imessage “iMessage to Hiking crew”",
+   "summary": "Approved imessage “iMessage”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -795,13 +836,17 @@
    "action": "approval.sent",
    "actor": "owner",
    "details": {
+    "action_type": "imessage.send",
     "delivery": "sent",
-    "kind": "imessage",
+    "kind": "external",
     "outbox_id": "<id:imessage-2>",
+    "recipients": [
+     "Hiking crew"
+    ],
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Approved imessage “iMessage to Hiking crew”",
+   "summary": "Approved imessage “iMessage”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -822,12 +867,13 @@
    "action": "approval.discarded",
    "actor": "owner",
    "details": {
-    "kind": "imessage",
+    "action_type": "imessage.send",
+    "kind": "external",
     "outbox_id": "<id:imessage-3>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Discarded imessage “iMessage to Hiking crew”",
+   "summary": "Discarded imessage “iMessage”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -864,13 +910,17 @@
    "action": "approval.withdrawn",
    "actor": "assistant",
    "details": {
-    "kind": "imessage",
+    "action_type": "imessage.send",
+    "kind": "external",
     "outbox_id": "<id:imessage-4>",
     "reason": "mistake",
+    "recipients": [
+     "Hiking crew"
+    ],
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Withdrew imessage “iMessage to Hiking crew”",
+   "summary": "Withdrew imessage “iMessage”",
    "t": "<volatile>"
   },
   {
@@ -907,25 +957,26 @@
    "actor": "server",
    "details": {
     "expired_at": "<volatile>",
-    "kind": "imessage",
-    "outbox_id": "<id:imessage-5>",
-    "sha256": "<sha>"
-   },
-   "ok": true,
-   "summary": "A queued imessage message expired without an answer",
-   "t": "<volatile>"
-  },
-  {
-   "action": "approval.expired",
-   "actor": "server",
-   "details": {
-    "expired_at": "<volatile>",
     "kind": "calendar",
     "outbox_id": "<id:calendar-4>",
     "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued calendar message expired without an answer",
+   "t": "<volatile>"
+  },
+  {
+   "action": "approval.expired",
+   "actor": "server",
+   "details": {
+    "action_type": "imessage.send",
+    "expired_at": "<volatile>",
+    "kind": "external",
+    "outbox_id": "<id:imessage-5>",
+    "sha256": "<sha>"
+   },
+   "ok": true,
+   "summary": "A queued request expired without an answer",
    "t": "<volatile>"
   }
  ],
@@ -1051,10 +1102,12 @@
   "imessage": {
    "body": {
     "account": "",
+    "action_type": "imessage.send",
     "approve_label": "Send",
     "badge": "iMessage",
     "blocked": false,
     "by": "",
+    "confirm": "Everyone in Hiking crew receives it.",
     "created_at": "<volatile>",
     "edit": {
      "allowed": true,
@@ -1066,11 +1119,12 @@
     },
     "expires_at": "<volatile>",
     "files": [],
-    "group": true,
-    "key": "imessage:<id:imessage-1>",
-    "kind": "imessage",
+    "group": false,
+    "key": "external:<id:imessage-1>",
+    "kind": "external",
+    "kind_label": "iMessage",
     "missing": [],
-    "needs_override": false,
+    "needs_override": true,
     "notes": [
      "Sent from your Mac once you approve."
     ],
@@ -1082,14 +1136,19 @@
       "Anna (anna@example.org)"
      ],
      [
-      "Conversation",
+      "Chat ID",
       "chat900"
      ]
     ],
     "sha": "<sha>",
+    "tags": [
+     "Group"
+    ],
     "text": "Running late, start without me",
-    "title": "iMessage to Hiking crew",
+    "text_style": "bubble",
+    "title": "iMessage",
     "to": "Hiking crew",
+    "to_shown": true,
     "warning": true,
     "warnings": [
      "A group conversation: everyone in it receives this."
@@ -1204,10 +1263,12 @@
   "imessage": {
    "body": {
     "account": "",
+    "action_type": "imessage.send",
     "approve_label": "Send",
     "badge": "iMessage",
     "blocked": false,
     "by": "",
+    "confirm": "Everyone in Hiking crew receives it.",
     "created_at": "<volatile>",
     "edit": {
      "allowed": true,
@@ -1220,11 +1281,12 @@
     "edited_rows": [],
     "expires_at": "<volatile>",
     "files": [],
-    "group": true,
-    "key": "imessage:<id:imessage-1>",
-    "kind": "imessage",
+    "group": false,
+    "key": "external:<id:imessage-1>",
+    "kind": "external",
+    "kind_label": "iMessage",
     "missing": [],
-    "needs_override": false,
+    "needs_override": true,
     "notes": [
      "Sent from your Mac once you approve."
     ],
@@ -1236,14 +1298,19 @@
       "Anna (anna@example.org)"
      ],
      [
-      "Conversation",
+      "Chat ID",
       "chat900"
      ]
     ],
     "sha": "<sha>",
+    "tags": [
+     "Group"
+    ],
     "text": "imessage edited, ÜBER-café",
-    "title": "iMessage to Hiking crew",
+    "text_style": "bubble",
+    "title": "iMessage",
     "to": "Hiking crew",
+    "to_shown": true,
     "versions": [
      {
       "at": "<volatile>",
@@ -1256,7 +1323,7 @@
         "Anna (anna@example.org)"
        ],
        [
-        "Conversation",
+        "Chat ID",
         "chat900"
        ]
       ],
@@ -1279,7 +1346,7 @@
         "Anna (anna@example.org)"
        ],
        [
-        "Conversation",
+        "Chat ID",
         "chat900"
        ]
       ],
@@ -1384,10 +1451,11 @@
     "status": "sent"
    },
    {
+    "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": true,
     "id": "<id:imessage-1>",
-    "kind": "imessage",
+    "kind": "external",
     "status": "unclear"
    },
    {
@@ -1398,10 +1466,11 @@
     "status": "sent"
    },
    {
+    "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:imessage-2>",
-    "kind": "imessage",
+    "kind": "external",
     "status": "sent"
    },
    {
@@ -1412,10 +1481,11 @@
     "status": "discarded"
    },
    {
+    "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:imessage-3>",
-    "kind": "imessage",
+    "kind": "external",
     "status": "discarded"
    },
    {
@@ -1433,10 +1503,11 @@
     "status": "withdrawn"
    },
    {
+    "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:imessage-4>",
-    "kind": "imessage",
+    "kind": "external",
     "status": "withdrawn"
    },
    {
@@ -1456,15 +1527,16 @@
    {
     "at": "<volatile>",
     "edited": false,
-    "id": "<id:imessage-5>",
-    "kind": "imessage",
+    "id": "<id:calendar-4>",
+    "kind": "calendar",
     "status": "expired"
    },
    {
+    "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": false,
-    "id": "<id:calendar-4>",
-    "kind": "calendar",
+    "id": "<id:imessage-5>",
+    "kind": "external",
     "status": "expired"
    }
   ],
@@ -1474,7 +1546,7 @@
   "body": {
    "kinds": {
     "calendar": 1,
-    "imessage": 1,
+    "external:iMessage": 1,
     "mail": 1
    },
    "mac": "offline",
@@ -1489,7 +1561,7 @@
   "body": {
    "kinds": {
     "calendar": 0,
-    "imessage": 0,
+    "external:iMessage": 0,
     "mail": 0
    },
    "mac": "offline",
@@ -1516,10 +1588,11 @@
    "status": "discarded"
   },
   "imessage": {
+   "action_type": "imessage.send",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:imessage-3>",
-   "kind": "imessage",
+   "kind": "external",
    "status": "discarded"
   },
   "mail": {
@@ -1539,10 +1612,11 @@
    "status": "waiting"
   },
   "imessage": {
+   "action_type": "imessage.send",
    "at": "<volatile>",
    "edited": true,
    "id": "<id:imessage-1>",
-   "kind": "imessage",
+   "kind": "external",
    "status": "waiting"
   },
   "mail": {
@@ -1562,10 +1636,11 @@
    "status": "sent"
   },
   "imessage": {
+   "action_type": "imessage.send",
    "at": "<volatile>",
    "edited": true,
    "id": "<id:imessage-1>",
-   "kind": "imessage",
+   "kind": "external",
    "status": "unclear"
   },
   "mail": {
@@ -1585,10 +1660,11 @@
    "status": "expired"
   },
   "imessage": {
+   "action_type": "imessage.send",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:imessage-5>",
-   "kind": "imessage",
+   "kind": "external",
    "status": "expired"
   },
   "mail": {
@@ -1628,16 +1704,22 @@
      "warning": false
     },
     {
+     "action_type": "imessage.send",
      "badge": "iMessage",
      "blocked": false,
      "by": "",
      "created_at": "<volatile>",
      "expires_at": "<volatile>",
-     "group": true,
-     "key": "imessage:<id:imessage-1>",
-     "kind": "imessage",
-     "title": "iMessage to Hiking crew",
+     "group": false,
+     "key": "external:<id:imessage-1>",
+     "kind": "external",
+     "kind_label": "iMessage",
+     "tags": [
+      "Group"
+     ],
+     "title": "iMessage",
      "to": "Hiking crew",
+     "to_shown": true,
      "warning": true
     },
     {
@@ -1667,8 +1749,8 @@
     {
      "t": "<volatile>",
      "time": "<volatile>",
-     "title": "iMessage to Hiking crew",
-     "to": "",
+     "title": "iMessage",
+     "to": "Hiking crew",
      "unclear": false,
      "what": "iMessage"
     },
@@ -1683,8 +1765,8 @@
     {
      "t": "<volatile>",
      "time": "<volatile>",
-     "title": "iMessage to Hiking crew",
-     "to": "",
+     "title": "iMessage",
+     "to": "Hiking crew",
      "unclear": true,
      "what": "iMessage"
     },

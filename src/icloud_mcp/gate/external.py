@@ -84,12 +84,26 @@ class ExternalApprovals(ApprovalSource):
         warnings = self._call(at.warnings, params, "The cautions for this request could not be worked out.")
         people = self._call(at.recipients, params, "")
         hold = reg.hold_now()
-        notes = ["Approving carries this out. If it is not certain that it went through, it is never repeated."]
+        notes = [at.note or "Approving carries this out. If it is not certain that it went through, it is never repeated."]
+        confirm = self._confirm(at, params)
         return {"title": at.title, "badge": at.badge, "rows": rows, "label": ", ".join(str(p) for p in people if p),
                 "text": str(params.get(at.text_field) or "") if at.text_field else "",
                 "notes": ([hold.text] if hold and hold.level == "note" else []) + notes,
-                "warnings": warnings, "needs_override": False,
+                "tags": self._call(at.tags, params, ""), "text_style": at.text_style, "log_to": reg.builtin,
+                "warnings": warnings, "needs_override": bool(confirm), **({"confirm": confirm} if confirm else {}),
                 **({"held": hold.text} if hold and hold.level == "blocked" else {})}
+
+    @staticmethod
+    def _confirm(at: A.ActionType, params: Mapping[str, Any]) -> str:
+        """The type's reason to ask once more before approving, or "". One that raises asks anyway: approving must not get easier
+        because a function failed."""
+        if at.confirm_twice is None:
+            return ""
+        try:
+            got = at.confirm_twice(params)
+        except Exception:  # noqa: BLE001
+            return "Whether this needs a second look could not be worked out."
+        return str(got).strip() if got else ""
 
     @staticmethod
     def _call(fn: Any, params: Mapping[str, Any], failed: str) -> list[str]:
@@ -138,6 +152,8 @@ class ExternalApprovals(ApprovalSource):
         reg, type_id, params = self._entry(q)
         if reg is None or not reg.action_type.text_field:
             raise T.TextLocked(self.text_block(q))
+        if not text.strip() and reg.action_type.text_field in (reg.action_type.params_schema.get("required") or []):
+            raise T.TextInvalid("The text is empty.")
         changed = {**params, reg.action_type.text_field: text}
         try:
             A.check_params(reg.action_type, changed)
@@ -353,6 +369,9 @@ class ExternalApprovals(ApprovalSource):
         if reg.recheck is not None:                              # is the target still the one the owner looked at?
             try:
                 reason = reg.recheck(plain)
+            except A.ExternalError as e:                           # the type says why it could not look, in words for the owner;
+                self.box.restore(claimed)                          # the page in front of the owner says it still waits
+                raise A.ExternalError(str(e)) from None
             except Exception as e:  # noqa: BLE001  -- nothing has been carried out: the owner can try again
                 self.box.restore(claimed)
                 log.warning("The recheck of %s raised %s; the request waits again", type_id, type(e).__name__)

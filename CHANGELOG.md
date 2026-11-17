@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **An iMessage is an action like the others (fork).** A waiting iMessage is now an action of type `imessage.send` on the same
+  queue as the connector's actions. The list reads „iMessage“ with „to Weekend hike“ underneath, like a mail; the Group tag, the
+  chat bubble and „Send anyway…“ for a group stay, and the server now insists on that second confirmation too. Activity names the
+  chat a message went to. Waiting iMessages move over once at the first start with their ids and a new hash, logged as
+  `approval.migrated`; older links to `#/item/imessage:…` still open them. Without the dashboard, `/outbox` shows them with every
+  other action. `python -m icloud_mcp.gate.export_queue` writes waiting iMessages back to `imessage-outbox.json` in the form the
+  previous version reads, for a rollback. Agents see no change.
+
 - **iMessage approvals keep their state (fork).** A waiting iMessage now lives in the approval store (`approvals.db`) like the
   connector's actions; `imessage-outbox.json` is read in once at the first start, with ids and hashes unchanged. What becomes of an
   approval is now always clear: if the Mac never got it, it waits again; if it may have gone out, it reads „unclear“ and is never

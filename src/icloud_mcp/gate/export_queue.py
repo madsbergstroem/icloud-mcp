@@ -1,6 +1,6 @@
 """Write the waiting requests from DATA_DIR/approvals.db back to their JSON queue files, for a rollback to a version without the
 approval store (docs/SENDGATE.md, package 3, "Rollback"): external requests to external-outbox.json, and waiting iMessages to
-imessage-outbox.json (package 4a; that file is written only when an iMessage waits). It ships in the package, so it runs in the
+imessage-outbox.json in the form 4a reads (packages 4a and 4b; that file is written only when an iMessage waits). It ships in the package, so it runs in the
 Docker image:
 
     docker run --rm -v <your data volume>:/data <this image> python -m icloud_mcp.gate.export_queue /data
@@ -21,11 +21,15 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     try:
-        stores = [(Store(argv[1], source, ttl=86400, max_items=10**6), name) for source, name in SOURCES]
-        stores = [(store, name) for store, name in stores if name == "external-outbox.json" or store.pending()]
-        for store, name in stores:                    # refuse before anything is written, so no file is half done
+        opened = {source: Store(argv[1], source, ttl=86400, max_items=10**6) for source in dict.fromkeys(src for src, *_ in PLAN)}
+        plan = [(opened[src], name, kw) for src, name, kw in PLAN
+                if name == "external-outbox.json" or opened[src].waiting_of(kw.get("only"), kw.get("skip", ()))]
+        names = [name for _, name, _ in plan]
+        if len(names) != len(set(names)):
+            raise RuntimeError("iMessages wait in two forms. Start this version once, so it moves them to one, then export again.")
+        for store, name, _ in plan:                   # refuse before anything is written, so no file is half done
             store.check_export(name)
-        done = [(name, store.export_waiting(name)) for store, name in stores]
+        done = [(name, store.export_waiting(name, **kw)) for store, name, kw in plan]
     except RuntimeError as e:
         print(f"Not exported: {e}", file=sys.stderr)
         return 1
@@ -35,7 +39,12 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-SOURCES = (("external", "external-outbox.json"), ("imessage", "imessage-outbox.json"))
+# (source, file, which rows). Since package 4b an iMessage is an action of type imessage.send: it goes back to the file 4a reads,
+# as the parameters it had, and stays out of the external file, where 4a would show it as an unknown action.
+IMESSAGE = "imessage.send"
+PLAN = (("external", "external-outbox.json", {"skip": (IMESSAGE,)}),
+        ("external", "imessage-outbox.json", {"only": (IMESSAGE,), "as_params": True}),
+        ("imessage", "imessage-outbox.json", {}))
 
 
 if __name__ == "__main__":

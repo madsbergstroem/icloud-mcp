@@ -432,15 +432,15 @@ async def test_an_iMessage_handed_to_messages_without_confirmation_is_unclear(we
     mcp._icloud_bridge.call = bridge
     queued = json.loads((await mcp.call_tool("messages_send_request", {"text": "See you at 6", "handle": "anna@example.org"})).content[0].text)
     assert queued["status"] == "queued_for_owner_approval" and "approval_status" in queued["notice"]
-    assert (await call(mcp, {"id": queued["outbox_id"]}))["kind"] == "imessage"
+    assert (await call(mcp, {"id": queued["outbox_id"]}))["kind"] == "external"      # one source since package 4b
     async with client(app) as c:
         h = api(await signed_in(c))
-        key = "imessage:" + queued["outbox_id"]
+        key = "external:" + queued["outbox_id"]
         sha = (await c.get(f"/dashboard/api/items/{key}")).json()["sha"]
         r = await c.post(f"/dashboard/api/items/{key}/approve", json={"sha": sha}, headers=h)
         assert r.status_code == 200 and len(sends) == 1
     got = await call(mcp, {"id": queued["outbox_id"]})
-    assert got["status"] == "unclear" and got["kind"] == "imessage"
+    assert got["status"] == "unclear" and got["kind"] == "external"
     assert "See you at 6" not in json.dumps(got)
 
 

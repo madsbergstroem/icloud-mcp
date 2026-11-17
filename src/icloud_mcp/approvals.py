@@ -90,7 +90,9 @@ def flagged(d: dict[str, Any]) -> str:
 
 
 def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Settings, mail: MailService | None,
-                           imessage: Any = None, imessage_outbox: Any = None, audit: Any = None) -> None:
+                           external: Any = None, audit: Any = None) -> None:
+    """The approval page without the dashboard: mail, and every action waiting on the external source (iMessage since package
+    4b). With the dashboard on, /outbox leads there."""
     if settings.dashboard:
         async def to_dashboard(_: Request) -> Response:
             return RedirectResponse("/dashboard", status_code=303, headers=_HEADERS)
@@ -100,7 +102,8 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
     login = _login_form
     key = secrets.token_bytes(32)  # per-process: buttons issued before a restart simply stop working
     access = access_sso.from_settings(settings)
-    outboxes = {k: o for k, o in (("mail", mail.outbox if mail is not None else None), ("imessage", imessage_outbox)) if o is not None}
+    outboxes = {k: o for k, o in (("mail", mail.outbox if mail is not None else None),
+                                  ("external", external.box if external is not None else None)) if o is not None}
 
     def _tok(kind: str, item_id: str, sha: str, action: str, exp: int) -> str:
         return hmac.new(key, f"{kind}|{item_id}|{sha}|{action}|{exp}".encode(), hashlib.sha256).hexdigest()
@@ -120,9 +123,9 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
 
     _flagged = flagged
 
-    def _buttons(kind: str, q: Any, exp: int, send_label: str, override: bool = False) -> str:
+    def _buttons(kind: str, q: Any, exp: int, send_label: str, override: bool = False, discard_only: bool = False) -> str:
         forms = ""
-        for action, label, cls in (("approve", send_label, "ok"), ("discard", "Discard", "no")):
+        for action, label, cls in (() if discard_only else (("approve", send_label, "ok"),)) + (("discard", "Discard", "no"),):
             forms += (f'<form method="post" action="/outbox/act" style="display:inline"><input type="hidden" name="id" value="{html.escape(q.id)}">'
                       f'<input type="hidden" name="kind" value="{kind}">'
                       f'<input type="hidden" name="action" value="{action}"><input type="hidden" name="exp" value="{exp}">'
@@ -138,7 +141,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         return _tok(kind, "*all*", hashlib.sha256(ids.encode()).hexdigest(), "discard_all", exp)
 
     def _discard_all_button(kind: str, qs: list[Any], exp: int) -> str:
-        label = "iMessages" if kind == "imessage" else "emails"
+        label = "requests" if kind == "external" else "emails"
         return (f'<form method="post" action="/outbox/act" style="display:inline"><input type="hidden" name="kind" value="{kind}">'
                 f'<input type="hidden" name="action" value="discard_all"><input type="hidden" name="exp" value="{exp}">'
                 f'<input type="hidden" name="ids" value="{html.escape(",".join(q.id for q in qs))}">'
@@ -159,12 +162,15 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                  + '</div>']
         for kind, q in items:
             mins = max(1, int((q.expires_at - time.time()) / 60))
-            if kind == "imessage":
-                d = imessage.describe_queued(q)
-                group = '<p class="warn">A group conversation: everyone in it receives this.</p>' if d["group"] else ""
-                parts.append(f"""<div class="card"><h2>iMessage to {html.escape(d['to'] or d['chat_id'] or '')}</h2><table>
-{_row('Conversation', d['chat_id'] or '')}</table>{group}
-<pre>{html.escape(d['text'])}</pre><p class="muted">Sent from your Mac once you approve. Expires in about {mins} min. Approve only if you asked your agent to send this.</p>{_buttons(kind, q, exp, "Approve and send")}</div>""")
+            if kind == "external":                 # an action of any registered type: the card its type describes
+                v = external.describe(q)
+                head = f"{v['title']} to {v['label']}" if v.get("label") else v["title"]
+                warn = "".join(f'<p class="warn">{html.escape(w)}</p>' for w in v["warnings"])
+                buttons = _buttons(kind, q, exp, external.approve_label_for(q), override=bool(v["needs_override"])) \
+                    if v.get("approvable") is not False else _buttons(kind, q, exp, "", discard_only=True)
+                parts.append(f"""<div class="card"><h2>{html.escape(head)}</h2><table>
+{"".join(_row(k, val) for k, val in v["rows"])}</table>{warn}
+<pre>{html.escape(v['text'])}</pre><p class="muted">{html.escape(" ".join(v["notes"]))} Expires in about {mins} min. Approve only if you asked your agent for this.</p>{buttons}</div>""")
                 continue
             d = mail.describe_queued(q, contexts.get(q.id))
             atts = "".join(f"<li>{html.escape(str(a.get('filename')))} ({html.escape(str(a.get('content_type')))}, {a.get('size')} bytes)</li>"
@@ -244,6 +250,10 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
             if audit is not None:
                 audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded a queued {kind} message", kind=kind, outbox_id=q.id)
             return await asyncio.to_thread(_queue_page, '<p class="ok-note">Discarded.</p>')
+        ext_v = await asyncio.to_thread(external.describe, q) if kind == "external" else {}
+        if kind == "external" and str(form.get("override", "")) != "1" and ext_v["needs_override"]:
+            return await asyncio.to_thread(_queue_page, '<p class="err">Not sent: tick the box under it if you still want it sent despite the '
+                                           'warning.</p>')
         if kind == "mail" and str(form.get("override", "")) != "1":
             d = await asyncio.to_thread(mail.describe_queued, q)          # the page's own source: the memo, else a fresh read
             if _flagged(d):
@@ -251,7 +261,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                 return await asyncio.to_thread(_queue_page, '<p class="err">Not sent: this message answers one that looked like an '
                                                'attempt to steer the agent. Tick the box under it if you still want it sent.</p>')
         try:
-            result = (await asyncio.to_thread(imessage.release, box, q.id, q.sha256) if kind == "imessage"
+            result = (await asyncio.to_thread(external.release, q) if kind == "external"
                       else await asyncio.to_thread(mail.release, q.id))
         except Revised as e:                     # the people in the conversation changed: a new version waits for a look
             if audit is not None:
@@ -272,14 +282,10 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         log.info("Owner approved queued %s %s", kind, q.id)
         if audit is not None:
             audit.record("approval.sent", actor="owner", via="password (/outbox)", summary=f"Approved a queued {kind} message", kind=kind,
-                         outbox_id=q.id, delivery=({"unclear": "unconfirmed"}.get(result.get("status"), result.get("status"))
-                                                   if kind == "imessage" and isinstance(result, dict) else None), sha256=q.sha256,
-                         recipients=list(result.get("recipients") or [result.get("to")] if isinstance(result, dict) else []))
-        if kind == "imessage":
-            status = result.get("status")
-            word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)",
-                    "unclear": "Not sure it went out"}.get(status, str(status))
-            note = f'<p><b>{html.escape(word)}</b>: iMessage to {html.escape(result.get("to", ""))}. {html.escape(result.get("note", ""))}</p>'
-            return await asyncio.to_thread(_queue_page, note)
+                         outbox_id=q.id, delivery=getattr(result, "delivery", None), sha256=q.sha256,
+                         **({"action_type": q.action_type} if kind == "external" else {}),
+                         recipients=list(result.get("recipients") or []) if isinstance(result, dict) else ([ext_v["label"]] if ext_v.get("log_to") and ext_v.get("label") else []))
+        if kind == "external":
+            return await asyncio.to_thread(_queue_page, f'<p>{html.escape(str(result))}</p>')
         extra = f" {html.escape(result['warning'])}" if result.get("warning") else ""
         return await asyncio.to_thread(_queue_page, f'<p><b>Sent</b> to {html.escape(", ".join(result.get("recipients", [])))}.{extra}</p>')

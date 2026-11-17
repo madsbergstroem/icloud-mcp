@@ -100,7 +100,9 @@ class Rechecked(ExternalError):
     would fail the same way."""
 
     def __init__(self, reason: str = "target_changed", message: str | None = None):
-        super().__init__(message or "Not sent: the target changed since you looked. Your assistant has to ask again.", "policy")
+        default = ("Not sent: your lists no longer allow someone it would reach. Only you can change the lists."
+                   if reason == "not_allowed" else "Not sent: the target changed since you looked. Your assistant has to ask again.")
+        super().__init__(message or default, "policy")
         self.reason = reason
 
 
@@ -128,10 +130,19 @@ class ActionType:
     recipient_fields: tuple[str, ...] = ()     # the parameters that say who it reaches, so the edit form can say the list applies
     recipients: Callable[[Mapping[str, Any]], Sequence[str]] = _nothing   # who the request reaches, for the list that is checked and shown
     warnings: Callable[[Mapping[str, Any]], Sequence[str]] = _nothing     # lines of caution for the owner, from checked parameters
+    # how the card looks (package 4b), all optional: short labels after the badge ('Group'); the text as a chat bubble or plain;
+    # a reason to ask once more before approving (Discard becomes the main button, "Send anyway…" asks with this reason); the
+    # line under the card in place of the general one for actions
+    tags: Callable[[Mapping[str, Any]], Sequence[str]] = _nothing
+    text_style: str = "plain"
+    confirm_twice: Callable[[Mapping[str, Any]], "str | None"] | None = None
+    note: str = ""
 
     def __post_init__(self) -> None:
         if not ID_PATTERN.match(self.id or ""):
             raise ValueError(f"Action type id {self.id!r} must be lower-case words joined by dots, such as 'test.echo'.")
+        if self.text_style not in TEXT_STYLES:
+            raise ValueError(f"Action type {self.id}: text_style must be one of {', '.join(TEXT_STYLES)}.")
         for field in ("title", "badge", "approve_label"):
             if not str(getattr(self, field)).strip():
                 raise ValueError(f"Action type {self.id}: {field} is empty.")
@@ -164,6 +175,7 @@ class ActionType:
 
 
 EDITABLE_TYPES = ("string", "number", "integer", "boolean")
+TEXT_STYLES = ("plain", "bubble")
 
 
 def editable(action_type: ActionType) -> tuple[str, ...]:
@@ -245,6 +257,9 @@ class Registration:
     # whether approving is off right now (blocked) or needs a note, read every time; called with approving=True just before a
     # release, so a type may check again then (the gateway connector probes when its last look is old)
     hold: Callable[[bool], Hold | None] | None = None
+    # registered by the server itself (iMessage), not from a connector file or a plugin: its recipients come from the service,
+    # not from an agent's parameters, so the log may name them (D4-2)
+    builtin: bool = False
 
     def hold_now(self, approving: bool = False) -> Hold | None:
         """The type's hold as it is now. One that raises blocks: approving must not depend on a function that failed."""
@@ -269,7 +284,7 @@ class ActionRegistry:
                  policy: Callable[[Mapping[str, Any]], str | None] | None = None, *,
                  prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
                  recheck: Callable[[Mapping[str, Any]], str | None] | None = None,
-                 channel_tool: str | None = None, hold: Callable[[bool], "Hold | None"] | None = None) -> None:
+                 channel_tool: str | None = None, hold: Callable[[bool], "Hold | None"] | None = None, builtin: bool = False) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
         anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient. policy: further
@@ -282,7 +297,7 @@ class ActionRegistry:
         if read_only_fields(action_type) and prepare is None:
             raise ValueError(f"Action type {action_type.id} has readOnly fields but no prepare to fill them in.")
         allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
-        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold)
+        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold, builtin)
 
     def copy(self) -> "ActionRegistry":
         """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the

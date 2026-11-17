@@ -4,7 +4,7 @@ import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, sectio
 import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
-const KINDS = { mail: "Mail", calendar: "Calendar", imessage: "iMessage" };
+const KINDS = { mail: "Mail", calendar: "Calendar" };
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
@@ -19,13 +19,19 @@ function finding(waiting) {
   return `${head} ${n === 1 ? "It is" : "The oldest is"} dropped in ${left(waiting[0].expires_at)}.`;
 }
 
-// The line under a request in the list: its kind, a group, who it goes to
+// A request that reaches a whole group: an iMessage group chat, or any action type that tags it so (package 4b)
+const isGroup = (w) => !!(w.group || (w.tags || []).includes("Group"));
+
+// The line under a request in the list: its kind, its tags, who it goes to
 function itemSub(w) {
   const to = w.to ? `to ${esc(w.to)}` : "";
-  const text = w.kind === "mail" ? to : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
-  const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !w.group ? "check this first" : "";
+  const text = w.kind === "mail" || (w.kind === "external" && w.to_shown) ? to
+    : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
+  const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !isGroup(w) ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
-  return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + (w.group ? tag("Group", "warn") : "") + [text, by, extra].filter(Boolean).join(" · ");
+  const tags = [...(w.group ? ["Group"] : []), ...(w.tags || [])].filter((t, i, all) => all.indexOf(t) === i);
+  return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + tags.map((t) => tag(t, "warn")).join("")
+    + [text, by, extra].filter(Boolean).join(" · ");
 }
 
 class Today extends HTMLElement {
@@ -196,7 +202,8 @@ class Item extends HTMLElement {
   subline() {
     const it = this.it;
     const who = it.by ? `by ${esc(it.by)}` : "by your assistant";
-    let p = `${esc(it.badge)} · asked ${who} ${esc(ago(it.created_at))}`;
+    // a type whose list line names who it reaches says it here too ("to Weekend hike · asked by …"), in place of the badge
+    let p = `${it.kind === "external" && it.to_shown && it.to ? `to ${esc(it.to)}` : esc(it.badge)} · asked ${who} ${esc(ago(it.created_at))}`;
     if (it.edit && it.edit.edited) p += ` · ${tag("Edited by you", "end")}`;
     if (it.missing.length) return `${p}. ${it.missing.length === 1 ? "One file is" : `${it.missing.length} files are`} missing before it can go out.`;
     return p;
@@ -220,15 +227,17 @@ class Item extends HTMLElement {
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;
     // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
-    const ext = it.kind === "external";
+    // a chat message (a type that shows its text as a bubble, such as an iMessage) keeps the message layout: rows, then the bubble
+    const chat = it.text_style === "bubble";
+    const ext = it.kind === "external" && !chat;
     // a value the service changed since the owner looked is marked (package 2c)
     const fresh = new Set([...(it.changed || []).map((c) => c.label), ...(it.edited_rows || [])]);
     const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
     const rows = ext ? it.rows.slice(0, 1).map(dd).join("") : this.rowsHtml();
     const more = ext ? it.rows.slice(1).map(dd).join("") : "";
-    const text = it.kind === "imessage" ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
+    const text = chat ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
       : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
-    const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : it.kind === "imessage" ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
+    const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
     const edit = it.edit || { allowed: false, reason: "" };
     const form = !!(edit.fields && edit.fields.length);          // package 2d: the fields the owner may change, edited as one form
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
@@ -312,7 +321,7 @@ class Item extends HTMLElement {
       return;
     }
     let h = titleBlock(it.title, this.subline()) + `<div data-result>${this.resultHtml()}</div>`;
-    const ext = it.kind === "external";
+    const ext = it.kind === "external" && it.text_style !== "bubble";      // a chat message keeps its card under the warnings
     if (it.held) h += `<div class="warnbox held" id="held-why"><strong>${icon("warning-outline")} Agents can send this without you</strong>
       ${esc(it.held)} Approving is off until then. Settings › Server shows it.</div>`;
     if (it.changed && it.changed.length) h += `<div class="warnbox"><strong>${icon("warning-outline")} Changed since you looked</strong>
@@ -321,7 +330,7 @@ class Item extends HTMLElement {
     if (it.versions) h += `<ion-list class="inset" style="margin-top:12px!important"><ion-item button detail="true" data-history>
       <ion-label>Earlier versions</ion-label><ion-note slot="end" class="num">${it.versions.length - 1}</ion-note></ion-item></ion-list>`;
     if (it.warnings.length) {
-      const grp = it.group;
+      const grp = isGroup(it);
       h += `<div class="warnbox"><strong>${icon("warning-outline")} ${grp ? "Group chat: everyone in it receives this" : "Check before sending"}</strong>
         ${grp ? "Everyone in the conversation sees your message and your name." : ""}
         ${grp && it.warnings.length === 1 ? "" : `<ul>${it.warnings.filter((w) => !(grp && w.startsWith("A group conversation"))).map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`}</div>`;
@@ -384,7 +393,7 @@ class Item extends HTMLElement {
     $("[data-done]")?.addEventListener("click", () => { app.holding = null; this.result = null; this.leave(); });
     $("[data-anyway]")?.addEventListener("click", async () => {
       const it = this.it;
-      const why = it.group ? `Everyone in ${it.to || "the conversation"} receives it.`
+      const why = it.confirm ? it.confirm : isGroup(it) ? `Everyone in ${it.to || "the conversation"} receives it.`
         : it.needs_override ? `It goes to ${it.to || "the recipients"} although the mail it answers looked like an attempt to steer the agent.`
         : "It goes out although the warning above applies.";
       if (await ask("Send it anyway?", why, "Send", { danger: true })) this.approve(true);

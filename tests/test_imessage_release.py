@@ -12,7 +12,7 @@ from icloud_mcp.gate.actions import Rechecked, Revised
 from icloud_mcp.imessage import IMessageError
 
 import test_imessage_send as base
-from test_imessage_send import Bridge, s, svc  # noqa: F401  (s is a fixture)
+from test_imessage_send import Bridge, release, s, send, svc  # noqa: F401  (s is a fixture)
 
 
 
@@ -22,7 +22,7 @@ def sends(b):
 
 def group_ready(s, tmp_path, **kw):
     m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=("anna@example.org", "+31600000002", "+31600000003")), tmp_path, **kw)
-    q = m.send("Hi all", chat_id="chat900", outbox=box)["outbox_id"]
+    q = send(m, "Hi all", chat_id="chat900")["outbox_id"]
     return m, b, box, q
 
 
@@ -37,8 +37,8 @@ def test_a_read_that_fails_after_the_approval_leaves_it_waiting(s, tmp_path):
     m, b, box, q = group_ready(s, tmp_path)
     m.bridge = Bridge(fail=None)
     m.bridge.call = lambda op, a=None: (_ for _ in ()).throw(BridgeError("The Mac has not connected since 09:00"))
-    with pytest.raises(IMessageError, match="still waiting"):
-        m.release(box, q)
+    with pytest.raises(IMessageError, match="has not connected since 09:00"):          # the Mac's words; the page says it waits
+        release(m, q)
     assert [x.id for x in box.pending()] == [q] and box.state_of(q)[0] == "waiting"
 
 
@@ -49,21 +49,21 @@ def test_members_who_changed_but_are_allowed_make_a_new_version_and_nothing_is_s
     base.CHATS["chats"][1]["participants"].append("+31600000003")
     sha = box.pending()[0].sha256
     with pytest.raises(Revised) as got:
-        m.release(box, q, sha)
+        release(m, q, sha)
     assert got.value.n == 2 and not sends(b)
     now = box.pending()[0]
     assert now.sha256 == got.value.sha256 != sha and box.versions(q)[-1]["author"] == "service"
-    assert [p["handle"] for p in json.loads(now.raw)["to"]["participants"]] == ["+31600000002", "+31600000003", "anna@example.org"]
-    assert m.release(box, q, now.sha256)["status"] == "sent" and len(sends(b)) == 1
+    assert [p["handle"] for p in json.loads(now.raw)["params"]["to"]["participants"]] == ["+31600000002", "+31600000003", "anna@example.org"]
+    assert release(m, q, now.sha256)["status"] == "sent" and len(sends(b)) == 1
 
 
 def test_a_refusal_of_the_mac_that_says_nothing_was_sent_leaves_it_waiting(s, tmp_path):
     """protects=row 5: the Mac refused before Messages had it, so a retry cannot deliver it twice; fails_when=it ends or reads
     unclear; no_claim=which Mac errors say so (mac-helper/ops/imessage.py writes them)."""
     m, b, box = svc(s, tmp_path, fail=BridgeError("Messages does not know that conversation or handle (no iMessage). Nothing was sent."))
-    q = m.send("Hi", handle="anna@example.org", outbox=box)["outbox_id"]
+    q = send(m, "Hi", handle="anna@example.org")["outbox_id"]
     with pytest.raises(IMessageError, match="still waiting"):
-        m.release(box, q)
+        release(m, q)
     assert box.state_of(q)[0] == "waiting"
 
 
@@ -74,11 +74,11 @@ def test_the_macs_answer_ends_it_once(s, tmp_path, answer, state):
     """protects=rows 7 and 8: sent ends sent; a send Messages did not confirm or could not deliver may have gone out, so it ends
     unclear and is never sent again; fails_when=another state, or a second approval sends again; no_claim=delivery on the phone."""
     m, b, box = svc(s, tmp_path, send_answer=answer)
-    q = m.send("Hi", handle="anna@example.org", outbox=box)["outbox_id"]
-    assert m.release(box, q)["status"] == answer["status"]
+    q = send(m, "Hi", handle="anna@example.org")["outbox_id"]
+    assert release(m, q)["status"] == state                                            # the delivery, as the dashboard reads it
     assert box.state_of(q)[0] == state and not box.pending()
     with pytest.raises(IMessageError, match="no longer waiting"):
-        m.release(box, q)
+        release(m, q)
     assert len(sends(b)) == 1
 
 
@@ -86,9 +86,9 @@ def test_a_version_the_owner_did_not_look_at_is_not_sent(s, tmp_path):
     """protects=the click sends what the owner saw: an edit in between makes another sha; fails_when=the newer text goes out;
     no_claim=none beyond protects."""
     m, b, box = svc(s, tmp_path)
-    q = m.send("Hi", handle="anna@example.org", outbox=box)["outbox_id"]
+    q = send(m, "Hi", handle="anna@example.org")["outbox_id"]
     with pytest.raises(IMessageError, match="changed just now"):
-        m.release(box, q, "0" * 64)
+        release(m, q, "0" * 64)
     assert box.state_of(q)[0] == "waiting" and not sends(b)
 
 
@@ -96,22 +96,58 @@ def test_a_chat_the_owner_hid_after_queuing_is_not_sent(s, tmp_path):
     """protects=row 3 for the owner's other list: a conversation hidden since it was queued ends not_allowed without asking the
     Mac; fails_when=it is sent or waits on; no_claim=none beyond protects."""
     m, b, box = svc(s, tmp_path)
-    q = m.send("Hi", handle="anna@example.org", outbox=box)["outbox_id"]
+    q = send(m, "Hi", handle="anna@example.org")["outbox_id"]
     m.s = dataclasses.replace(s, imessage_hidden_chats=("anna@example.org",))
-    with pytest.raises(Rechecked, match="hid") as got:
-        m.release(box, q)
+    with pytest.raises(Rechecked, match="lists no longer allow") as got:
+        release(m, q)
     assert got.value.reason == "not_allowed" and box.state_of(q) == ("discarded", "not_allowed") and not sends(b)
 
 
-def test_the_server_reads_the_old_queue_file_in_and_runs_imessages_from_the_store(s, tmp_path):
-    """protects=package 4a criterion 3 at start-up: an upgrade keeps every waiting iMessage with its id and hash, and the server
-    queues new ones in approvals.db; fails_when=the file is ignored, read twice, or the server still writes the JSON file;
-    no_claim=the Docker volume (same DATA_DIR rules)."""
+def test_the_server_moves_queued_imessages_to_the_action_type_once(s, tmp_path):
+    """protects=package 4b criterion 3: iMessages queued before 4b (the JSON file of before 4a, and rows of source imessage) wait
+    on as requests of type imessage.send with their ids, each with a new hash and one approval.migrated line naming both; ended
+    rows keep their state; a second start moves nothing; fails_when=a request is lost, doubled, keeps its old hash or source, or
+    the log line is missing or repeated; no_claim=the Docker volume (same DATA_DIR rules)."""
+    import hashlib
+    from icloud_mcp.gate.store import Store
+    from icloud_mcp.imessage import convert
     from icloud_mcp.outbox import Outbox
     from icloud_mcp.server import create_server
     old = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
-    q = old.add(b'{"chat_id": null, "handle": "anna@example.org", "text": "Hi", "to": {"participants": []}}', ["anna@example.org"])
+    raw = b'{"chat_id": null, "handle": "anna@example.org", "text": "Hi", "to": {"participants": [{"handle": "anna@example.org"}]}}'
+    q = old.add(raw, ["anna@example.org"])
+    rows = Store(str(tmp_path), "imessage", 3600, 20)
+    gone = rows.add(b'{"chat_id": null, "handle": "tom@example.net", "text": "Bye", "to": {"participants": []}}', ["tom@example.net"])
+    rows.claim(gone.id, "discarded")
     mcp, _ = create_server(s)
-    box = mcp._icloud_outboxes["imessage"]
-    assert box.path.name == "approvals.db" and [(x.id, x.sha256) for x in box.pending()] == [(q.id, q.sha256)]
+    box = mcp._icloud_outboxes["external"]
+    assert [(x.id, x.sha256, x.action_type) for x in box.pending()] == [(q.id, hashlib.sha256(convert(raw)).hexdigest(), "imessage.send")]
+    assert box.state_of(gone.id) == ("discarded", None) and not box.has_source("imessage") and "imessage" not in mcp._icloud_outboxes
     assert (tmp_path / "imessage-outbox.json.migrated").exists() and not (tmp_path / "imessage-outbox.json").exists()
+    lines = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]
+    assert [(e["details"]["outbox_id"], e["details"]["old_sha256"], e["details"]["sha256"]) for e in lines] == \
+           [(q.id, q.sha256, box.pending()[0].sha256)]
+    create_server(s)
+    assert len([x for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]) == 1
+
+
+def test_the_export_takes_imessages_back_to_the_form_4a_reads(tmp_path):
+    """protects=package 4b criterion 5: after the export, the version before 4b finds every waiting iMessage in its own file with
+    its id and the fields it reads, and the external file holds only other actions; fails_when=an iMessage is lost, lands in the
+    external file (where 4a shows it as an unknown action) or misses chat_id, handle, text or to; no_claim=that 4a runs (its own
+    tests), or the hash: it changes again, as the spec says."""
+    from icloud_mcp.gate import export_queue as E
+    from icloud_mcp.gate import store as S
+    from icloud_mcp.imessage import ACTION_ID, convert
+    box = S.Store(str(tmp_path), "external", 3600, 20)
+    old = b'{"chat_id": "chat900", "handle": null, "text": "Hi all", "to": {"name": "Hiking crew", "group": true, "participants": []}}'
+    q = box.add(convert(old), ["Hiking crew"], action_type=ACTION_ID)
+    other = box.add(b'{"action_type":"test.ping","params":{}}', [], action_type="test.ping")
+    import os
+    os.close(S._locks.pop(str(tmp_path.resolve())))                    # as if the server stopped: the command opens DATA_DIR again
+    assert E.main(["export_queue", str(tmp_path)]) == 0
+    back = json.loads((tmp_path / "imessage-outbox.json").read_text())["items"]
+    assert [x["id"] for x in back] == [q.id]
+    raw = json.loads(__import__("base64").b64decode(back[0]["raw"]))
+    assert (raw["chat_id"], raw["handle"] if "handle" in raw else None, raw["text"], raw["to"]["name"]) == ("chat900", None, "Hi all", "Hiking crew")
+    assert [x["id"] for x in json.loads((tmp_path / "external-outbox.json").read_text())["items"]] == [other.id]

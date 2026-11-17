@@ -31,11 +31,24 @@ def event(raw: bytes):
 
 
 def queue_imessage(mcp, text="Running late, start without me"):
-    src = mcp._icloud_dashboard.sources["imessage"]
-    raw = json.dumps({"chat_id": "chat900", "handle": None, "text": text,
-                      "to": {"name": "Hiking crew", "group": True, "participants": [{"handle": "anna@example.org", "name": "Anna"}]}},
-                     ensure_ascii=False).encode()
-    return src, src.box.add(raw, ["chat900"])
+    """An iMessage request as the tool queues it since package 4b: an action of type imessage.send on the external source."""
+    from icloud_mcp.imessage import ACTION_ID, params_of
+    src = mcp._icloud_dashboard.sources["external"]
+    d = {"chat_id": "chat900", "handle": None, "text": text,
+         "to": {"name": "Hiking crew", "group": True, "participants": [{"handle": "anna@example.org", "name": "Anna"}]}}
+    return src, src.queue_external(ACTION_ID, params_of(d), None)
+
+
+def answer_with(src, monkeypatch, status, calls=None):
+    """The Mac's answer to the send, without a Mac: the type's executor gets the request as approved."""
+    from icloud_mcp.gate import actions as A
+    from icloud_mcp.imessage import ACTION_ID
+    import dataclasses
+    reg = src.registry.get(ACTION_ID)
+    monkeypatch.setitem(src.registry._items, ACTION_ID, dataclasses.replace(reg, recheck=None))     # the conversation is as it was
+    words = {"sent": ("sent", "Sent: iMessage to Hiking crew."), "unconfirmed": ("unclear", "Handed to Messages (not yet confirmed).")}
+    monkeypatch.setattr(type(reg.executor), "execute", lambda self, r: (calls.append(r.params["text"]) if calls is not None else None)
+                        or A.Result(*words[status["v"] if isinstance(status, dict) else status]))
 
 
 def ics(summary="Autumn fair", description="Bring ideas", events=1) -> bytes:
@@ -214,19 +227,19 @@ async def test_an_imessage_edit_changes_only_the_text_and_the_limit_is_the_one_f
     src, q = queue_imessage(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/imessage:{q.id}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
         assert it["edit"]["allowed"] is True and it["edit"]["text"] == "Running late, start without me" and it["edit"]["limit"] == 10000
         for bad, why in (("   ", "empty"), ("x" * 10001, "10,000"), (None, "missing")):
-            r = await c.put(url(f"imessage:{q.id}"), json={"sha": it["sha"], "text": bad}, headers=api(token))
+            r = await c.put(url(f"external:{q.id}"), json={"sha": it["sha"], "text": bad}, headers=api(token))
             assert r.status_code == 422 and why in r.json()["error"] and src.pending()[0].sha256 == it["sha"]
-        r = await c.put(url(f"imessage:{q.id}"), json={"sha": it["sha"], "text": "  Running fifteen minutes late.  "}, headers=api(token))
+        r = await c.put(url(f"external:{q.id}"), json={"sha": it["sha"], "text": "Running fifteen minutes late."}, headers=api(token))
         assert r.status_code == 200
         new = src.pending()[0]
-        d = json.loads(new.raw)
+        d = json.loads(new.raw)["params"]
         assert d["text"] == "Running fifteen minutes late." and d["chat_id"] == "chat900" and d["to"]["group"] is True
         assert (new.recipients, new.expires_at, new.created_at) == (q.recipients, q.expires_at, q.created_at)
-        assert new.edited_from == "Running late, start without me"
-        r = await c.put(url(f"imessage:{q.id}"), json={"sha": new.sha256, "text": "x" * 10000}, headers=api(token))
+        assert [v["author"] for v in src.box.versions(q.id)] == ["assistant", "owner"]      # an edit is a version (2c), not edited_from
+        r = await c.put(url(f"external:{q.id}"), json={"sha": new.sha256, "text": "x" * 10000}, headers=api(token))
         assert r.status_code == 200                                                          # exactly the limit is fine
 
 
@@ -235,13 +248,12 @@ async def test_an_edited_imessage_is_sent_as_edited_and_an_unconfirmed_send_says
     src, q = queue_imessage(mcp)
     calls = []
     status = {"v": "sent"}
-    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id, sha256=None: (
-        calls.append(json.loads(box.claim(item_id).raw)["text"]) or {"status": status["v"], "to": "Hiking crew", "note": ""}))
+    answer_with(src, monkeypatch, status, calls)
     async with client(app) as c:
         token = await signed_in(c)
-        sha = (await c.put(url(f"imessage:{q.id}"), json={"sha": q.sha256, "text": "Edited text"}, headers=api(token))).json()["sha"]
+        sha = (await c.put(url(f"external:{q.id}"), json={"sha": q.sha256, "text": "Edited text"}, headers=api(token))).json()["sha"]
         status["v"] = "unconfirmed"
-        r = await c.post(f"/dashboard/api/items/imessage:{q.id}/approve", json={"sha": sha}, headers=api(token))
+        r = await c.post(f"/dashboard/api/items/external:{q.id}/approve", json={"sha": sha, "override": True}, headers=api(token))  # a group asks twice
         assert r.status_code == 200 and r.json()["state"] == "unclear" and calls == ["Edited text"]
         a = (await c.get("/dashboard/api/activity?filter=approvals")).json()["days"][0]["entries"]
         assert [(e["tag"], e["note"]) for e in a if e["tag"] == "Unclear"] == [("Unclear", "Messages did not confirm it. Nothing is sent again.")]
@@ -252,11 +264,10 @@ async def test_an_edited_imessage_is_sent_as_edited_and_an_unconfirmed_send_says
 async def test_a_sent_imessage_has_no_state_flag(web, monkeypatch):
     app, mcp, *_ = web(**IMESSAGE_ENV)
     src, q = queue_imessage(mcp)
-    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id, sha256=None: (
-        box.claim(item_id) and {"status": "sent", "to": "Hiking crew", "note": ""}))
+    answer_with(src, monkeypatch, "sent")
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.post(f"/dashboard/api/items/imessage:{q.id}/approve", json={"sha": q.sha256}, headers=api(token))
+        r = await c.post(f"/dashboard/api/items/external:{q.id}/approve", json={"sha": q.sha256, "override": True}, headers=api(token))
         assert r.status_code == 200 and "state" not in r.json() and r.json()["note"].startswith("Sent: iMessage to Hiking crew")
 
 

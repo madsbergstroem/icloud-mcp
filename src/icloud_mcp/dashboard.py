@@ -42,7 +42,6 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from . import passkeys as P
-from .approval_status import Released
 from .gate.source import ApprovalSource
 from .approvals import flagged
 from .audit import AuditLog
@@ -308,48 +307,6 @@ class CalendarApprovals(ApprovalSource):
 
     def with_text(self, q, text):
         return T.calendar_with_text(q.raw, text), {**(q.followup or {}), "description": text[:4000]}
-
-
-class IMessageApprovals(ApprovalSource):
-    kind, badge, approve_label = "imessage", "iMessage", "Send"
-
-    def __init__(self, imessage: Any, box: Any):
-        self.imessage, self.box = imessage, box
-
-    def pending(self):
-        return self.box.pending()
-
-    def describe(self, q, context=None):
-        d = self.imessage.describe_queued(q)
-        warnings = ["A group conversation: everyone in it receives this."] if d["group"] else []
-        label = d["name"] or d["people"] or d["chat_id"] or ""      # a named chat by its name; the people stay in the card
-        rows = ([("Chat with", d["people"])] if d["people"] else []) + ([("Conversation", d["chat_id"])] if d["group"] and d["chat_id"] else [])
-        return {"title": f"iMessage to {label}", "label": label, "badge": "iMessage", "rows": rows, "text": d["text"],
-                "notes": ["Sent from your Mac once you approve."], "warnings": warnings, "needs_override": False, "group": bool(d["group"])}
-
-    def release(self, q):
-        r = self.imessage.release(self.box, q.id, q.sha256)
-        status = r.get("status")
-        word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)",
-                "unclear": "Not sure it went out"}.get(status, str(status))
-        return Released(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), "unconfirmed" if status == "unclear" else status)
-
-    def discard(self, q):
-        self.box.claim(q.id, "discarded")
-
-    text_limit = T.IMESSAGE_MAX_CHARS
-
-    def text_block(self, q):
-        return ""
-
-    def text_of(self, q):
-        return T.imessage_text(q.raw)
-
-    def clean_text(self, text):
-        return T.clean(text, allow_empty=False, limit=self.text_limit, strip=True)    # as messages_send_request does
-
-    def with_text(self, q, text):
-        return T.imessage_with_text(q.raw, text), None
 
 
 # ---------------------------------------------------------------------------------------------------------------------

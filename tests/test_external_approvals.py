@@ -102,8 +102,9 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 async def test_only_the_beeper_tool_calls_queue_external():
     root = Path(A.__file__).parent.parent             # the icloud_mcp package; actions.py lives in its gate/ package
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    # the contract names it; Beeper's sender calls it; approval_request (gate/requests.py) calls it for every other action
-    assert sorted(users) == ["gate/requests.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
+    # the contract names it; the Beeper and iMessage senders call it (iMessage since package 4b); approval_request
+    # (gate/requests.py) calls it for every other action
+    assert sorted(users) == ["gate/requests.py", "imessage.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
@@ -271,7 +272,7 @@ async def test_an_edit_that_breaks_the_schema_or_has_no_text_to_edit_is_refused(
     ping = src.queue_external("test.ping", {"target": "box"}, "Claude")
     async with client(app) as c:
         token = await signed_in(c)
-        for bad, why in (("x" * 201, "does not fit"), ("", "does not fit"), (None, "missing")):
+        for bad, why in (("x" * 201, "does not fit"), ("", "empty"), (None, "missing")):
             r = await c.put(url(q.id) + "/text", json={"sha": q.sha256, "text": bad}, headers=api(token))
             assert r.status_code == 422 and why in r.json()["error"] and src.pending()[0].sha256 == q.sha256, bad
         it = (await c.get(url(ping.id))).json()

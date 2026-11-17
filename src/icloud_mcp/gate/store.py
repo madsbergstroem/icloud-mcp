@@ -491,6 +491,44 @@ class Store:
             self._note(f"{len(dropped_keys)} request(s) from {legacy.name} lost their request_id, which another waiting request holds: "
                        + ", ".join(dropped_keys))
 
+    def has_source(self, source: str) -> bool:
+        """Whether any row of `source` is in the database (package 4b looks before it moves iMessage rows)."""
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM request WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
+
+    def adopt(self, other: str, convert: Any, action_type: str) -> list[tuple[str, str, str]]:
+        """Take every row of source `other` into this store, once and in one transaction (package 4b: iMessage becomes an action
+        type). Ids, states, times, keys and versions stay; `convert(raw) -> raw` gives each stored version its new bytes, so a
+        waiting request gets a new hash (D4-1). A version whose bytes cannot be converted keeps its old ones, and its request
+        stops being approvable rather than vanishing. Ended requests have no bytes and only change source and type. Returns
+        (id, old hash, new hash) for every request that was waiting, for the log."""
+        moved: list[tuple[str, str, str]] = []
+        with self._lock, self._tx():
+            rows = self._db.execute("SELECT * FROM request WHERE source = ?", (other,)).fetchall()
+            for r in rows:
+                old_sha, new_sha, new_raw = r["sha256"], r["sha256"], r["raw"]
+                if r["raw"] is not None:
+                    try:
+                        new_raw = convert(bytes(r["raw"]))
+                        new_sha = hashlib.sha256(new_raw).hexdigest()
+                    except Exception:  # noqa: BLE001
+                        log.warning("approval store: request %s of %s could not be converted; it keeps its old form", r["id"], other)
+                        new_raw = r["raw"]
+                for v in self._db.execute("SELECT * FROM version WHERE request_id = ? AND raw IS NOT NULL", (r["id"],)).fetchall():
+                    try:
+                        vraw = new_raw if v["sha256"] == old_sha else convert(bytes(v["raw"]))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    self._db.execute("UPDATE version SET raw = ?, sha256 = ? WHERE request_id = ? AND n = ?",
+                                     (vraw, hashlib.sha256(vraw).hexdigest(), r["id"], v["n"]))
+                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ? WHERE id = ?",
+                                 (self.source, action_type, new_raw, new_sha, r["id"]))
+                if r["state"] == "waiting":
+                    moved.append((r["id"], old_sha, new_sha))
+        if rows:
+            log.info("approval store: %d %s request(s) moved to %s", len(rows), other, self.source)
+        return moved
+
     def _note(self, problem: str) -> None:
         self.problem = f"{self.problem} {problem}".strip()
         log.warning("approval store: %s", problem)
@@ -504,16 +542,27 @@ class Store:
             if (self.dir / legacy).exists():
                 raise RuntimeError(f"{legacy} exists already. Move it away first, so nothing in it is overwritten.")
 
-    def export_waiting(self, legacy: str) -> dict[str, int]:
+    def waiting_of(self, only: Any = None, skip: Any = ()) -> list[QueuedMessage]:
+        """The waiting requests, oldest first; `only`: just these action types, `skip`: not these (an export's split, 4b)."""
+        with self._lock:
+            rows = [self._q(r) for r in self._db.execute(
+                "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
+        return [q for q in rows if (only is None or q.action_type in only) and q.action_type not in skip]
+
+    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False) -> dict[str, int]:
         """Write the waiting requests back to the JSON queue file, for a rollback to a version without the store, and end them
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
         file in again and never revives a request the old version already sent. Refused while a request is being carried out.
+        only/skip pick action types; as_params writes an action's parameters as its bytes, the form a source had before it became
+        an action type (package 4b: iMessage back to 4a), with the hash of those bytes.
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
         path = self.dir / legacy
         with self._lock:
             self.check_export(legacy)
-            waiting = [self._q(r) for r in self._db.execute(
-                "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
+            waiting = self.waiting_of(only, skip)
+            if as_params:
+                waiting = [dc_replace(q, raw=(b := json.dumps(json.loads(q.raw.decode())["params"], ensure_ascii=False).encode()),
+                                      sha256=hashlib.sha256(b).hexdigest(), action_type=None) for q in waiting]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]
             unclear = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'unclear'", (self.source,)).fetchone()[0]
             tmp = path.with_suffix(".tmp")

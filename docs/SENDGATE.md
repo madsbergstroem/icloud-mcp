@@ -513,13 +513,71 @@ Acceptance criteria:
    writes a file the previous version loads with the same ids and hashes.
 4. A row of source `imessage` left `executing` ends `unclear` at start even when the external store opened first.
 
-### 4b: one source (later, mock first)
+### 4b: one source
 
 iMessage becomes action type `imessage.send` on the external source, and the branches of gap 4 for it go: `withdraw.py`,
-`push.py`, `dashboard_api.py`, `textedit.py`, `dashboard.py`, `approvals.py`, `server.py`, `today.js`. Open points: a type's title
-is the same for every request ("iMessage", not "iMessage to Anna"), the "Group" tag and the bubble need fields on the type, the
-`/outbox` page has no external source without the dashboard, and the canonical bytes change every hash (D4-1, decided: new hash
-plus a log line `approval.migrated` naming both).
+`push.py`, `dashboard_api.py`, `textedit.py`, `dashboard.py`, `approvals.py`, `server.py`, `today.js`. The owner chose the card
+on 2026-11-17 from a mock with three variants (variant B): the title is the type's own, the person or chat moves to the line
+below it, and the Group tag, the bubble and the second confirmation stay.
+
+| On the screen | Today | After 4b |
+|---------------|-------|----------|
+| List, first line | iMessage to Weekend hike | iMessage |
+| List, second line | iMessage · Group | iMessage · Group · to Weekend hike |
+| Card title and line under it | iMessage to Weekend hike / iMessage · asked by … | iMessage / to Weekend hike · asked by … |
+| Group warning, bubble, Edit text | as now | unchanged |
+| Buttons for a group | Discard (main), Send anyway… | unchanged |
+| Note under the card | Sent from your Mac once you approve. | unchanged |
+| Sidebar "Waiting by kind" | iMessage | unchanged (the type's badge) |
+| `/outbox` page | lists mail and iMessage | lists mail and every waiting action, iMessage among them |
+
+What the action type gains. All three fields are optional, so the gateway types and plugin types keep working as they are and
+may use them later:
+
+| Field | What it does | `imessage.send` sets |
+|-------|--------------|----------------------|
+| `tags(params)` | short labels after the badge in the list and on the card | `["Group"]` for a group chat |
+| `text_style` | `"plain"` (default) or `"bubble"` for the text block | `"bubble"` |
+| `confirm_twice(params)` | a reason; when set, the card shows Discard as the main button and "Send anyway…", which asks once more with this reason | "Everyone in Weekend hike receives it." for a group |
+
+The type also sets `note` ("Sent from your Mac once you approve.") in place of the general note of external actions.
+
+How the work maps onto the external source, which already has every ending 4a introduced:
+
+| 4a ending | In 4b |
+|-----------|-------|
+| Reading the conversation fails | the type's `recheck` raises: the request waits again (`external.py`, recheck) |
+| The conversation is gone; hidden since queuing; someone no longer allowed | `recheck` answers `target_changed` or `not_allowed`: ends `discarded` |
+| The members changed, all allowed | `recheck` answers the new parameters: a new version by the service |
+| The Mac says nothing was sent, or never got it | the executor answers `failed`: waits again |
+| Any other error; Mac `failed` or `unconfirmed` | the executor answers `unclear` |
+| Mac `sent` | `sent` |
+
+Start-up moves every row of source `imessage` to source `external` once, inside one transaction: same id, state, versions and
+expiry, the parameters in the canonical form of the type, a new hash (D4-1) and one log line `approval.migrated` with both
+hashes. An `approve_at` link or push notice sent before the update names `imessage:<id>`; the dashboard and `/outbox` open
+`external:<id>` for it. `python -m icloud_mcp.gate.export_queue` writes
+waiting `imessage.send` rows back to `imessage-outbox.json` in the old form, so 4a can read them; their hash changes again then.
+
+Unchanged for the agent: `messages_send_request` answers as now (`queued_for_owner_approval`, `outbox_id`, `to`), and
+`approval_status` and `approval_withdraw` answer for an id from before the update.
+
+D4-2, open: the activity log line names the title only (`dashboard_api.py:493`), so after 4b it reads "Approved imessage
+“iMessage”" without the person or chat. Recommended: the log entry gets a `to` field from the type's `recipients`, only for types
+the server registers itself (iMessage now, calendar and mail in 5 and 6); a type from a connector file or a plugin keeps logging
+the title only, because its recipients come from the agent's parameters (`actions.RESERVED_LABELS`). Activity shows the `to` field
+as "to Weekend hike". Without it, who got a message is visible only in the request's own history.
+
+Acceptance criteria:
+
+1. Each row of the screen table has a test against the JSON the dashboard reads (`/dashboard/api/...`), and the QA run checks it
+   on desktop and at 375 px, Send anyway included.
+2. The 4a tests in `test_imessage_release.py` pass against the external source with the same states and the same "sent once"
+   checks; a test that had to change is reported on its own line with its reason (rule 3).
+3. Starting on a `DATA_DIR` with waiting and ended iMessage rows of source `imessage` gives the same ids, states and versions
+   under `external`, one `approval.migrated` line per waiting row, and no row of source `imessage`; a second start changes nothing.
+4. After 4b, a search of `src/` for `kind == "imessage"` finds nothing outside `imessage.py` and the migration.
+5. Rollback: the export, then 4a, shows the same waiting requests.
 
 ## Rules for whoever implements a package
 
