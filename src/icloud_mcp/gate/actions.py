@@ -100,7 +100,9 @@ class Rechecked(ExternalError):
     would fail the same way."""
 
     def __init__(self, reason: str = "target_changed", message: str | None = None):
-        super().__init__(message or "Not sent: the target changed since you looked. Your assistant has to ask again.", "policy")
+        default = ("Not sent: your lists no longer allow someone it would reach. Only you can change the lists."
+                   if reason == "not_allowed" else "Not sent: the target changed since you looked. Your assistant has to ask again.")
+        super().__init__(message or default, "policy")
         self.reason = reason
 
 
