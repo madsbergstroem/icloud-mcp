@@ -9,7 +9,6 @@ import pytest
 
 from icloud_mcp.config import Settings
 from icloud_mcp.imessage import IMessageService
-from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
 
 BASE = "https://mcp.example.com"
@@ -53,9 +52,16 @@ def test_a_queued_imessage_points_to_the_dashboard(settings, tmp_path):
         def call(self, op, args=None):
             return {"chat": {"chat_id": "anna@example.org", "participants": ["anna@example.org"], "services": ["iMessage"]},
                     "messages": [], "complete": True}
-    box = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
-    r = IMessageService(s, Bridge(), None).send("Hi", chat_id="anna@example.org", outbox=box, public_url=s.public_url)
-    assert r["status"] == "queued_for_owner_approval" and r["approve_at"] == f"{BASE}/dashboard#/item/imessage:{r['outbox_id']}"
+    from icloud_mcp.gate import actions as A
+    from icloud_mcp.gate.external import ExternalApprovals
+    from icloud_mcp.gate.store import Store
+    from icloud_mcp.imessage import register_type
+    m = IMessageService(s, Bridge(), None)
+    reg = A.ActionRegistry()
+    register_type(reg, m)
+    src = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)
+    r = m.send("Hi", chat_id="anna@example.org", external=src, public_url=s.public_url)
+    assert r["status"] == "queued_for_owner_approval" and r["approve_at"] == f"{BASE}/dashboard#/item/external:{r['outbox_id']}"   # 4b
 
 
 @pytest.mark.parametrize("method, path", [("GET", "/outbox"), ("POST", "/outbox"), ("POST", "/outbox/act")])

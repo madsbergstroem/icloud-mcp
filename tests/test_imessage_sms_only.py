@@ -5,7 +5,6 @@ import pytest
 from icloud_mcp.bridge import BridgeError
 from icloud_mcp.config import Settings
 from icloud_mcp.imessage import IMessageError, IMessageService
-from icloud_mcp.outbox import Outbox
 
 CHATS = {"chats": [
     {"chat_id": "+31600000001", "participants": ["+31600000001"], "name": "", "services": ["SMS"]},
@@ -50,14 +49,27 @@ def s(tmp_path, monkeypatch):
 
 
 def svc(s, tmp_path):
+    """The service with the external source it queues on since package 4b (m.src); box is that source's store."""
+    from icloud_mcp.gate import actions as A
+    from icloud_mcp.gate.external import ExternalApprovals
+    from icloud_mcp.gate.store import Store
+    from icloud_mcp.imessage import register_type
     b = Bridge()
-    return IMessageService(s, b, Contacts()), b, Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
+    m = IMessageService(s, b, Contacts())
+    reg = A.ActionRegistry()
+    register_type(reg, m)
+    m.src = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)
+    return m, b, m.src.box
+
+
+def send(m, text, **kw):
+    return m.send(text, external=m.src, **kw)
 
 
 def test_sms_only_chat_is_refused_and_names_the_imessage_chat(s, tmp_path):
     m, b, box = svc(s, tmp_path)
     with pytest.raises(IMessageError) as e:
-        m.send("See you tonight", chat_id="+31600000001", outbox=box, public_url=s.public_url)
+        send(m, "See you tonight", chat_id="+31600000001", public_url=s.public_url)
     msg = str(e.value)
     assert "exists only as SMS" in msg and "Nothing was sent or queued" in msg
     assert "chat_id 'imessage:anna@example.org'" in msg and "chat900" not in msg       # her 1:1 iMessage chat, never the group
@@ -68,13 +80,13 @@ def test_sms_only_chat_is_refused_and_names_the_imessage_chat(s, tmp_path):
 def test_sms_only_chat_without_an_imessage_chat_gets_the_general_hint(s, tmp_path):
     m, b, box = svc(s, tmp_path)
     with pytest.raises(IMessageError, match="ask the owner for their Apple ID address"):
-        m.send("Hi", chat_id="+31600000003", outbox=box, public_url=s.public_url)
+        send(m, "Hi", chat_id="+31600000003", public_url=s.public_url)
     assert not box.pending()
 
 
 def test_an_imessage_chat_still_queues(s, tmp_path):
     m, b, box = svc(s, tmp_path)
-    r = m.send("See you tonight", chat_id="anna@example.org", outbox=box, public_url=s.public_url)
+    r = send(m, "See you tonight", chat_id="anna@example.org", public_url=s.public_url)
     assert r["status"] == "queued_for_owner_approval" and "services" not in r["to"]
 
 
@@ -82,7 +94,7 @@ def test_an_alternative_not_on_the_allowlist_is_not_offered(s, tmp_path, monkeyp
     monkeypatch.setenv("IMESSAGE_SEND_ALLOWLIST", "+31600000001")
     m, b, box = svc(Settings.from_env(), tmp_path)
     with pytest.raises(IMessageError) as e:
-        m.send("Hi", chat_id="+31600000001", outbox=box, public_url=s.public_url)
+        send(m, "Hi", chat_id="+31600000001", public_url=s.public_url)
     assert "anna@example.org" not in str(e.value) and "Apple ID" in str(e.value)
 
 
@@ -96,7 +108,7 @@ def test_the_hint_matches_by_contact_uid_and_never_searches_for_the_name(s, tmp_
     real = m.list_chats
     monkeypatch.setattr(m, "list_chats", lambda **kw: seen.append(kw) or real(**kw))
     with pytest.raises(IMessageError) as e:
-        m.send("Hi", chat_id="+31600000001", outbox=box, public_url=s.public_url)
+        send(m, "Hi", chat_id="+31600000001", public_url=s.public_url)
     assert seen and all(not kw.get("query") for kw in seen)
     assert "chat_id 'imessage:anna@example.org'" in str(e.value) and "DROP" not in str(e.value) and "ignore" not in str(e.value)
     assert all("query" not in (args or {}) for op, args in b.calls)

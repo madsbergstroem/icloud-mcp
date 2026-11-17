@@ -2,7 +2,6 @@
 IMESSAGE_SEND_ALLOWLIST (empty = nobody), and by default only after the owner approves it on /outbox, whatever the mail setting.
 Approval re-checks the lists; a message the Mac never got stays queued, one it tried is never sent twice."""
 import asyncio
-import contextlib
 import dataclasses
 import json
 import re
@@ -15,7 +14,6 @@ from icloud_mcp.config import Settings
 from icloud_mcp.imessage import IMessageError, IMessageService
 from icloud_mcp.gate.actions import Rechecked
 from icloud_mcp.gate.store import Store
-from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
 
 CHATS = {"chats": [{"chat_id": "anna@example.org", "participants": ["anna@example.org"], "name": ""},
@@ -55,14 +53,44 @@ class Bridge:
 
 
 def svc(s, tmp_path, **kw):
+    """The service, the fake Mac and the store, with the external source the service queues on since package 4b (m.src)."""
+    from icloud_mcp.gate import actions as A
+    from icloud_mcp.gate.external import ExternalApprovals
+    from icloud_mcp.imessage import register_type
     b = Bridge(**kw)
-    return IMessageService(s, b, None), b, Store(str(tmp_path), "imessage", 3600, 20)
+    m = IMessageService(s, b, None)
+    box = Store(str(tmp_path), "external", 3600, 20)
+    reg = A.ActionRegistry()
+    register_type(reg, m)
+    m.src = ExternalApprovals(box, reg)
+    return m, b, box
+
+
+def send(m, text, **kw):
+    """What messages_send_request does: queue on the external source (or send at once where approval is off)."""
+    return m.send(text, external=m.src, **kw)
+
+
+def release(m, item_id, sha256=None):
+    """The owner's approval of a waiting request, as the dashboard does it; sha256: the version the owner looked at. Returns
+    {"status": sent | unclear}; raises what the external source raises (ExternalError, Rechecked, Revised)."""
+    from icloud_mcp.gate import actions as A
+    q = next((x for x in m.src.box.pending() if x.id == item_id), None)
+    if q is None:
+        raise IMessageError("That message is no longer waiting.")
+    try:
+        got = m.src.release(dataclasses.replace(q, sha256=sha256) if sha256 else q)
+    except (A.Rechecked, A.Revised):
+        raise
+    except A.ExternalError as e:                             # it waits again: the words the owner reads
+        raise IMessageError(str(e)) from None
+    return {"status": {"unconfirmed": "unclear"}.get(got.delivery, got.delivery)}
 
 
 def test_approval_is_on_by_default_even_when_mail_sends_directly(s, tmp_path):
     assert s.require_approval is False and s.imessage_send_requires_approval is True
     m, b, box = svc(s, tmp_path)
-    r = m.send("Hi Anna", handle="Anna@Example.org", outbox=box, public_url="https://mcp.example.com")
+    r = send(m, "Hi Anna", handle="Anna@Example.org", public_url="https://mcp.example.com")
     assert r["status"] == "queued_for_owner_approval" and r["sent"] is False and len(box.pending()) == 1
     assert "imessage_send" not in [op for op, _ in b.calls]                                     # nothing reached the Mac
 
@@ -71,56 +99,56 @@ def test_the_owners_assistant_is_never_a_recipient(s, tmp_path):
     for allow in (("anna@example.org",), ("*",), ("bot@example.org",)):
         m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=allow, imessage_send_requires_approval=False), tmp_path)
         with pytest.raises(IMessageError, match="IMESSAGE_NEVER_SEND"):
-            m.send("do this", handle="bot@example.org", outbox=box)
+            send(m, "do this", handle="bot@example.org")
         with pytest.raises(IMessageError, match="IMESSAGE_NEVER_SEND"):
-            m.send("do this", chat_id="bot@example.org", outbox=box)
+            send(m, "do this", chat_id="bot@example.org")
         assert not [op for op, _ in b.calls if op == "imessage_send"] and not box.pending()
 
 
 def test_the_allowlist_decides_who_may_receive(s, tmp_path):
     m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=()), tmp_path)
     with pytest.raises(IMessageError, match="empty, so nobody"):
-        m.send("hi", handle="anna@example.org", outbox=box)
+        send(m, "hi", handle="anna@example.org")
     m, b, box = svc(s, tmp_path)
     with pytest.raises(IMessageError, match=r"Not on IMESSAGE_SEND_ALLOWLIST: \+31600000002"):
-        m.send("hi all", chat_id="chat900", outbox=box)                                        # a group needs everyone listed
+        send(m, "hi all", chat_id="chat900")                                        # a group needs everyone listed
     m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=("*",), imessage_send_requires_approval=False), tmp_path)
-    assert m.send("hi all", chat_id="chat900", outbox=box)["status"] == "sent"
+    assert send(m, "hi all", chat_id="chat900")["status"] == "sent"
     assert b.calls[-1] == ("imessage_send", {"chat_id": "chat900", "text": "hi all"})
 
 
 def test_hidden_chats_cannot_be_sent_to(s, tmp_path):
     m, b, box = svc(dataclasses.replace(s, imessage_hidden_chats=("anna@example.org",)), tmp_path)
     with pytest.raises(IMessageError, match="No conversation"):
-        m.send("hi", handle="anna@example.org", outbox=box)
+        send(m, "hi", handle="anna@example.org")
 
 
 def test_local_mode_never_sends_without_the_owner(s, tmp_path):
     m, b, _ = svc(dataclasses.replace(s, local_mode=True), tmp_path)
-    r = m.send("Hi Anna", handle="anna@example.org", outbox=None)
+    r = m.send("Hi Anna", handle="anna@example.org")
     assert r["status"] == "not_sent_needs_owner" and r["text"] == "Hi Anna" and not [op for op, _ in b.calls if op == "imessage_send"]
 
 
 def test_release_rechecks_the_lists_and_only_requeues_what_the_mac_never_got(s, tmp_path):
     m, b, box = svc(s, tmp_path)
-    q = m.send("Hi Anna", handle="anna@example.org", outbox=box)["outbox_id"]
+    q = send(m, "Hi Anna", handle="anna@example.org")["outbox_id"]
     m.s = dataclasses.replace(s, imessage_send_allowlist=())                                    # the owner emptied the list meanwhile
-    with pytest.raises(Rechecked, match="nobody") as got:
-        m.release(box, q)
+    with pytest.raises(Rechecked, match="lists no longer allow") as got:      # a code, never the service's own words (4b)
+        release(m, q)
     assert got.value.reason == "not_allowed" and box.state_of(q) == ("discarded", "not_allowed")
     assert not box.pending() and not [op for op, _ in b.calls if op == "imessage_send"]
     m.s = s
-    q = m.send("Hi again", handle="anna@example.org", outbox=box)["outbox_id"]
+    q = send(m, "Hi again", handle="anna@example.org")["outbox_id"]
     m.bridge = Bridge(fail=BridgeError("The Mac did not pick up the request within 60s"))
     with pytest.raises(IMessageError, match="still waiting"):
-        m.release(box, q)
+        release(m, q)
     assert [x.id for x in box.pending()] == [q]                                                 # offline: kept for a retry
     m.bridge = Bridge(fail=BridgeError("The Mac picked up the request but did not finish within 60s"))
-    assert m.release(box, q)["status"] == "unclear"
+    assert release(m, q)["status"] == "unclear"
     assert not box.pending() and box.state_of(q)[0] == "unclear"                               # it may have gone out: never twice
     m.bridge = Bridge()
-    q = m.send("Third", handle="anna@example.org", outbox=box)["outbox_id"]
-    assert m.release(box, q)["status"] == "sent" and m.bridge.calls[-1] == ("imessage_send", {"handle": "anna@example.org", "text": "Third"})
+    q = send(m, "Third", handle="anna@example.org")["outbox_id"]
+    assert release(m, q)["status"] == "sent" and m.bridge.calls[-1] == ("imessage_send", {"handle": "anna@example.org", "text": "Third"})
 
 
 def test_the_send_tool_exists_only_when_sending_is_allowed_and_writable(s):
@@ -162,18 +190,18 @@ def test_never_send_and_hidden_match_the_data_however_it_is_written(s, tmp_path)
         b.call = lambda op, a=None, b=b: b.calls.append((op, a)) or read_one(odd, a)
         chat = "Bot@Example.ORG" if "@" in never[0] else "chat901"
         with pytest.raises(IMessageError, match="IMESSAGE_NEVER_SEND"):
-            m.send("x", chat_id=chat, outbox=box)
+            send(m, "x", chat_id=chat)
     m, _, _ = svc(dataclasses.replace(s, imessage_hidden_chats=("0612345678",)), tmp_path)
     assert not m._shown("+31612345678") and not m._shown("+31 6 12345678") and m._shown("+31612345679")
 
 
 def test_release_checks_who_is_in_the_group_now(s, tmp_path):
     m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=("anna@example.org", "+31600000002")), tmp_path)
-    q = m.send("Hi all", chat_id="chat900", outbox=box)["outbox_id"]
+    q = send(m, "Hi all", chat_id="chat900")["outbox_id"]
     CHATS["chats"][1]["participants"].append("bot@example.org")                 # the assistant was added to the group meanwhile
     try:
-        with pytest.raises(Rechecked, match="IMESSAGE_NEVER_SEND"):
-            m.release(box, q)
+        with pytest.raises(Rechecked, match="lists no longer allow"):
+            release(m, q)
     finally:
         CHATS["chats"][1]["participants"].remove("bot@example.org")
     assert box.state_of(q) == ("discarded", "not_allowed")
@@ -183,16 +211,16 @@ def test_release_checks_who_is_in_the_group_now(s, tmp_path):
 def test_the_target_is_read_as_one_chat_and_a_missing_chat_sends_nothing(s, tmp_path):
     m, b, box = svc(dataclasses.replace(s, imessage_send_allowlist=("anna@example.org", "+31600000002"),
                                         imessage_hidden_chats=("+31699999999",)), tmp_path)
-    q = m.send("Hi all", chat_id="chat900", outbox=box)["outbox_id"]
+    q = send(m, "Hi all", chat_id="chat900")["outbox_id"]
     assert b.calls[0] == ("imessage_read", {"chat_id": "chat900", "limit": 1, "exclude": "+31699999999"})   # hidden chats stay hidden
-    assert json.loads(box.pending()[0].raw)["to"]["participants"] == [{"handle": "+31600000002"}, {"handle": "anna@example.org"}]
+    assert json.loads(box.pending()[0].raw)["params"]["to"]["participants"] == [{"handle": "+31600000002"}, {"handle": "anna@example.org"}]
     with pytest.raises(BridgeError, match="no conversation"):
-        m.send("Hi", chat_id="chat404", outbox=box)                                       # unknown to the Mac: nothing queued
+        send(m, "Hi", chat_id="chat404")                                       # unknown to the Mac: nothing queued
     assert len(box.pending()) == 1
     CHATS["chats"][1]["chat_id"] = "chat901"                                              # the chat is gone by the time of approval
     try:
-        with pytest.raises(Rechecked, match="no longer exists"):
-            m.release(box, q)
+        with pytest.raises(Rechecked, match="target changed"):
+            release(m, q)
     finally:
         CHATS["chats"][1]["chat_id"] = "chat900"
     assert box.state_of(q) == ("discarded", "target_changed")

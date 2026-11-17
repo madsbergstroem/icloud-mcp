@@ -286,8 +286,10 @@ class IMessageService:
         raise IMessageError(f"Not on IMESSAGE_SEND_ALLOWLIST: {', '.join(missing)}. Tell the owner; only they can change the list. "
                             "Nothing was sent.")
 
-    def send(self, text: str, *, chat_id: str | None = None, handle: str | None = None, outbox: Any = None,
-             public_url: str = "", external: Any = None) -> dict[str, Any]:
+    def send(self, text: str, *, chat_id: str | None = None, handle: str | None = None, public_url: str = "",
+             external: Any = None) -> dict[str, Any]:
+        """Queue an iMessage for the owner's approval as an action of type imessage.send on `external` (package 4b), or send it
+        at once where the owner turned approval off. Nothing is queued without the external source."""
         text = (text or "").strip()
         if not text:
             raise IMessageError("text is empty.")
@@ -301,30 +303,19 @@ class IMessageService:
         if t.get("services") and "iMessage" not in t["services"]:
             raise IMessageError(self._sms_only(t, to["participants"]))
         if self.s.imessage_send_requires_approval:
-            if self.s.local_mode or (outbox is None and external is None):
+            if self.s.local_mode or external is None:
                 return {"status": "not_sent_needs_owner", "sent": False, "to": to, "text": text,
                         "notice": "This server has no approval page here, and every iMessage needs the owner's approval: show the "
                                   "owner the text so they can send it themselves. It was NOT sent."}
-            if external is not None:                     # package 4b: an action of type imessage.send on the external source
-                from .gate import actions as A
-                try:
-                    q = external.queue_external(ACTION_ID, params_of({"chat_id": t["chat_id"], "handle": t["handle"], "text": text, "to": to}), None)
-                except A.ExternalError as e:
-                    raise IMessageError(str(e)) from None
-                return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "to": to,
-                        "approve_at": self.s.approval_link("external", q.id),
-                        "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). "
-                                  "Say so; do not send it again: approval_status with the outbox_id says what became of it."}
-            import json
-            raw = json.dumps({"chat_id": t["chat_id"], "handle": t["handle"], "text": text, "to": to}, ensure_ascii=False).encode()
-            from .outbox import OutboxFull
+            from .gate import actions as A                 # package 4b: an action of type imessage.send on the external source
             try:
-                q = outbox.add(raw, [x for x in (t["chat_id"], t["handle"]) if x])
-            except OutboxFull as e:
-                raise IMessageError(str(e)) from e
+                q = external.queue_external(ACTION_ID, params_of({"chat_id": t["chat_id"], "handle": t["handle"], "text": text, "to": to}), None)
+            except A.ExternalError as e:
+                raise IMessageError(str(e)) from None
             return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "to": to,
-                    "approve_at": self.s.approval_link("imessage", q.id), "notice": "Queued, NOT sent: it goes out only when the owner approves it on "
-                                                                   "the approval page (approve_at). Say so; do not send it again: approval_status with the outbox_id says what became of it."}
+                    "approve_at": self.s.approval_link("external", q.id),
+                    "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). "
+                              "Say so; do not send it again: approval_status with the outbox_id says what became of it."}
         got = self.bridge.call("imessage_send", {k: v for k, v in {"chat_id": t["chat_id"], "handle": t["handle"], "text": text}.items() if v})
         return {**got, "to": to}
 
@@ -356,79 +347,6 @@ class IMessageService:
             fresh.pop("services", None)
             return params_of({"chat_id": p.get("chat_id"), "handle": p.get("handle"), "text": p.get("text", ""), "to": fresh})
         return None
-
-    def describe_queued(self, q: Any) -> dict[str, Any]:
-        import json
-        d = json.loads(q.raw.decode())
-        to = d.get("to") or {}
-        people = ", ".join(f"{p.get('name')} ({p.get('handle')})" if p.get("name") else p.get("handle", "") for p in to.get("participants", []))
-        return {"to": (to.get("name") + ": " if to.get("name") else "") + people, "chat_id": d.get("chat_id") or d.get("handle"),
-                "group": to.get("group", False), "text": d.get("text", ""), "name": to.get("name") or "", "people": people}
-
-    def release(self, outbox: Any, item_id: str, sha256: str | None = None) -> dict[str, Any]:
-        """Send a queued iMessage. Called only from the owner's approval pages, never from a tool. sha256: the version the owner
-        looked at; another one is not sent. Who is in the conversation and both lists are checked again, as they are now.
-
-        How it ends (docs/SENDGATE.md, package 4a): reading the conversation fails -> waits again; the conversation is gone ->
-        discarded (target_changed); someone is no longer allowed -> discarded (not_allowed); the members changed and all are allowed
-        -> waits again as a new version for the owner to look at; the Mac says nothing was sent or never got it -> waits again;
-        any other error, and a send the Mac did not confirm -> unclear, never repeated from here, since that could deliver it twice."""
-        import json
-        from .bridge import BridgeError
-        from .gate.actions import Rechecked, Revised
-        q = outbox.claim(item_id, "executing")
-        if q is None:
-            raise IMessageError("That message is no longer waiting (already released, discarded or expired).")
-        if sha256 is not None and q.sha256 != sha256:             # edited between the owner's look and the click
-            outbox.restore(q)
-            raise IMessageError("The message changed just now. Nothing was sent; look at it again.")
-        d = json.loads(q.raw.decode())
-        if not self._shown(d.get("chat_id") or d.get("handle") or ""):      # hidden by the owner since it was queued
-            outbox.finish(q.id, "discarded", "not_allowed")
-            raise Rechecked("not_allowed", "Not sent: you hid this conversation since it was queued.")
-        try:
-            target = self._target(d.get("chat_id"), d.get("handle"))
-        except BridgeError as e:
-            if "no conversation" in str(e).lower():
-                outbox.finish(q.id, "discarded", "target_changed")
-                raise Rechecked("target_changed", f"Not sent: that conversation no longer exists ({e}).") from e
-            outbox.restore(q)                                     # only a read so far: nothing went out
-            raise IMessageError(f"Not sent, still waiting: {e}") from e
-        except IMessageError as e:                                # the Mac no longer has it
-            outbox.finish(q.id, "discarded", "target_changed")
-            raise Rechecked("target_changed", f"Not sent: {e}") from e
-        try:
-            self._permit(target)
-        except IMessageError as e:
-            outbox.finish(q.id, "discarded", "not_allowed")
-            raise Rechecked("not_allowed", f"Not sent: {e}") from e
-        then = sorted(_key(p.get("handle", "") if isinstance(p, dict) else p) for p in (d.get("to") or {}).get("participants", []))
-        now = sorted(_key(p) for p in target["participants"])
-        if d.get("chat_id") and then and now != then and hasattr(outbox, "revise"):     # someone joined or left since the owner looked
-            to = {**target, "participants": self._people_of(target["participants"], self._resolver())}
-            to.pop("services", None)
-            raw = json.dumps({**d, "to": to}, ensure_ascii=False).encode()
-            revised = outbox.revise(q, raw)
-            if revised is None:
-                raise IMessageError("Not sent: the people in the conversation changed since you looked, and the message is no longer waiting.")
-            raise Revised(len(outbox.versions(q.id)), q.id, revised.sha256)
-        try:
-            got = self.bridge.call("imessage_send", {k: v for k, v in {"chat_id": d.get("chat_id"), "handle": d.get("handle"),
-                                                                        "text": d.get("text")}.items() if v})
-        except BridgeError as e:
-            never_reached = ("did not pick up", "has not connected", "last seen", "or newer: update the helper", "Nothing was sent")
-            if any(x in str(e) for x in never_reached):
-                outbox.restore(q)                                 # the Mac never had it, or refused before Messages did: safe to keep
-                raise IMessageError(f"Not sent, still waiting: {e}") from e
-            outbox.finish(q.id, "unclear")
-            return {"status": "unclear", "note": "The Mac did not answer clearly, so it may or may not have gone out. Nothing is "
-                                                 "sent again; look in Messages first.", "to": describe_label(d)}
-        outbox.finish(q.id, "sent" if got.get("status") == "sent" else "unclear")
-        return {**got, "to": describe_label(d)}
-
-def describe_label(d: dict[str, Any]) -> str:
-    to = d.get("to") or {}
-    return to.get("name") or ", ".join(p.get("name") or p.get("handle", "") for p in to.get("participants", []))
 
 
 # -- the action type (docs/SENDGATE.md, package 4b) -----------------------------------------------------------------------------
@@ -611,20 +529,21 @@ def _missing(chat_id: str, e: BridgeError) -> Exception:
 
 
 class IMessageSender:
-    """Queues an iMessage for the owner's approval, through the same service, queue file and approval card as ever. A reply and a key
-    are things the iMessage queue does not have, so a request that asks for them is refused instead of quietly sent without."""
+    """Queues an iMessage for the owner's approval through the service, as an action of type imessage.send (package 4b). A reply
+    and a key are things an iMessage request does not have, so a request that asks for them is refused instead of quietly sent
+    without."""
     name = "imessage"
     takes_handle = True
 
     def __init__(self, service: IMessageService, outbox: Any, public_url: str, external: Any = None):
-        self.svc, self.outbox, self.public_url, self.external = service, outbox, public_url, external
+        """outbox: unused since package 4b (requests wait on `external`); kept so the server's call stays as it is."""
+        self.svc, self.public_url, self.external = service, public_url, external
 
     def send_request(self, req: SendRequest) -> dict[str, Any]:
         if req.reply_to or req.request_id:
             raise MessagesError("reply_to and request_id are for Beeper chats only. An iMessage request has neither: leave them out. "
                                 "A repeat of an identical request that still waits returns that request; ask approval_status before asking again.")
         try:
-            return self.svc.send(req.text, chat_id=req.chat_id, handle=req.handle, outbox=self.outbox, public_url=self.public_url,
-                                 external=self.external)
+            return self.svc.send(req.text, chat_id=req.chat_id, handle=req.handle, public_url=self.public_url, external=self.external)
         except BridgeError as e:
             raise _missing(make_id(self.name, req.chat_id) if req.chat_id else "", e) from None
