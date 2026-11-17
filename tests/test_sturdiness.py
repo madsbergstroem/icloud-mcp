@@ -157,7 +157,7 @@ def _message_end(node):
 
 def test_every_error_message_ends_with_a_full_stop():
     bad = []
-    for path in SRC.glob("*.py"):
+    for path in [*SRC.glob("*.py"), *(SRC / "gate").glob("*.py")]:                # gate/: the approval gate (docs/SENDGATE.md)
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and getattr(node.exc.func, "id", "") in ERRORS and node.exc.args:
                 end = _message_end(node.exc.args[0])

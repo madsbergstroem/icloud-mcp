@@ -93,12 +93,12 @@ export async function sheet(title, bodyHtml, onReady) {
 }
 
 // Confirm it is you: the passkey if there is one, else (or also) the owner password. Resolves when confirmed.
-function confirmIdentity() {
+function confirmIdentity(why) {
   return new Promise((resolve, reject) => {
     const s = session.data || {};
     const pk = s.passkeys && window.Passkey && window.Passkey.available();
     let done = false;
-    sheet("Confirm it is you", `<div class="title"><p>You signed in more than 5 minutes ago. This step changes how your
+    sheet("Confirm it is you", `<div class="title"><p>${why ? `${esc(why)} ` : ""}You signed in more than 5 minutes ago. This step changes how your
       server is protected, so it asks you again.</p></div>
       ${pk ? `<div class="acts stack"><ion-button expand="block" data-pk>Confirm with a passkey</ion-button></div>` : ""}
       ${pk && s.password_login ? `<p class="or">or with the owner password</p>` : ""}
@@ -136,3 +136,6 @@ export function titleBlock(h1, p) {
 }
 
 export function wide() { return window.matchMedia("(min-width: 900px)").matches; }
+
+// How an ion-select opens: a list at the field on a wide screen, the sheet from below on a phone. Every select uses this.
+export function selectUi() { return wide() ? "popover" : "action-sheet"; }

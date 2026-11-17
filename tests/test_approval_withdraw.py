@@ -129,7 +129,7 @@ async def test_when_the_claim_is_lost_to_an_approve_nothing_looks_like_success(w
     box = mcp._icloud_outboxes["mail"]
     real = box.claim
 
-    def owner_first(item_id):
+    def owner_first(item_id, state=None):              # claim takes how it ends since the store (gate/store.py)
         real(item_id)                                  # the owner's release got there first ...
         return real(item_id)                           # ... so the tool's own claim comes back empty
     box.claim = owner_first
@@ -312,9 +312,10 @@ async def test_the_log_line_is_by_the_assistant_and_holds_no_text(web):
     assert [e["summary"] for e in entries] == ["Withdrew email “Invoice 2291”", "Withdrew imessage “iMessage to Anna Rivera (anna@example.org)”",
                                                "Withdrew invitation “Autumn fair”"]
     # a mail and an invitation keep their first recipient, as approval.sent does, so Home can say whom it was for
-    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients"}),
-                                                               (True, {"kind", "outbox_id", "reason"}),
-                                                               (True, {"kind", "outbox_id", "reason", "recipients"})]
+    # and the hash of exactly what waited (docs/SENDGATE.md, review obligation E-3), never its text
+    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients", "sha256"}),
+                                                               (True, {"kind", "outbox_id", "reason", "sha256"}),
+                                                               (True, {"kind", "outbox_id", "reason", "recipients", "sha256"})]
     assert entries[0]["details"]["recipients"] == ["bob@example.org"]
     raw_log = mcp._icloud_dashboard.audit.path.read_text()
     for hidden in ("Hidden mail body", "Hidden iMessage text", "Hidden event notes"):
@@ -483,7 +484,7 @@ async def test_the_rules_say_how_to_take_a_request_back_and_what_to_ask_the_owne
 def test_the_stale_docstrings_no_longer_call_the_approval_page_password_protected():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / "src" / "icloud_mcp"
-    for name in ("imessage.py", "mail.py", "outbox.py"):
+    for name in ("imessage.py", "mail.py", "gate/outbox.py"):
         assert "password-protected" not in (root / name).read_text() and "needs the owner password" not in (root / name).read_text(), name
     assert "approval_withdraw" in mod.__doc__ and "not a security boundary" in mod.__doc__
 

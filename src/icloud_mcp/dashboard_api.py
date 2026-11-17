@@ -24,6 +24,9 @@ from starlette.responses import JSONResponse, Response
 
 from . import textedit as T
 from .approval_withdraw import REASON_WORDS
+from dataclasses import replace as dc_replace
+
+from .gate.actions import Rechecked, Revised
 from .dashboard_accounts import mail_account
 
 log = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ _WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assista
 
 
 def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_in: Callable, recent: Callable,
-                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str], filters: dict[str, Any],
+                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str],
                  for_owner: Callable[[str], str],
                  owner_password_problem: Callable[[str, str], str]) -> None:
     from . import passkeys as P
@@ -45,8 +48,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
     def err(error: str, status: int, **extra: Any) -> JSONResponse:
         return JSONResponse({"ok": False, "error": error, **extra}, status_code=status, headers=headers)
 
-    def need_confirm() -> JSONResponse:
-        return err("confirm", 403, confirm=True, message="Confirm it is you: this step changes how your server is protected.")
+    def need_confirm(why: str = "") -> JSONResponse:
+        return err("confirm", 403, confirm=True, message="Confirm it is you: this step changes how your server is protected.",
+                   **({"why": why} if why else {}))
 
     def reader(request: Request) -> tuple[str, dict[str, Any]] | JSONResponse:
         got = signed_in(request)
@@ -89,6 +93,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "approval.withdrawn":
             why = REASON_WORDS.get(str((e.get("details") or {}).get("reason")), "")
             return "Withdrawn", "Withdrawn by your assistant" + (f": {why}." if why else ".") + " Nothing was sent."
+        if action == "approval.revised":
+            return "Changed", "The target changed after you looked. Nothing was sent; it waits with the new details."
+        if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "target_changed":
+            return "Not sent", "The target changed after you looked. Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
             if (e.get("details") or {}).get("kind") == "external":
                 return "Unclear", "It may or may not have gone through. Nothing is sent again."
@@ -104,6 +112,88 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": who,
                 "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", ""),
                 "tag": tag, "note": note}
+
+    # -- the activity table: what each entry did, to what, and its details (the log holds names, addresses and hashes, no text)
+    actions = {"all": ("All actions", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agent requests", ("tool.",)),
+               "settings": ("Settings", ("settings.", "accounts.", "push.", "server.", "owner_password.")),
+               "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
+    labels = {"approval.sent": "Approved", "approval.discarded": "Discarded", "approval.edited": "Edited", "approval.edit_undone": "Edited",
+              "approval.withdrawn": "Withdrawn", "approval.revised": "Changed", "approval.expired": "Expired", "approval.failed": "Failed",
+              "approval.file_added": "File added", "approval.file_removed": "File removed", "tool.queued": "Asked",
+              "signin.passkey": "Sign-in", "signin.password": "Sign-in", "signin.access": "Sign-in", "signin.confirm": "Confirmed",
+              "signin.signout": "Signed out", "passkey.added": "Passkey added", "passkey.removed": "Passkey removed",
+              "app.connected": "App connected", "app.denied": "App refused", "app.signed_out": "App signed out",
+              "app.signed_out_all": "App signed out", "settings.changed": "Setting", "accounts.changed": "Accounts",
+              "push.added": "Notifications", "push.removed": "Notifications", "server.paused": "Paused", "server.resumed": "Resumed",
+              "server.restart": "Restarted", "owner_password.changed": "Password"}
+    warn_tags = ("Changed", "Unclear", "Withdrawn", "Expired", "Not sent")
+    lead = re.compile(r"^(?:Approved|Discarded|Did not send|Could not send|Withdrew|Edited|Brought back the original text of|Added|Removed"
+                      r"|Took the file for|Signed in (?:with|through)|Confirmed with|Connected|Refused to connect|Signed out(?: of)?"
+                      r"|Turned (?:on|off) notifications for|Asked to|Changed|Reset|Paused|Resumed|Restarted|An upload added)\s+")
+    results = {"confirmed": "Delivered", "sent": "Sent", "unconfirmed": "Not confirmed: it may or may not have gone through",
+               "failed": "Failed: it may or may not have gone through"}
+    reasons = {"target_changed": "The target changed after you looked", **REASON_WORDS}
+
+    def actor_label(actor: str) -> str:
+        return {"owner": "You", "server": "Server", "unknown": "Someone", "agent": "Upload"}.get(actor, actor or "?")
+
+    def short(h: Any) -> str:
+        h = str(h or "")
+        return f"{h[:8]}…{h[-4:]}" if len(h) > 16 else h
+
+    def when(t: float | None) -> str:
+        if not t:
+            return ""
+        day, today_ = datetime.fromtimestamp(t, d.tz).date(), datetime.now(d.tz).date()
+        name = "Today" if day == today_ else "Yesterday" if day == today_ - timedelta(days=1) else day.strftime("%a %d %b")
+        return f"{name} {d.fmt_time(t)}"
+
+    def target(e: dict[str, Any], diff: list[Any]) -> str:
+        """What the entry acted on: its summary without the verb the action tag already says, and without the reason."""
+        action, text = str(e.get("action", "")), str(e.get("summary") or e.get("action", ""))
+        text = re.sub(r"\bimessage\b", "iMessage", text)
+        if action.startswith("tool.") and action != "tool.queued":
+            return text                            # an agent's own action: the verb is the news
+        text = lead.sub("", text, count=1).replace(" (waiting for your approval)", "").removesuffix(" before sending")
+        if diff or action in ("approval.revised", "approval.discarded", "approval.withdrawn"):
+            text = text.split(": ", 1)[0]
+        return text if text[1:2].isupper() else text[:1].upper() + text[1:]      # “iMessage …” keeps its small i
+
+    def details(e: dict[str, Any]) -> list[list[str]]:
+        x, rows = e.get("details") or {}, []
+        add = lambda label, v: rows.append([label, str(v)]) if v not in (None, "", [], {}) else None  # noqa: E731
+        add("Request", x.get("outbox_id"))
+        add("Replaces request", x.get("replaced"))
+        add("Version", x.get("version"))
+        add("Action", x.get("action_type"))
+        add("Tool", x.get("tool"))
+        add("Sent to", ", ".join(map(str, x.get("recipients") or [])))
+        add("Count", x.get("count"))
+        add("To", x.get("destination"))
+        add("Result", results.get(str(x.get("delivery")), x.get("delivery")))
+        add("Why", reasons.get(str(x.get("reason")), x.get("reason")))
+        add("Loosened", ", ".join(map(str, x.get("weakened") or [])))
+        if x.get("new_sha256"):
+            add("Hash before", short(x.get("sha256")))
+            add("Hash after", short(x.get("new_sha256")))
+        else:
+            add("Hash", short(x.get("sha256")))
+        add("Hash it replaced", short(x.get("previous_sha256")))
+        add("Error", x.get("error"))
+        add("Signed in with" if e.get("actor") == "owner" else "Client", via_text(e))
+        return rows
+
+    def row(e: dict[str, Any]) -> dict[str, Any]:
+        """One line of the table: time, actor, action, target; opened, the details and what changed from what to what."""
+        action, base = str(e.get("action", "")), entry(e)
+        x = e.get("details") or {}
+        diff = [{"label": str(c[0]), "old": str(c[1]), "new": str(c[2])} for c in (x.get("changes") or []) if isinstance(c, list) and len(c) == 3]
+        name = base["tag"] if base["tag"] in ("Unclear", "Not sent") else labels.get(action, "Agent" if action.startswith("tool.") else action)
+        if not e.get("ok", True):
+            name = "Sign-in failed" if action.startswith("signin.") else "Failed" if name not in ("Unclear",) else name
+        tone = "bad" if not e.get("ok", True) else "warn" if name in warn_tags else ""
+        return {**base, "when": when(e.get("t")), "actor": actor_label(str(e.get("actor") or "")), "action": name, "tone": tone,
+                "target": target(e, diff), "details": details(e), "diff": diff}
 
     # -- session -------------------------------------------------------------------------------------------------------
     @route("/session", ["GET"])
@@ -197,6 +287,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
+                **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
     def described(only: str = "") -> list[tuple[Any, Any, dict[str, Any]]]:
@@ -251,6 +342,34 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "kinds": kinds,
                    "mac": "off" if not mac.get("set_up") else ("online" if mac.get("online") else "offline")})
 
+    def versions_of(src: Any, q: Any) -> list[dict[str, Any]] | None:
+        """The versions of a request as the card lists them (package 2c), oldest first, each with what changed against the one
+        before; None for a source without versions or a request that has only one."""
+        box = getattr(src, "box", None)
+        if box is None or not hasattr(box, "versions"):
+            return None
+        vs = box.versions(q.id)
+        if len(vs) < 2:
+            return None
+        looks: list[dict[str, Any] | None] = []
+        for v in vs:
+            try:
+                looks.append(src.describe(dc_replace(q, raw=v["raw"], sha256=v["sha256"])) if v["raw"] is not None else None)
+            except Exception:  # noqa: BLE001  -- a version that cannot be read is listed without its content
+                looks.append(None)
+        out = []
+        for i, v in enumerate(vs):
+            cur, prev = looks[i], looks[i - 1] if i else None
+            changes = []
+            if cur is not None and prev is not None:
+                before = dict(prev["rows"])
+                changes = [{"label": k, "old": before.get(k, ""), "new": val} for k, val in cur["rows"] if before.get(k) != val]
+                if cur["text"] != prev["text"]:
+                    changes.append({"label": "Text", "old": prev["text"], "new": cur["text"]})
+            out.append({"n": v["n"], "by": v["author"], "at": v["created_at"], "changes": changes,
+                        "rows": [[k, val] for k, val in (cur or {}).get("rows", [])], "text": (cur or {}).get("text", "")})
+        return out
+
     def mail_parts(q: Any) -> Any:
         return email.message_from_bytes(q.raw, policy=policy.default)
 
@@ -266,9 +385,14 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src, q, v = found[0]
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
-               "approve_label": label_of(src, q), "files": [], "missing": [], "original": None,
+               "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
+               **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
                "account": mail_account(s) if src.kind == "mail" else ""}
+        if versions := await asyncio.to_thread(versions_of, src, q):
+            out["versions"] = versions
+            if versions[-1]["by"] == "service":
+                out["changed"] = versions[-1]["changes"]
         if src.kind == "mail":
             dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
             added = {x["index"]: x["asked"] for x in dq["added_files"]}
@@ -332,21 +456,34 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "discard":
             await asyncio.to_thread(src.discard, q)
             audit.record("approval.discarded", **who, summary=f"Discarded {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
-                         action_type=getattr(q, "action_type", None))
+                         action_type=getattr(q, "action_type", None), sha256=q.sha256)
             return ok({"note": "Discarded. Nothing was sent."})
+        if v.get("approvable") is False:
+            return err("This cannot be approved. Discard it.", 409)
+        if v.get("held"):
+            return err(f"Not sent: {v['held']}", 409)
         if v["needs_override"] and body.get("override") is not True:
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
         if v.get("blocked"):
             return err("Not sent: a file is still missing. Add it first.", 409)
         try:
             note = await asyncio.to_thread(src.release, q)
+        except Revised as e:                       # checked again just before sending: the service has new values; a new version waits
+            audit.record("approval.revised", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed, "
+                         f"it waits as version {e.n}", kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None),
+                         sha256=q.sha256, new_sha256=e.sha256, reason="target_changed", version=e.n)
+            return err(str(e), 409, state="waiting", revised=True, version=e.n)
+        except Rechecked as e:                     # checked again just before sending: not the target the owner saw; it ends here
+            audit.record("approval.discarded", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed",
+                         kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=q.sha256, reason=e.reason)
+            return err(str(e), 409, gone=True, state="discarded")
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
             log.warning("Release of %s %s failed: %s", src.kind, q.id, e)
             audit.record("approval.failed", **who, ok=False, summary=f"Could not send {v['badge'].lower()} “{v['title']}”", kind=src.kind, outbox_id=q.id,
-                         action_type=getattr(q, "action_type", None))
+                         action_type=getattr(q, "action_type", None), sha256=q.sha256)
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
-                     outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None),
+                     outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None), sha256=q.sha256,
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         # "state" only when the send is not certain; nothing is sent again from here
         return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})
@@ -354,13 +491,30 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
     # -- activity ------------------------------------------------------------------------------------------------------
     @route("/activity", ["GET"])
     async def activity(request: Request) -> Response:
+        """Filters, combined: days (1, 7, 30 or how long the log keeps), action (a group of actions; `filter` is the older
+        name), actor (one actor of the entries in that time and group). The newest first, at most 1000."""
         got = reader(request)
         if isinstance(got, Response):
             return got
-        which = request.query_params.get("filter", "all")
-        which = which if which in filters else "all"
-        entries = await asyncio.to_thread(audit.entries, 300, filters[which][1])
+        qp = request.query_params
+        keep = int(s.audit_keep_days or 90)
+        ranges = [(n, f"{n} days" if n > 1 else "24 hours") for n in sorted({n for n in (1, 7, 30) if n < keep} | {keep})]
+        try:
+            days_ = int(qp.get("days", 7))
+        except ValueError:
+            days_ = 7
+        days_ = days_ if days_ in dict(ranges) else min(7, keep)
+        which = qp.get("action") or qp.get("filter") or "all"
+        which = which if which in actions else "all"
+        since = time.time() - days_ * 86400
+        found = await asyncio.to_thread(audit.entries, 1000, actions[which][1], since)
         chain = await asyncio.to_thread(audit.verify)
+        seen = {}
+        for e in found:
+            seen.setdefault(str(e.get("actor") or ""), actor_label(str(e.get("actor") or "")))
+        who = qp.get("actor", "all")
+        who = who if who in seen else "all"
+        entries = [e for e in found if who == "all" or str(e.get("actor") or "") == who]
         today_ = datetime.now(d.tz).date()
         days: dict[Any, list[dict[str, Any]]] = {}
         for e in entries:
@@ -368,9 +522,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         out = []
         for day, items in days.items():
             label = "Today" if day == today_ else "Yesterday" if day == today_ - timedelta(days=1) else day.strftime("%a %d %b %Y")
-            out.append({"day": label, "entries": [entry(e) for e in items]})
-        return ok({"filter": which, "filters": [[k, label] for k, (label, _) in filters.items()], "days": out,
-                   "log_on": bool(s.audit_log), "keep_days": s.audit_keep_days,
+            out.append({"day": label, "entries": [row(e) for e in items]})
+        return ok({"filter": which, "filters": [[k, label] for k, (label, _) in actions.items()], "days": out,
+                   "range": days_, "ranges": [[n, label] for n, label in ranges],
+                   "actor": who, "actors": [["all", "Everyone"]] + sorted(([k, v] for k, v in seen.items()), key=lambda kv: (kv[0] != "owner", kv[1].lower())),
+                   "more": len(found) >= 1000, "log_on": bool(s.audit_log), "keep_days": s.audit_keep_days,
                    "chain": {"ok": chain["ok"], "entries": chain.get("entries", 0), "broken_at": chain.get("broken_at")}})
 
     # -- security ------------------------------------------------------------------------------------------------------
@@ -462,8 +618,15 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if isinstance(got, Response):
             return got
         health = d.last_health
-        areas = [{"area": a.replace("_", " ").capitalize(), "ok": bool(r.get("ok")), "ms": r.get("ms", 0),
-                  "error": "" if r.get("ok") else (r.get("error") or "")[:160]} for a, r in ((health or {}).get("areas") or {}).items()]
+        areas = []
+        for a, r in ((health or {}).get("areas") or {}).items():
+            if r.get("actions"):                     # an area that reports per action (the gateway connector): one line each
+                areas += [{"area": x["name"], "level": x["level"], "ok": x["level"] != "problem", "ms": 0, "error": x["text"][:160],
+                           "note": {"problem": "Bypassable", "warning": "Not checked"}.get(x["level"], "Fine")} for x in r["actions"]]
+                continue
+            areas.append({"area": a.replace("_", " ").capitalize(), "ok": bool(r.get("ok")), "level": "ok" if r.get("ok") else "problem",
+                          "ms": r.get("ms", 0), "error": "" if r.get("ok") else (r.get("error") or "")[:160]})
+        areas.sort(key=lambda x: {"problem": 0, "warning": 1}.get(x["level"], 2))     # problems first, then warnings (H2)
         return ok({"version": version(), "paused": d.paused(), "checked_at": (health or {}).get("_at"), "areas": areas,
                    "tools": len(mcp._tool_manager.list_tools()), "apps": [a["name"] for a in provider.connected_apps()],
                    "bridge": bridge_state(), "host": d.host})

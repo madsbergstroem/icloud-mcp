@@ -13,7 +13,8 @@ export function editView(it, rows, sub) {
     + `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}
       <ion-textarea aria-label="Text of the request" auto-grow="true" rows="4" data-ta value="${esc(it.edit.text)}"></ion-textarea>
       <div class="capr"><span>Only the text changes. ${esc(STAYS[it.kind] || "")}</span><span class="num" data-count>${n.toLocaleString()} characters</span></div></div>
-      <p class="note">Your edit replaces what your assistant asked for. You can bring that back until you send.</p>`;
+      <p class="note">${it.kind === "external" ? "Your edit becomes a new version. The earlier ones stay in the list."
+        : "Your edit replaces what your assistant asked for. You can bring that back until you send."}</p>`;
 }
 
 export function editFoot() {
@@ -51,7 +52,9 @@ export function wireEdit(el, key, it, done) {
 
 // "Bring it back": the text the agent asked for replaces the owner's edit
 export async function bringBack(key, it, done) {
-  if (!(await ask("Bring back the original?", "Your edit is replaced by what your assistant asked for.", "Bring it back"))) return;
+  const why = it.versions ? "Your assistant's text becomes the newest version. Your edit stays in the list."
+    : "Your edit is replaced by what your assistant asked for.";
+  if (!(await ask("Bring back the original?", why, "Bring it back"))) return;
   try {
     const r = await put(`/items/${encodeURIComponent(key)}/text`, { sha: it.sha, restore: true });
     toast(r.note);

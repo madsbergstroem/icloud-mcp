@@ -344,5 +344,5 @@ def test_the_resolver_changes_nothing_for_the_server_or_the_file(env):
 
 def test_nothing_in_the_server_calls_the_resolver_yet():
     src = Path(A.__file__).parent
-    users = [p.name for p in src.glob("*.py") if p.name != "accounts.py" and "settings_for_account" in p.read_text()]
+    users = [p.name for p in [*src.glob("*.py"), *(src / "gate").glob("*.py")] if p.name != "accounts.py" and "settings_for_account" in p.read_text()]
     assert users == []

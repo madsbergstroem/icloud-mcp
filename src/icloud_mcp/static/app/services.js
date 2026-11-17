@@ -3,7 +3,7 @@
 // go to /accounts/... and restart the server; a plugin set up by
 // whoever runs the server, so its page only shows the networks and edits who it may write to.
 import { get, post } from "./api.js";
-import { esc, toast, fail, ask, section, titleBlock, row } from "./ui.js";
+import { esc, toast, fail, ask, section, titleBlock, row, selectUi } from "./ui.js";
 import { page, macRows, macAside, wireSwitches } from "./settings.js";
 import { sendingSection, readingSection, wireSending, wireReading } from "./picker.js";
 
@@ -171,6 +171,7 @@ class Service extends HTMLElement {
     const items = !l ? "" : l.problem && !l.items.length ? row({ title: esc(l.problem) })
       : l.items.map((x, i) => row({ title: esc(x.title), sub: esc(x.sub || ""), button: !!x.detail, attrs: x.detail ? `data-item="${i}"` : "" })).join("");
     const allow = m && m.settings ? (st.groups.find((x) => x.slug === m.settings) || {}).summary || "" : "";
+    const acts = p.actions, actsSummary = acts ? (st.groups.find((x) => x.slug === acts.settings) || {}).summary || "" : "";
     this.body.innerHTML = titleBlock(p.name, `${esc(p.description)} ${esc(p.status)}.`) + restartNotice(st)
       + (l ? section(l.label || "Accounts") + `<ion-list class="inset">${items}</ion-list>` + (l.note ? `<p class="note">${esc(l.note)}</p>` : "") : "")
       + (m && m.picker ? sendingSection(p, this.rec) + (m.reading_keys && m.reading_keys.on ? readingSection(p, st) : "")
@@ -178,7 +179,11 @@ class Service extends HTMLElement {
         ${row({ title: "Send", sub: "Only after your approval, and only to the chats below", note: m.sending ? "On" : "Off", noteClass: m.sending ? "state-on" : "state-off" })}
         ${m.settings ? row({ title: "Who it may write to", note: esc(allow), button: true, attrs: "data-allow" }) : ""}
         ${row({ title: "Read chats", note: m.reading ? "On" : "Off", noteClass: m.reading ? "state-on" : "state-off" })}</ion-list>` : "")
+      + (acts ? section("What your assistant may do") + `<ion-list class="inset">
+        ${row({ title: "Ask for an action", sub: "Carried out only after your approval", note: String(acts.count) })}
+        ${row({ title: "Who it may reach", note: esc(actsSummary), button: true, attrs: "data-acts" })}</ion-list>` : "")
       + (p.limits ? `<p class="note">${esc(p.limits)}</p>` : "");
+    this.querySelector("[data-acts]")?.addEventListener("click", () => push(this, "icm-group", { page: acts.settings, title: "Who it may reach" }));
     this.querySelectorAll("[data-item]").forEach((n) => n.addEventListener("click", () => {
       const x = l.items[Number(n.dataset.item)];
       const al = document.createElement("ion-alert");
@@ -243,7 +248,7 @@ class ConnectForm extends HTMLElement {
     const areas = AREAS.map(([k, label]) => `<ion-item><ion-toggle data-area="${k}" ${holder(k) ? "" : "checked"}>${label}${holder(k)
       ? `<br><small class="sub">Now from ${esc(holder(k).name)}. Turn on to move it here.</small>` : ""}</ion-toggle></ion-item>`).join("");
     // another provider: a preset only fills in the servers, which stay editable below
-    const provider = icloud ? "" : `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-select data-preset label="Provider" interface="action-sheet" value="custom">
+    const provider = icloud ? "" : `<ion-list class="inset" style="margin-top:14px!important"><ion-item><ion-select data-preset label="Provider" interface="${selectUi()}" value="custom">
         <ion-select-option value="custom">Custom</ion-select-option>${this.r.connect.presets.map((p) =>
           `<ion-select-option value="${esc(p.id)}">${esc(p.label)}</ion-select-option>`).join("")}</ion-select></ion-item></ion-list>
         <p class="note">A preset fills in the servers under Advanced server settings. You can still change them.</p>`;

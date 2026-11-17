@@ -45,6 +45,7 @@ class Spec:
     max: int | None = None
     section: str = ""             # groups fields into cards on a settings page
     hidden: bool = False          # set through another control (the sending choice)
+    empty_hint: str = ""          # for a list: shown above the field while it is empty (an action that reaches nobody yet)
 
 
 def _on(v: str) -> bool:
@@ -417,7 +418,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
             shown = v.replace("\\n", "\n")
         return {"key": sp.key, "label": sp.label, "kind": sp.kind, "help": sp.help, "value": _on(v) if sp.kind == "bool" else shown,
                 "display": display(sp, v), "source": src, "section": sp.section, "choices": [list(c) for c in sp.choices],
-                "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored}
+                "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored,
+                **({"empty_hint": sp.empty_hint} if sp.empty_hint else {})}
 
     def group_json(g: Group, stored: dict[str, str], full: bool) -> dict[str, Any]:
         set_up = not (g.needs_bridge and not s.bridge_token)
@@ -480,7 +482,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         if not changes:
             return d.api_ok({"note": "Nothing changed."})
         if looser and not d.recent(rec):
-            return d.api_need_confirm()
+            return d.api_need_confirm("This lets more through: " + ", ".join(sp.label for sp in looser) + ".")
         if problem := await asyncio.to_thread(validate, new, known_tools()):
             key, why = problem
             return d.api_err(f"Not saved: {why}", 400, fields={key: why} if key else {})
@@ -488,7 +490,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         state["restart_needed"] = True
         d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), ok=True,
                        summary=f"Changed {g.title.lower()} settings: " + ", ".join(f"{sp.label} {display(sp, o)} → {display(sp, v)}" for sp, o, v in changes),
-                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser])
+                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser],
+                       changes=[[sp.label, display(sp, o), display(sp, v)] for sp, o, v in changes])      # Activity shows old → new
         log.warning("Owner changed %s from the dashboard; they apply after a restart", ", ".join(sp.key for sp, _, _ in changes))
         return d.api_ok({"note": "Saved. It applies after a restart.", "restart_needed": True})
 
@@ -512,5 +515,6 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
             return d.api_err(f"Not reset: {problem[1]}", 400)
         store.update(remove=(key,))
         state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key])
+        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key],
+                       changes=[[sp.label, display(sp, stored[key]), display(sp, back)]])
         return d.api_ok({"note": f"{sp.label} now follows the server again ({display(sp, back)}). Restart to apply.", "restart_needed": True})

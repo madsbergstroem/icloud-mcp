@@ -1,6 +1,25 @@
 {
  "activity": {
   "body": {
+   "actor": "all",
+   "actors": [
+    [
+     "all",
+     "Everyone"
+    ],
+    [
+     "owner",
+     "You"
+    ],
+    [
+     "assistant",
+     "assistant"
+    ],
+    [
+     "server",
+     "Server"
+    ]
+   ],
    "chain": {
     "broken_at": null,
     "entries": 19,
@@ -11,183 +30,555 @@
      "day": "Today",
      "entries": [
       {
+       "action": "Expired",
+       "actor": "Server",
+       "details": [
+        [
+         "Request",
+         "<id:calendar-4>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "A queued calendar message expired without an answer",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "a queued calendar message expired without an answer",
+       "when": "<volatile>",
        "who": "server"
       },
       {
+       "action": "Expired",
+       "actor": "Server",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-5>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "A queued iMessage message expired without an answer",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "a queued iMessage message expired without an answer",
+       "when": "<volatile>",
        "who": "server"
       },
       {
+       "action": "Expired",
+       "actor": "Server",
+       "details": [
+        [
+         "Request",
+         "<id:mail-4>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "A queued mail message expired without an answer",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "a queued mail message expired without an answer",
+       "when": "<volatile>",
        "who": "server"
       },
       {
+       "action": "Withdrawn",
+       "actor": "assistant",
+       "details": [
+        [
+         "Request",
+         "<id:calendar-3>"
+        ],
+        [
+         "Sent to",
+         "jana@example.org"
+        ],
+        [
+         "Why",
+         "queued by mistake"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
+       "target": "Invitation “Autumn fair”",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "withdrew invitation “Autumn fair”",
+       "when": "<volatile>",
        "who": "Your assistant"
       },
       {
+       "action": "Withdrawn",
+       "actor": "assistant",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-4>"
+        ],
+        [
+         "Why",
+         "queued by mistake"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
+       "target": "iMessage “iMessage to Hiking crew”",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "withdrew iMessage “iMessage to Hiking crew”",
+       "when": "<volatile>",
        "who": "Your assistant"
       },
       {
+       "action": "Withdrawn",
+       "actor": "assistant",
+       "details": [
+        [
+         "Request",
+         "<id:mail-3>"
+        ],
+        [
+         "Sent to",
+         "bob@example.org"
+        ],
+        [
+         "Why",
+         "queued by mistake"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "Withdrawn by your assistant: queued by mistake. Nothing was sent.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
+       "target": "Email “Take me back”",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "withdrew email “Take me back”",
+       "when": "<volatile>",
        "who": "Your assistant"
       },
       {
+       "action": "Discarded",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:calendar-2>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "Invitation “Autumn fair”",
        "time": "<volatile>",
+       "tone": "",
        "what": "discarded invitation “Autumn fair”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Discarded",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-3>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "iMessage “iMessage to Hiking crew”",
        "time": "<volatile>",
+       "tone": "",
        "what": "discarded iMessage “iMessage to Hiking crew”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Discarded",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:mail-2>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "Email “Discard me”",
        "time": "<volatile>",
+       "tone": "",
        "what": "discarded email “Discard me”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Approved",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-2>"
+        ],
+        [
+         "Result",
+         "Sent"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "iMessage “iMessage to Hiking crew”",
        "time": "<volatile>",
+       "tone": "",
        "what": "approved iMessage “iMessage to Hiking crew”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Approved",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:calendar-1>"
+        ],
+        [
+         "Sent to",
+         "jana@example.org"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "Invitation “Autumn fair”",
        "time": "<volatile>",
+       "tone": "",
        "what": "approved invitation “Autumn fair”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Unclear",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-1>"
+        ],
+        [
+         "Result",
+         "Not confirmed: it may or may not have gone through"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "Messages did not confirm it. Nothing is sent again.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Unclear",
+       "target": "iMessage “iMessage to Hiking crew”",
        "time": "<volatile>",
+       "tone": "warn",
        "what": "approved iMessage “iMessage to Hiking crew”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Approved",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:mail-1>"
+        ],
+        [
+         "Sent to",
+         "bob@example.org, bob@example.org"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": true,
        "t": "<volatile>",
        "tag": "",
+       "target": "Email “Lunch”",
        "time": "<volatile>",
+       "tone": "",
        "what": "approved email “Lunch”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Failed",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:mail-1>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "",
        "ok": false,
        "t": "<volatile>",
        "tag": "",
+       "target": "Email “Lunch”",
        "time": "<volatile>",
+       "tone": "bad",
        "what": "could not send email “Lunch”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Edited",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:mail-1>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "Back to what was asked for.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
+       "target": "Email “Lunch”",
        "time": "<volatile>",
+       "tone": "",
        "what": "brought back the original text of email “Lunch”",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Edited",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:calendar-1>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "The text changed. The log keeps no text.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
+       "target": "Invitation “Autumn fair”",
        "time": "<volatile>",
+       "tone": "",
        "what": "edited invitation “Autumn fair” before sending",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Edited",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:imessage-1>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "The text changed. The log keeps no text.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
+       "target": "iMessage “iMessage to Hiking crew”",
        "time": "<volatile>",
+       "tone": "",
        "what": "edited iMessage “iMessage to Hiking crew” before sending",
+       "when": "<volatile>",
        "who": "You"
       },
       {
+       "action": "Edited",
+       "actor": "You",
+       "details": [
+        [
+         "Request",
+         "<id:mail-1>"
+        ],
+        [
+         "Hash",
+         "<short sha>"
+        ],
+        [
+         "Signed in with",
+         "the owner password"
+        ]
+       ],
+       "diff": [],
        "error": "",
        "note": "The text changed. The log keeps no text.",
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
+       "target": "Email “Lunch”",
        "time": "<volatile>",
+       "tone": "",
        "what": "edited email “Lunch” before sending",
+       "when": "<volatile>",
        "who": "You"
       }
      ]
@@ -197,7 +588,7 @@
    "filters": [
     [
      "all",
-     "All"
+     "All actions"
     ],
     [
      "approvals",
@@ -205,7 +596,11 @@
     ],
     [
      "agents",
-     "Agents"
+     "Agent requests"
+    ],
+    [
+     "settings",
+     "Settings"
     ],
     [
      "signins",
@@ -214,7 +609,27 @@
    ],
    "keep_days": 90,
    "log_on": true,
-   "ok": true
+   "more": false,
+   "ok": true,
+   "range": 7,
+   "ranges": [
+    [
+     1,
+     "24 hours"
+    ],
+    [
+     7,
+     "7 days"
+    ],
+    [
+     30,
+     "30 days"
+    ],
+    [
+     90,
+     "90 days"
+    ]
+   ]
   },
   "status": 200
  },
@@ -269,7 +684,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited email “Lunch” before sending",
@@ -281,7 +697,8 @@
    "actor": "owner",
    "details": {
     "kind": "imessage",
-    "outbox_id": "<id:imessage-1>"
+    "outbox_id": "<id:imessage-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited imessage “iMessage to Hiking crew” before sending",
@@ -293,7 +710,8 @@
    "actor": "owner",
    "details": {
     "kind": "calendar",
-    "outbox_id": "<id:calendar-1>"
+    "outbox_id": "<id:calendar-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Edited invitation “Autumn fair” before sending",
@@ -305,7 +723,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Brought back the original text of email “Lunch”",
@@ -317,7 +736,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-1>"
+    "outbox_id": "<id:mail-1>",
+    "sha256": "<sha>"
    },
    "ok": false,
    "summary": "Could not send email “Lunch”",
@@ -333,7 +753,8 @@
     "recipients": [
      "bob@example.org",
      "bob@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved email “Lunch”",
@@ -346,7 +767,8 @@
    "details": {
     "delivery": "unconfirmed",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-1>"
+    "outbox_id": "<id:imessage-1>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved imessage “iMessage to Hiking crew”",
@@ -361,7 +783,8 @@
     "outbox_id": "<id:calendar-1>",
     "recipients": [
      "jana@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved invitation “Autumn fair”",
@@ -374,7 +797,8 @@
    "details": {
     "delivery": "sent",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-2>"
+    "outbox_id": "<id:imessage-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Approved imessage “iMessage to Hiking crew”",
@@ -386,7 +810,8 @@
    "actor": "owner",
    "details": {
     "kind": "mail",
-    "outbox_id": "<id:mail-2>"
+    "outbox_id": "<id:mail-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded email “Discard me”",
@@ -398,7 +823,8 @@
    "actor": "owner",
    "details": {
     "kind": "imessage",
-    "outbox_id": "<id:imessage-3>"
+    "outbox_id": "<id:imessage-3>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded imessage “iMessage to Hiking crew”",
@@ -410,7 +836,8 @@
    "actor": "owner",
    "details": {
     "kind": "calendar",
-    "outbox_id": "<id:calendar-2>"
+    "outbox_id": "<id:calendar-2>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Discarded invitation “Autumn fair”",
@@ -426,7 +853,8 @@
     "reason": "mistake",
     "recipients": [
      "bob@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew email “Take me back”",
@@ -438,7 +866,8 @@
    "details": {
     "kind": "imessage",
     "outbox_id": "<id:imessage-4>",
-    "reason": "mistake"
+    "reason": "mistake",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew imessage “iMessage to Hiking crew”",
@@ -453,7 +882,8 @@
     "reason": "mistake",
     "recipients": [
      "jana@example.org"
-    ]
+    ],
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "Withdrew invitation “Autumn fair”",
@@ -465,7 +895,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "mail",
-    "outbox_id": "<id:mail-4>"
+    "outbox_id": "<id:mail-4>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued mail message expired without an answer",
@@ -477,7 +908,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "imessage",
-    "outbox_id": "<id:imessage-5>"
+    "outbox_id": "<id:imessage-5>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued imessage message expired without an answer",
@@ -489,7 +921,8 @@
    "details": {
     "expired_at": "<volatile>",
     "kind": "calendar",
-    "outbox_id": "<id:calendar-4>"
+    "outbox_id": "<id:calendar-4>",
+    "sha256": "<sha>"
    },
    "ok": true,
    "summary": "A queued calendar message expired without an answer",

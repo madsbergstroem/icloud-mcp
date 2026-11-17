@@ -163,7 +163,8 @@ _TOOL_MAP: list[tuple[str, list[str]]] = [
                 "health_refresh_data"]),
     ("Shortcuts", ["shortcuts_list_shortcuts, then shortcuts_run_shortcut"]),
     ("Queued for the owner", ["approval_status (what became of a request you queued; never send it again)",
-                              "approval_withdraw (take back a request you queued)"]),
+                              "approval_withdraw (take back a request you queued)",
+                              "approval_list_actions, then approval_request (an action of another service, done only after the owner approves)"]),
     ("Accounts", ["icloud_list_accounts (every account and chat network)"]),
     ("Something fails", ["icloud_check_health", "icloud_get_helper_status (the owner's Mac)"]),
 ]

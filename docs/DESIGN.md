@@ -7,11 +7,12 @@ The owner dashboard is an Ionic Core app at `/dashboard`. It talks to the server
 
 | Decision | Why |
 | --- | --- |
-| Ionic Core 9 in iOS mode is the only UI library | One library for every control, so no screen grows its own buttons, toggles or sheets. It works in plain JavaScript without a build step |
+| Ionic Core 9 is the only UI library, in the mode of the device | One library for every control, so no screen grows its own buttons, toggles or sheets. It works in plain JavaScript without a build step. Ionic picks the look per device: iOS on an iPhone or iPad, Material on a desktop or an Android phone, each with its own transitions and gestures. No mode is forced |
+| A select opens at the field on a wide screen | From 900 px (`wide()`) a select is a list at the field (`selectUi()`), on a phone the sheet from below |
 | No hand-made controls | Buttons, toggles, segments, inputs, selects, lists, alerts, toasts and sheets are Ionic components. Own markup is limited to the pieces in "Own pieces" below |
 | Vendored and pinned (`static/vendor/`) | The CSP allows `script-src 'self'` only, and the server reaches no CDN. A version bump is its own change, with every screen checked on a phone and a desktop |
 | A JSON API instead of HTML forms | Ionic's controls do not take part in plain form posts: `ion-button` submits without `name`/`value`, and `ion-toggle` keeps its checkbox in the shadow DOM. Sessions, CSRF, passkeys, approvals and the audit log stay on the server |
-| Web Push without pywebpush | pywebpush pulls in requests and aiohttp. Its building block http-ece ships only as a source package, which the image build cannot fetch. `push.py` uses `cryptography` and PyJWT, which the server already has, and `tests/test_push.py` checks it against the worked example in RFC 8291 |
+| Web Push without pywebpush | pywebpush pulls in requests and aiohttp. Its building block http-ece ships only as a source package, which the image build cannot fetch. `gate/push.py` uses `cryptography` and PyJWT, which the server already has, and `tests/test_push.py` checks it against the worked example in RFC 8291 |
 | English everywhere | The code and upstream are English. Sample data in mocks and tests is English and made up |
 
 ## Look
@@ -53,7 +54,7 @@ each, set once in `app.css` and mapped onto Ionic's variables, so the components
 | One request | `icm-item` | Title, one line on who asked and when (and "Edited by you"), the warning, the mail it answers, missing files first, the message as it goes out with "Edit text", the text the agent asked for with "Bring it back" when it was edited, attachments (tap for preview), and Discard plus the approve button. When there is a warning, Discard is the main button and "Send anyway…" asks first |
 | After Approve | `icm-item` | Sending (the buttons are off), sent (back to Home with the result), unclear (Messages did not confirm it: nothing is sent again, the page stays until Done), not sent (the request still waits: Try again or Discard) |
 | Edit text | `icm-item`, `edit.js` | The message card with its text as a text field, a character count, Cancel and Save changes. Only the text changes. A mail with an HTML part cannot be edited and says why |
-| Activity | `icm-activity` | Filter segment, entries per day in plain words with a tag where one helps (Edited, Unclear, Withdrawn), chain check and download |
+| Activity | `icm-activity` | Laid out like an admin console's audit log. Three filters that combine: timeframe (24 hours, 7, 30 or the days the log keeps), action (approvals, agent requests, settings, sign-ins) and actor (the actors of the entries the other two leave). One line per entry: time, actor, action as a tag, target; a line with more opens in place (Ionic accordion) with old → new values, the request, its version and hashes, the client or how you signed in. A table on a wide screen, two lines per entry on a phone. "Log intact" after the chain check, and the download |
 | Settings | `icm-settings` | General (sign-in and security, safety switches, activity and server) and, on a phone, the connected services with "Connect a service". On a wide screen a side list replaces the app's: General, then one entry per connected service (name and a grey line: the address, or Beeper's number of networks), then "Connect a service" |
 | One service | `icm-service` (`services.js`) | iCloud or another provider: Used for (one switch per area; turning one on moves the area from the service that had it, a service with no area stays connected), the settings of its areas, "Through your Mac" (first iCloud account only), Servers (another provider), Sign-in (replace the password, read only, Disconnect). Beeper: the networks with your name there (account ID on tap), Send, who it may write to (`BEEPER_SEND_ALLOWLIST`) and Read chats "Not built yet". Each page names its limits in one sentence where they apply (iCloud: the Mac areas only while the Mac is on; another provider: no reminders or notes). Group-wide facts are one sentence under the group; there are no pills and no per-row source labels |
 | Connect a service | `icm-connect`, `icm-connect-form` | Ionic cards for iCloud and "Other email & calendar", each with one status line ("Available"); Beeper's says "Set up by whoever runs this server". The form for another provider starts with "Provider" (Custom, WEB.DE, Gmail), which only fills in the servers under "Advanced server settings", and has "Find servers" (`discover.py`: Thunderbird autoconfig, RFC 6186 and RFC 6764), which fills in what it finds and saves nothing. The form checks the sign-in before anything is saved and lists what to try when the provider says no. `/setup` and `#/connect` open it |
@@ -126,9 +127,9 @@ registry exist, and one connector uses them: Beeper (below).
 
 | Layer | What it is | Where |
 | --- | --- | --- |
-| Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `outbox.py`, `dashboard*.py`, `approval_*.py`, `textedit.py`, `audit.py` |
-| Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `actions.py`, `external.py` |
-| Inputs | How a request arrives. Today `queue_external`, and the Beeper tool is its one caller; a further connector or an input would be another | `external.py`, `beeper.py` |
+| Core | The outbox, the list and card on the dashboard, editing the text, approve, discard, expiry, withdrawing, push, the activity log and `approval_status` | `gate/outbox.py`, `gate/source.py`, `gate/status.py`, `gate/withdraw.py`, `gate/audit.py`, `gate/push.py`, `dashboard*.py`, `textedit.py` |
+| Connectors | An action type (how a request looks, its parameters as a JSON Schema, which one is the editable text, whom it reaches) and an executor that does the work, registered together with the list of people it may reach | `gate/actions.py`, `gate/external.py` |
+| Inputs | How a request arrives. Today `queue_external`, and the Beeper tool is its one caller; a further connector or an input would be another | `gate/external.py`, `plugins/beeper/` |
 | Outputs | What leaves after a decision: the executor's call and, later, a message about a status change | later |
 
 What every layer keeps:
@@ -168,6 +169,12 @@ Where the seam is not general yet:
 - A source's outbox is found by probing for `mail`, `cal` or `box` on it (in `dashboard.py` and `textedit.py`).
 - `/outbox`, the page used when the dashboard is off, serves mail and iMessages only. External requests need the dashboard,
   as calendar changes do.
+
+A card for an action of a registered type (kind `external`) keeps one order for every type: badge and title, the type's first
+row (who or what it reaches), the text, the other rows, warnings, the time left, then Discard and the approve button. Its
+outcome lines name the type's badge: "Not sure it reached {badge}. Nothing will be sent again; look there first." when it is
+unclear, and "Did not go out: {reason}" with Try again and Discard when it provably never went out. A type the server no
+longer has shows its id, its age and only Discard. The mock behind these states is in docs/SENDGATE.md (P1).
 
 ## Service plugins
 

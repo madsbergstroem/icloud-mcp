@@ -50,6 +50,7 @@ icloud-mcp-selftest = "icloud_mcp.selftest:main"
 # Service plugins (src/icloud_mcp/plugins): one group for any service. A plugin package adds its own entry under this group.
 [project.entry-points."icloud_mcp.plugins"]
 beeper = "icloud_mcp.plugins.beeper:plugin"
+gateway = "icloud_mcp.gate_connectors.actions:plugin"
 
 [build-system]
 requires = ["setuptools>=68"]

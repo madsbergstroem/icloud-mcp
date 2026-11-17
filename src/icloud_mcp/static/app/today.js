@@ -23,7 +23,7 @@ function finding(waiting) {
 function itemSub(w) {
   const to = w.to ? `to ${esc(w.to)}` : "";
   const text = w.kind === "mail" ? to : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
-  const extra = w.blocked ? "a file is missing" : w.warning && !w.group ? "check this first" : "";
+  const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !w.group ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
   return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + (w.group ? tag("Group", "warn") : "") + [text, by, extra].filter(Boolean).join(" · ");
 }
@@ -219,7 +219,13 @@ class Item extends HTMLElement {
     const own = m ? it.text.slice(0, m.index).trimEnd() : (it.text || "");
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;
-    const rows = this.rowsHtml();
+    // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
+    const ext = it.kind === "external";
+    // a value the service changed since the owner looked is marked (package 2c)
+    const fresh = new Set((it.changed || []).map((c) => c.label));
+    const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
+    const rows = ext ? it.rows.slice(0, 1).map(dd).join("") : this.rowsHtml();
+    const more = ext ? it.rows.slice(1).map(dd).join("") : "";
     const text = it.kind === "imessage" ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
       : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
     const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : it.kind === "imessage" ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
@@ -227,15 +233,55 @@ class Item extends HTMLElement {
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
       ${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
       ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}
-      <div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>
-      ${edit.allowed ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}</div>`;
+      ${ext && !own ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>`}
+      ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
+      ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
+  }
+
+  // The history of a request (package 2c), newest first, in sentences. Tapping an older one shows it; only the assistant's first
+  // text offers to come back. Only what the card shows can be sent.
+  showHistory() {
+    const it = this.it, vs = it.versions;
+    const first = vs[0];
+    const said = (v) => {
+      const c = v.changes, row = c.find((x) => x.label !== "Text"), text = c.find((x) => x.label === "Text");
+      if (v.n === 1) return ["Your assistant asked", v.text || (v.rows[0] || [])[1] || ""];
+      if (v.by === "service") return [`${it.badge} changed ${row ? `the ${row.label.toLowerCase()}` : "the target"}`, row ? `${row.old} → ${row.new}. Nothing was sent.` : "Nothing was sent."];
+      if (v.by === "assistant") return ["Your assistant revised it", text ? `“${text.new}”` : c.map((x) => `${x.label}: ${x.new}`).join(" · ")];
+      if (text && text.new === first.text) return ["You went back to your assistant's text", `“${text.new}”`];
+      return ["You changed the text", text ? `“${text.new}”` : ""];
+    };
+    const items = vs.slice().reverse().map((v) => {
+      const [h, p] = said(v), open = v.n !== vs.length && (v.text || v.rows.length);
+      return `<ion-item ${open ? `button detail="true" data-v="${v.n}"` : ""}><ion-label class="ion-text-wrap"><h2>${esc(h)}</h2><p>${esc(p)}</p>
+        <div data-show="${v.n}" hidden></div></ion-label><ion-note slot="end" class="num">${esc(clock(v.at))}</ion-note></ion-item>`;
+    }).join("");
+    sheet("History", `<ion-list class="inset" style="margin-top:12px!important">${items}</ion-list>
+      <p class="note">Only what you see on the card can be sent.</p>`, (m) => {
+      m.querySelectorAll("[data-v]").forEach((el) => el.addEventListener("click", () => {
+        const v = vs.find((x) => x.n === Number(el.dataset.v)), box = m.querySelector(`[data-show="${v.n}"]`);
+        if (!box.hidden) { box.hidden = true; return; }
+        const rows = v.rows.map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd>`).join("");
+        const back = it.edit && it.edit.edited && v.text === it.edit.original;   // the text "Bring it back" restores, wherever it is
+        box.innerHTML = `<div class="msg" style="margin:10px 0 0">${rows ? `<dl>${rows}</dl>` : ""}${v.text ? `<div class="body">${esc(v.text)}</div>` : ""}</div>
+          ${back ? `<ion-button fill="clear" size="small" data-back>Use this text again</ion-button>` : ""}`;
+        box.hidden = false;
+        box.querySelector("[data-back]")?.addEventListener("click", (e) => {
+          e.stopPropagation(); m.dismiss(); bringBack(this.key, this.it, (reload) => { if (reload) this.load(); });
+        });
+      }));
+    });
   }
 
   // How the last approve went, above the message
   resultHtml() {
     const r = this.result, it = this.it;
     if (!r) return "";
-    const to = it.to ? esc(it.to) : "the recipients";
+    const to = it.kind === "external" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
+    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div><b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.
+      <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
+    if (r.state === "failed" && it.kind === "external") return `<div class="notice bad"><div><b>Did not go out:</b> ${esc(r.note)}
+      <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;
     if (r.state === "sending") return `<div class="notice"><ion-spinner name="crescent"></ion-spinner><div><b>Sending to ${to}…</b><br>Nothing is sent twice.</div></div>`;
     if (r.state === "unclear") return `<div class="notice warn"><div><b>Not sure it arrived.</b> Nothing is sent again. Look at the conversation first, then decide.
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
@@ -262,6 +308,14 @@ class Item extends HTMLElement {
       return;
     }
     let h = titleBlock(it.title, this.subline()) + `<div data-result>${this.resultHtml()}</div>`;
+    const ext = it.kind === "external";
+    if (it.held) h += `<div class="warnbox held" id="held-why"><strong>${icon("warning-outline")} Agents can send this without you</strong>
+      ${esc(it.held)} Approving is off until then. Settings › Server shows it.</div>`;
+    if (it.changed && it.changed.length) h += `<div class="warnbox"><strong>${icon("warning-outline")} Changed since you looked</strong>
+      ${it.changed.map((c) => `${esc(c.label)} is now <b>${esc(c.new)}</b> (was ${esc(c.old)}).`).join(" ")} Nothing was sent. Check it again before approving.</div>`;
+    if (ext && it.approvable !== false) h += this.card();
+    if (it.versions) h += `<ion-list class="inset" style="margin-top:12px!important"><ion-item button detail="true" data-history>
+      <ion-label>Earlier versions</ion-label><ion-note slot="end" class="num">${it.versions.length - 1}</ion-note></ion-item></ion-list>`;
     if (it.warnings.length) {
       const grp = it.group;
       h += `<div class="warnbox"><strong>${icon("warning-outline")} ${grp ? "Group chat: everyone in it receives this" : "Check before sending"}</strong>
@@ -275,8 +329,8 @@ class Item extends HTMLElement {
         <div class="s">Up to ${esc(size(it.max_bytes))}</div></div><ion-button data-pick="${m.index}">Choose file</ion-button>
         <input type="file" hidden data-input="${m.index}"></div>`).join("");
     }
-    h += this.card();
-    if (it.edit && it.edit.edited) {
+    if (!ext) h += this.card();
+    if (it.edit && it.edit.edited && !it.versions) {
       h += section("What your assistant asked for", `<ion-button fill="clear" size="small" data-restore>Bring it back</ion-button>`)
         + `<div class="msg"><div class="asked">${esc(it.edit.original)}</div></div>`;
     }
@@ -297,6 +351,16 @@ class Item extends HTMLElement {
     const careful = it.warnings.length || it.needs_override;
     const sending = this.result && this.result.state === "sending";
     // with a warning, Discard is the main button and the send asks first
+    if (it.held) {                                                   // approving is off until the setup is fixed: Discard is the main button
+      foot(`<div class="acts"><ion-button data-discard>Discard</ion-button><ion-button class="neutral" disabled aria-describedby="held-why">${esc(it.approve_label)}</ion-button></div>`);
+      this.wire(id);
+      return;
+    }
+    if (it.approvable === false) {                                   // a kind of action this server no longer has: only Discard
+      foot(`<div class="acts"><ion-button class="neutral" data-discard>Discard</ion-button></div>`);
+      this.wire(id);
+      return;
+    }
     foot(this.result && this.result.state === "failed" ? "" : careful
       ? `<div class="acts"><ion-button data-discard ${sending ? "disabled" : ""}>Discard</ion-button><ion-button class="neutral" data-anyway ${sending ? "disabled" : ""}>Send anyway…</ion-button></div>`
       : `<div class="acts"><ion-button class="neutral" data-discard ${sending ? "disabled" : ""}>Discard</ion-button>
@@ -310,6 +374,7 @@ class Item extends HTMLElement {
     $("[data-quote]")?.addEventListener("click", (e) => { $("[data-quoted]").hidden = false; e.target.remove(); });
     $("[data-edit]")?.addEventListener("click", () => { this.mode = "edit"; this.result = null; this.render(); });
     $("[data-restore]")?.addEventListener("click", () => bringBack(this.key, this.it, (reload) => { if (reload) this.load(); }));
+    $("[data-history]")?.addEventListener("click", () => this.showHistory());
     $("[data-approve]")?.addEventListener("click", () => this.approve(false));
     $("[data-retry]")?.addEventListener("click", () => this.approve(false));
     $("[data-done]")?.addEventListener("click", () => { app.holding = null; this.result = null; this.leave(); });
@@ -391,6 +456,16 @@ class Item extends HTMLElement {
         return;
       }
       this.result = null;
+      if (e.status === 409 && e.body && e.body.revised) {             // checked again: the service changed it; the new version waits
+        await this.load();
+        toast("Not sent: it changed since you looked. Check the new version.");
+        return;
+      }
+      if (e.status === 409 && e.body && e.body.state === "discarded") {   // checked again before sending: not what you saw; it ended
+        app.note = `${clock(Date.now() / 1000)} · ${e.message}`; app.noteBad = true; app.noteUntil = Date.now() + 15000;
+        this.leave();
+        return;
+      }
       this.render();
       fail(e);
       if (e.status === 409) this.load();

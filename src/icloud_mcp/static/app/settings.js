@@ -1,7 +1,7 @@
 // Activity, Settings and the pages Settings opens: notifications, passkeys, apps, the password, one settings area, the server.
 // The pages of the connected services are in services.js.
 import { get, post, session, loadSession, token, confirmNow } from "./api.js";
-import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide } from "./ui.js";
+import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide, selectUi } from "./ui.js";
 import { serviceEntries } from "./services.js";
 import { app } from "./state.js";
 
@@ -14,14 +14,16 @@ export function page(el, title, back, body) {
 function push(from, tag, props) { from.closest("ion-nav").push(tag, props || {}); }
 
 // -- Activity -----------------------------------------------------------------------------------------------------------
+// One line per entry, like an admin console's audit log: time, who, what kind of action, what it acted on. A line with more
+// to say opens in place: the old and new values, the request and its hashes, how it was confirmed. Three filters combine.
 class Activity extends HTMLElement {
   connectedCallback() {
-    this.filter = "all";
+    this.f = { days: 7, action: "all", actor: "all" };
     this.innerHTML = `<ion-content><div data-body></div></ion-content>`;
     this.load();
     window.addEventListener("icm:changed", (this.onChange = () => this.load()));
-    // Home asks to show one entry (a request the assistant took back): all entries, scrolled to it and marked
-    window.addEventListener("icm:activity-focus", (this.onFocus = () => { this.filter = "all"; this.load(); }));
+    // Home asks to show one entry (a request the assistant took back): every action and actor, the entry opened and marked
+    window.addEventListener("icm:activity-focus", (this.onFocus = () => { this.f = { ...this.f, action: "all", actor: "all" }; this.load(); }));
   }
 
   disconnectedCallback() {
@@ -29,27 +31,54 @@ class Activity extends HTMLElement {
     window.removeEventListener("icm:activity-focus", this.onFocus);
   }
 
+  select(key, label, value, options) {
+    return `<ion-item><ion-select data-f="${key}" label="${esc(label)}" interface="${selectUi()}" label-placement="${wide() ? "start" : "stacked"}" value="${esc(String(value))}">${options.map(([v, l]) =>
+      `<ion-select-option value="${esc(String(v))}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>`;
+  }
+
+  line(e, i) {
+    const open = e.note || e.error || e.diff.length || e.details.length;
+    const head = `<ion-label class="act-row"><span class="act-time num">${esc(e.when)}</span><span class="act-actor">${esc(e.actor)}</span>
+      <span class="act-action">${tag(e.action, `end ${e.tone}`)}</span><span class="act-target">${esc(e.target)}</span></ion-label>`;
+    if (!open) return `<ion-item class="act-item" lines="full" data-t="${esc(e.t)}">${head}</ion-item>`;
+    const diff = e.diff.length ? `<div class="diff">${e.diff.map((c) => `<div class="old">− ${esc(c.label)}: ${esc(c.old)}</div><div class="new">+ ${esc(c.label)}: ${esc(c.new)}</div>`).join("")}</div>` : "";
+    const notes = [e.note, e.error].filter(Boolean).map((n) => `<p>${esc(n)}</p>`).join("");
+    const rows = e.details.length ? `<dl>${e.details.map(([k, v]) => `<dt>${esc(k)}</dt><dd${/^Hash|^Request|^Replaces/.test(k) ? ' class="mono"' : ""}>${esc(v)}</dd>`).join("")}</dl>` : "";
+    return `<ion-accordion value="${i}" data-t="${esc(e.t)}"><ion-item slot="header" class="act-item" lines="full">${head}</ion-item>
+      <div slot="content" class="act-det">${notes}${diff}${rows}</div></ion-accordion>`;
+  }
+
   async load() {
     let a;
-    try { a = await get("/activity?filter=" + encodeURIComponent(this.filter)); } catch (e) { fail(e); return; }
-    const days = a.days.map((d) => section(d.day) + `<ion-list class="inset">${d.entries.map((e) => `<ion-item data-t="${esc(e.t)}">
-      <ion-label class="ion-text-wrap" style="display:flex;gap:12px"><span class="num" style="color:var(--muted);min-width:44px">${esc(e.time)}</span>
-      <span><span${e.ok ? "" : ' style="color:var(--negative)"'}>${esc(e.who)} ${esc(e.what)}</span>${e.error ? `<br><small style="color:var(--muted)">${esc(e.error)}</small>` : ""}
-      ${e.note ? `<br><small style="color:var(--muted)">${esc(e.note)}</small>` : ""}</span>
-      </ion-label>${e.tag ? tag(e.tag, e.tag === "Unclear" ? "warn end" : "end").replace('class="tag', 'slot="end" class="tag') : ""}</ion-item>`).join("")}</ion-list>`).join("");
-    const chain = a.chain.ok ? `The chain of entries is intact (${a.chain.entries} entries).`
-      : `<span style="color:var(--negative)">The log was changed after it was written, at entry ${esc(a.chain.broken_at)}. Entries from there on cannot be trusted.</span>`;
-    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `Everything that was sent, dropped or changed in the last ${esc(a.keep_days)} days.`)
-      + (a.log_on ? "" : `<div class="notice pause"><span>The activity log is turned off on this server.</span></div>`)
-      + `<div style="padding:10px 16px 0"><ion-segment value="${esc(a.filter)}" scrollable>${a.filters.map(([k, l]) =>
-        `<ion-segment-button value="${esc(k)}"><ion-label>${esc(l)}</ion-label></ion-segment-button>`).join("")}</ion-segment></div>`
-      + (days || `<div class="empty"><b>Nothing recorded${this.filter === "all" ? " yet" : " of this kind"}.</b>What your assistant does and what you change shows up here.</div>`)
-      + `<p class="note">${chain} No message text, passwords or tokens. <a href="/dashboard/activity.json" download>Download</a></p>`;
-    this.querySelector("ion-segment").addEventListener("ionChange", (e) => { this.filter = e.detail.value; this.load(); });
+    const q = new URLSearchParams({ days: this.f.days, action: this.f.action, actor: this.f.actor });
+    try { a = await get("/activity?" + q); } catch (e) { fail(e); return; }
+    Object.assign(this.f, { days: a.range, action: a.filter, actor: a.actor });
+    const entries = a.days.flatMap((d) => d.entries);
+    const chain = a.chain.ok ? tag("Log intact", "end")
+      : tag("Log changed", "end bad");
+    const broken = a.chain.ok ? "" : `<div class="notice bad"><span>The log was changed after it was written, at entry ${esc(a.chain.broken_at)}. Entries from there on cannot be trusted.</span></div>`;
+    const filtered = this.f.action !== "all" || this.f.actor !== "all";
+    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `Every approval, change and sign-in of the last ${esc(a.keep_days)} days. ${chain}`)
+      + (a.log_on ? "" : `<div class="notice pause"><span>The activity log is turned off on this server.</span></div>`) + broken
+      + `<div class="filters">${this.select("days", "Timeframe", a.range, a.ranges)}${this.select("action", "Action", a.filter, a.filters)}${this.select("actor", "Actor", a.actor, a.actors)}</div>`
+      + (entries.length ? `<div class="act-table"><div class="act-head"><span>Time</span><span>Actor</span><span>Action</span><span>Target</span></div>
+          <ion-accordion-group multiple>${entries.map((e, i) => this.line(e, i)).join("")}</ion-accordion-group></div>`
+        : `<div class="empty"><b>Nothing ${filtered ? "of this kind " : ""}in this time.</b>${filtered ? "Try all actions and everyone, or a longer timeframe." : "What your assistant does and what you change shows up here."}</div>`)
+      + (a.more ? `<p class="note">Only the newest 1000 entries are shown. A shorter timeframe or a filter shows the rest.</p>` : "")
+      + `<p class="note">No message text, passwords or tokens: names, addresses and hashes only. <a href="/dashboard/activity.json" download>Download all</a></p>`;
+    this.querySelectorAll("ion-select[data-f]").forEach((sel) => sel.addEventListener("ionChange", (ev) => {
+      this.f[sel.dataset.f] = ev.detail.value;
+      if (sel.dataset.f !== "actor") this.f.actor = "all";       // the actors come from the entries the other two filters leave
+      this.load();
+    }));
     if (app.activityFocus) {
-      const hit = this.querySelector(`ion-item[data-t="${CSS.escape(String(app.activityFocus))}"]`);
+      const hit = this.querySelector(`[data-t="${CSS.escape(String(app.activityFocus))}"]`);
       app.activityFocus = null;
-      if (hit) { hit.classList.add("sel"); hit.scrollIntoView({ block: "center" }); }
+      if (hit) {
+        hit.classList.add("sel");
+        if (hit.tagName === "ION-ACCORDION") this.querySelector("ion-accordion-group").value = [hit.getAttribute("value")];
+        hit.scrollIntoView({ block: "center" });
+      }
     }
   }
 }
@@ -223,7 +252,10 @@ class Group extends HTMLElement {
     for (const [name, list] of Object.entries(sections)) {
       const helps = list.filter((f) => f.help && !cfg.keys).map((f) => `${f.label}: ${f.help}`);
       const env = list.filter((f) => f.source === "environment").map((f) => f.label);
+      const empty = list.filter((f) => f.empty_hint && !String(f.value).trim());
       h += (name && Object.keys(sections).length > 1 ? section(name) : `<div style="height:14px"></div>`)
+        + empty.map((f) => `<div class="warnbox"><strong>Reaches nobody yet</strong>${esc(f.empty_hint)}
+          ${st.editable ? `<a href="#" data-focus="${esc(f.key)}">Add one</a>` : ""}</div>`).join("")
         + `<ion-list class="inset">${list.map((f) => this.field(f, st.editable)).join("")}</ion-list>`
         + (helps.length || env.length ? `<p class="note">${esc(helps.join(" "))}${env.length ? ` ${esc(env.join(", "))} ${env.length === 1 ? "comes" : "come"} from the server's environment.` : ""}</p>` : "");
     }
@@ -242,7 +274,7 @@ class Group extends HTMLElement {
     const attrs = `data-key="${esc(f.key)}" ${dis}`;
     if (f.kind === "bool") return `<ion-item><ion-toggle ${attrs} ${f.value ? "checked" : ""}>${esc(f.label)}</ion-toggle></ion-item>`;
     if (f.kind === "choice") {
-      return `<ion-item><ion-select ${attrs} label="${esc(f.label)}" interface="action-sheet" value="${esc(String(f.value).toLowerCase())}">
+      return `<ion-item><ion-select ${attrs} label="${esc(f.label)}" interface="${selectUi()}" value="${esc(String(f.value).toLowerCase())}">
         ${f.choices.map(([c, l]) => `<ion-select-option value="${esc(c)}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>`;
     }
     if (f.kind === "textarea") return `<ion-item><ion-textarea ${attrs} label="${esc(f.label)}" label-placement="stacked" auto-grow="true" value="${esc(f.value)}"></ion-textarea></ion-item>`;
@@ -254,6 +286,12 @@ class Group extends HTMLElement {
   wire() {
     const save = this.querySelector("[data-save]");
     const mark = (k, val) => { this.changed[k] = val; if (save) save.disabled = false; };
+    this.querySelectorAll("[data-focus]").forEach((a) => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const input = this.querySelector(`ion-input[data-key="${a.dataset.focus}"]`);
+      input?.scrollIntoView({ block: "center" });
+      input?.setFocus();
+    }));
     this.querySelectorAll("ion-toggle[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.checked)));
     this.querySelectorAll("ion-select[data-key]").forEach((n) => n.addEventListener("ionChange", (e) => mark(n.dataset.key, e.detail.value)));
     this.querySelectorAll("ion-input[data-key],ion-textarea[data-key]").forEach((n) => n.addEventListener("ionInput", (e) => mark(n.dataset.key, e.detail.value)));
@@ -380,8 +418,20 @@ class Server extends HTMLElement {
   async load() {
     let srv, st;
     try { [srv, st] = await Promise.all([get("/server"), get("/settings")]); } catch (e) { fail(e); return; }
-    const areas = srv.areas.length ? srv.areas.map((a) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(a.area)}</h2>${a.ok ? "" : `<p>${esc(a.error)}</p>`}</ion-label>
-      <ion-note slot="end" class="${a.ok ? "state-on" : ""}" ${a.ok ? "" : 'style="color:var(--negative)"'}>${a.ok ? `Reachable · ${(a.ms / 1000).toFixed(1)} s` : "Failed"}</ion-note></ion-item>`).join("")
+    // problems first, then warnings; the lines that are fine fold into one, opened with a tap
+    const line = (a) => {
+      const lvl = a.level || (a.ok ? "ok" : "problem");
+      const note = a.note || (lvl === "problem" ? "Failed" : `Reachable · ${(a.ms / 1000).toFixed(1)} s`);
+      const style = lvl === "problem" ? 'style="color:var(--negative)"' : lvl === "warning" ? 'style="color:var(--note-ink)"' : "";
+      return `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(a.area)}</h2>${lvl === "ok" ? "" : `<p>${esc(a.error)}</p>`}</ion-label>
+        <ion-note slot="end" class="${lvl === "ok" ? "state-on" : ""}" ${style}>${note}</ion-note></ion-item>`;
+    };
+    const fine = srv.areas.filter((a) => (a.level || (a.ok ? "ok" : "problem")) === "ok"), rest = srv.areas.filter((a) => !fine.includes(a));
+    const folded = rest.length && fine.length > 1;
+    const areas = srv.areas.length ? rest.map(line).join("") + (folded
+      ? `<ion-item button detail="false" data-fine><ion-label><h2>${fine.length} more</h2></ion-label><ion-note slot="end" class="state-on">All fine · show</ion-note></ion-item>`
+        + `<div data-fine-list hidden>${fine.map(line).join("")}</div>`
+      : fine.map(line).join(""))
       : `<ion-item><ion-label><p>Not checked since the server started.</p></ion-label></ion-item>`;
     this.body.innerHTML = titleBlock("Server", `${esc(srv.host)} · version ${esc(srv.version)}${srv.paused ? " · paused" : ""}`)
       + section("Services", srv.checked_at ? `checked ${esc(ago(srv.checked_at))}` : "") + `<ion-list class="inset">${areas}</ion-list>
@@ -391,6 +441,7 @@ class Server extends HTMLElement {
         <p class="note">Pausing makes every tool answer that the server is paused. Nobody is signed out.</p>`
       + st.server.map((grp) => section(grp.title) + `<ion-list class="inset">${grp.rows.map(([k, val]) => row({ title: esc(k), note: esc(val) })).join("")}</ion-list>`).join("")
       + `<p class="note">Set in the server's environment by whoever runs it. A browser cannot change these.</p>`;
+    this.querySelector("[data-fine]")?.addEventListener("click", (e) => { this.querySelector("[data-fine-list]").hidden = false; e.currentTarget.remove(); });
     this.querySelector("[data-check]").addEventListener("click", async (e) => {
       e.target.disabled = true;
       try { await post("/server/check"); toast("Checked."); this.load(); } catch (err) { fail(err); e.target.disabled = false; }

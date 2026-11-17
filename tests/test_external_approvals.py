@@ -91,7 +91,7 @@ async def test_without_a_registered_type_the_server_has_no_external_source(web, 
 async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
     app, mcp, src, _ = launch(web, hub)
     assert mcp._icloud_dashboard.sources["external"] is src and mcp._icloud_outboxes["external"] is src.box
-    assert src.box.path.name == "external-outbox.json"
+    assert src.box.path.name == "approvals.db"                                   # the external source lives in the store (gate/store.py)
     assert not [t.name for t in mcp._tool_manager.list_tools() if "external" in t.name or "echo" in t.name]
     async with client(app) as c:
         await signed_in(c)
@@ -100,9 +100,10 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 
 
 async def test_only_the_beeper_tool_calls_queue_external():
-    root = Path(A.__file__).parent
+    root = Path(A.__file__).parent.parent             # the icloud_mcp package; actions.py lives in its gate/ package
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    assert sorted(users) == ["plugins/__init__.py", "plugins/beeper/gateway.py"]     # the contract names it; Beeper's sender calls it
+    # the contract names it; Beeper's sender calls it; approval_request (gate/requests.py) calls it for every other action
+    assert sorted(users) == ["gate/requests.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
@@ -140,7 +141,8 @@ async def test_a_queued_request_is_the_canonical_json_and_carries_its_type(web, 
     assert q.raw == want and q.sha256 == hashlib.sha256(want).hexdigest()
     assert (q.recipients, q.action_type, q.requested_by, q.edited_from) == (PEOPLE, "test.echo", "Claude", None)
     assert src.pending() == [q]
-    again = Outbox(mcp._icloud_dashboard.s.data_dir, 3600, 20, filename="external-outbox.json")
+    from icloud_mcp.gate.store import Store
+    again = Store(mcp._icloud_dashboard.s.data_dir, "external", 3600, 20)
     assert again.pending()[0].action_type == "test.echo" and again.pending()[0].raw == want        # survives a restart
 
 
@@ -295,7 +297,7 @@ async def test_approve_carries_the_edited_request_out_once_and_logs_no_text(web,
                                                            "at": (await tool(mcp, "approval_status", id=q.id))["at"], "action_type": "test.echo"}
     (sent,) = [json.loads(x) for x in audit_text(mcp).splitlines() if '"approval.sent"' in x]
     assert sent["summary"] == "Approved echo “Echo test”" and sent["details"] == {
-        "kind": "external", "outbox_id": q.id, "delivery": "sent", "action_type": "test.echo"}       # no recipients, no words
+        "kind": "external", "outbox_id": q.id, "delivery": "sent", "action_type": "test.echo", "sha256": sha}   # no recipients, no words; the hash of what went out
     assert "anna@example.org" not in audit_text(mcp) and "Edited words" not in audit_text(mcp)
 
 
@@ -307,7 +309,9 @@ async def test_failed_means_it_never_arrived_so_the_request_waits_again(web, hub
         token = await signed_in(c)
         r = await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
         assert r.status_code == 502 and r.json()["error"] == "Not sent (still waiting): The connector could not reach the other side. Nothing was sent."
-        assert src.pending() == [q] and (await tool(mcp, "approval_status", id=q.id))["status"] == "waiting"
+        # it waits again, the same request; the store counts the attempt (review obligation E-4)
+        assert [(x.id, x.sha256, x.attempts) for x in src.pending()] == [(q.id, q.sha256, 1)]
+        assert (await tool(mcp, "approval_status", id=q.id))["status"] == "waiting"
         ex.answer = A.Result("sent", "Echoed on the second try.")
         r = await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
         assert r.status_code == 200 and r.json()["note"] == "Echoed on the second try."
@@ -355,7 +359,7 @@ async def test_discard_runs_nothing_and_says_how_it_ended(web, hub):
 async def test_a_request_that_runs_out_of_time_reads_expired_with_its_type(web, hub):
     _, mcp, src, ex = launch(web, hub)
     q = echo(src)
-    src.box._items[q.id] = dataclasses.replace(src.box._items[q.id], expires_at=time.time() - 30)
+    src.box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, q.id))   # the store's clock ran out
     got = await tool(mcp, "approval_status", id=q.id)
     assert (got["status"], got["kind"], got["action_type"]) == ("expired", "external", "test.echo") and ex.calls == []
     since = await tool(mcp, "approval_status", since="0" * 64)
@@ -397,9 +401,10 @@ async def test_a_type_that_is_gone_cannot_be_approved_but_can_be_discarded(web, 
     async with client(app) as c:
         token = await signed_in(c)
         it = (await c.get(url(q.id))).json()
-        assert it["title"] == "Unknown action test.echo" and it["approve_label"] == "Approve" and it["edit"]["allowed"] is False
+        assert it["title"] == "Unknown action test.echo" and it["approvable"] is False and it["edit"]["allowed"] is False
+        assert "not available" in it["notes"][0]                                            # the card says why, and shows only Discard
         r = await c.post(url(q.id) + "/approve", json={"sha": q.sha256}, headers=api(token))
-        assert r.status_code == 502 and "not available" in r.json()["error"] and src.pending() == [q]
+        assert r.status_code == 409 and "cannot be approved" in r.json()["error"] and src.pending() == [q]
         r = await c.post(url(q.id) + "/discard", json={"sha": q.sha256}, headers=api(token))
         assert r.status_code == 200 and src.pending() == []
     assert ex.calls == []

@@ -21,6 +21,17 @@ def test_entries_chain_and_verify(tmp_path):
     assert AuditLog(str(tmp_path)).verify()["ok"] is True
 
 
+def test_entries_since_stop_at_the_first_older_one(tmp_path, monkeypatch):
+    log = AuditLog(str(tmp_path))
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() - 2 * 86400)
+    log.record("signin.password", actor="owner", summary="two days ago")
+    monkeypatch.setattr(time, "time", real)
+    log.record("approval.sent", actor="owner", summary="now")
+    assert [e["summary"] for e in log.entries(since=real() - 86400)] == ["now"]
+    assert [e["summary"] for e in log.entries(since=real() - 3 * 86400)] == ["now", "two days ago"]
+
+
 def test_a_changed_or_removed_line_breaks_the_chain(tmp_path):
     a = AuditLog(str(tmp_path))
     for i in range(4):
@@ -76,3 +87,16 @@ def test_tool_lines_name_the_target_but_never_the_body(tmp_path, monkeypatch):
     assert sent["action"] == "tool.queued" and sent["summary"] == "Asked to send message “Lunch” (waiting for your approval)"
     assert sent["details"]["to"] == ["bob@example.org"] and sent["actor"] == "Local client"
     assert moved["summary"] == "Moved messages (3) to Archive" and moved["details"]["count"] == 3
+
+
+def test_a_tool_with_an_action_parameter_is_logged_without_breaking_the_call(tmp_path, monkeypatch):
+    """protects: a write tool whose parameter is called `action` (mail_run_bulk_action) gets its activity line, and the call
+    that already did its work does not end in an error. fails_when: the parameter collides with AuditLog.record's own `action`.
+    no_claim: the wording of the line; only that it is written with the tool's action kept."""
+    from icloud_mcp import server as S
+    from icloud_mcp.audit import AuditLog
+    monkeypatch.setattr(S, "_audit", AuditLog(str(tmp_path)))
+    monkeypatch.setattr(S, "_WRITE_TOOLS", {"mail_run_bulk_action"})
+    S._audit_call("mail_run_bulk_action", {"action": "archive", "folder": "INBOX"}, True, '{"status": "done"}')
+    (e,) = S._audit.entries(5)
+    assert e["action"] == "tool.mail" and e["details"]["tool_action"] == "archive" and e["details"]["folder"] == "INBOX"
