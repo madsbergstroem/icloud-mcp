@@ -542,16 +542,27 @@ class Store:
             if (self.dir / legacy).exists():
                 raise RuntimeError(f"{legacy} exists already. Move it away first, so nothing in it is overwritten.")
 
-    def export_waiting(self, legacy: str) -> dict[str, int]:
+    def waiting_of(self, only: Any = None, skip: Any = ()) -> list[QueuedMessage]:
+        """The waiting requests, oldest first; `only`: just these action types, `skip`: not these (an export's split, 4b)."""
+        with self._lock:
+            rows = [self._q(r) for r in self._db.execute(
+                "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
+        return [q for q in rows if (only is None or q.action_type in only) and q.action_type not in skip]
+
+    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False) -> dict[str, int]:
         """Write the waiting requests back to the JSON queue file, for a rollback to a version without the store, and end them
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
         file in again and never revives a request the old version already sent. Refused while a request is being carried out.
+        only/skip pick action types; as_params writes an action's parameters as its bytes, the form a source had before it became
+        an action type (package 4b: iMessage back to 4a), with the hash of those bytes.
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
         path = self.dir / legacy
         with self._lock:
             self.check_export(legacy)
-            waiting = [self._q(r) for r in self._db.execute(
-                "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
+            waiting = self.waiting_of(only, skip)
+            if as_params:
+                waiting = [dc_replace(q, raw=(b := json.dumps(json.loads(q.raw.decode())["params"], ensure_ascii=False).encode()),
+                                      sha256=hashlib.sha256(b).hexdigest(), action_type=None) for q in waiting]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]
             unclear = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'unclear'", (self.source,)).fetchone()[0]
             tmp = path.with_suffix(".tmp")

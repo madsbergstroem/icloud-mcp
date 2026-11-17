@@ -129,3 +129,25 @@ def test_the_server_moves_queued_imessages_to_the_action_type_once(s, tmp_path):
            [(q.id, q.sha256, box.pending()[0].sha256)]
     create_server(s)
     assert len([x for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]) == 1
+
+
+def test_the_export_takes_imessages_back_to_the_form_4a_reads(tmp_path):
+    """protects=package 4b criterion 5: after the export, the version before 4b finds every waiting iMessage in its own file with
+    its id and the fields it reads, and the external file holds only other actions; fails_when=an iMessage is lost, lands in the
+    external file (where 4a shows it as an unknown action) or misses chat_id, handle, text or to; no_claim=that 4a runs (its own
+    tests), or the hash: it changes again, as the spec says."""
+    from icloud_mcp.gate import export_queue as E
+    from icloud_mcp.gate import store as S
+    from icloud_mcp.imessage import ACTION_ID, convert
+    box = S.Store(str(tmp_path), "external", 3600, 20)
+    old = b'{"chat_id": "chat900", "handle": null, "text": "Hi all", "to": {"name": "Hiking crew", "group": true, "participants": []}}'
+    q = box.add(convert(old), ["Hiking crew"], action_type=ACTION_ID)
+    other = box.add(b'{"action_type":"test.ping","params":{}}', [], action_type="test.ping")
+    import os
+    os.close(S._locks.pop(str(tmp_path.resolve())))                    # as if the server stopped: the command opens DATA_DIR again
+    assert E.main(["export_queue", str(tmp_path)]) == 0
+    back = json.loads((tmp_path / "imessage-outbox.json").read_text())["items"]
+    assert [x["id"] for x in back] == [q.id]
+    raw = json.loads(__import__("base64").b64decode(back[0]["raw"]))
+    assert (raw["chat_id"], raw["handle"] if "handle" in raw else None, raw["text"], raw["to"]["name"]) == ("chat900", None, "Hi all", "Hiking crew")
+    assert [x["id"] for x in json.loads((tmp_path / "external-outbox.json").read_text())["items"]] == [other.id]

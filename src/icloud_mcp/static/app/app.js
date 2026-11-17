@@ -7,7 +7,7 @@ import "./today.js";
 import { SECTIONS } from "./settings.js";
 import { serviceEntries } from "./services.js";
 
-const KIND_NAMES = { mail: "Mail", imessage: "iMessage", calendar: "Calendar" };
+const KIND_NAMES = { mail: "Mail", calendar: "Calendar" };
 // a request of the external source counts under its action type's badge ("external:Beeper"); an unknown type under "Other"
 const kindName = (k) => (k.startsWith("external:") ? k.slice(9) || "Other" : KIND_NAMES[k] || k);
 

@@ -4,7 +4,7 @@ import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, sectio
 import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
-const KINDS = { mail: "Mail", calendar: "Calendar", imessage: "iMessage" };
+const KINDS = { mail: "Mail", calendar: "Calendar" };
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
@@ -227,8 +227,8 @@ class Item extends HTMLElement {
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;
     // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
-    // a chat message (an iMessage, or a type that shows its text as a bubble) keeps the message layout: rows, then the bubble
-    const chat = it.kind === "imessage" || it.text_style === "bubble";
+    // a chat message (a type that shows its text as a bubble, such as an iMessage) keeps the message layout: rows, then the bubble
+    const chat = it.text_style === "bubble";
     const ext = it.kind === "external" && !chat;
     // a value the service changed since the owner looked is marked (package 2c)
     const fresh = new Set([...(it.changed || []).map((c) => c.label), ...(it.edited_rows || [])]);

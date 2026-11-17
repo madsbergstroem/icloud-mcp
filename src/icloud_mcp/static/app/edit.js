@@ -3,7 +3,7 @@
 import { put } from "./api.js";
 import { esc, toast, fail, ask, titleBlock } from "./ui.js";
 
-const STAYS = { mail: "The recipients and the subject stay the same.", imessage: "The conversation stays the same.",
+const STAYS = { mail: "The recipients and the subject stay the same.", bubble: "The conversation stays the same.",
   calendar: "The event, its time and its guests stay the same." };
 
 // The edit view of one request. `rows` is the message card's own rows (already HTML), `sub` the line under the title.
@@ -13,8 +13,8 @@ export function editView(it, rows, sub) {
   return titleBlock(it.title, sub)
     + `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}
       <ion-textarea aria-label="Text of the request" auto-grow="true" rows="4" data-ta value="${esc(it.edit.text)}"></ion-textarea>
-      <div class="capr"><span>Only the text changes. ${esc(STAYS[it.kind] || "")}</span><span class="num" data-count>${n.toLocaleString()} characters</span></div></div>
-      <p class="note">${it.kind === "external" || it.kind === "imessage" ? "Your edit becomes a new version. The earlier ones stay in the list."
+      <div class="capr"><span>Only the text changes. ${esc(STAYS[it.text_style === "bubble" ? "bubble" : it.kind] || "")}</span><span class="num" data-count>${n.toLocaleString()} characters</span></div></div>
+      <p class="note">${it.kind === "external" ? "Your edit becomes a new version. The earlier ones stay in the list."
         : "Your edit replaces what your assistant asked for. You can bring that back until you send."}</p>`;
 }
 

@@ -24,7 +24,6 @@ other approval line.
 from __future__ import annotations
 
 import email
-import json
 from email import policy
 from typing import Annotated, Any, Literal, get_args
 
@@ -62,11 +61,6 @@ def describe(kind: str, q: Any, external: Any = None) -> tuple[str, str]:
             if reg is not None and reg.builtin:                   # a type of the server's own is named by its badge ('imessage')
                 return reg.action_type.badge.lower(), reg.action_type.title
             return ("action", reg.action_type.title) if reg is not None else ("action", "")
-        if kind == "imessage":
-            d = json.loads(q.raw.decode())
-            to = d.get("to") or {}
-            people = ", ".join(f"{p.get('name')} ({p.get('handle')})" if p.get("name") else str(p.get("handle", "")) for p in to.get("participants", []))
-            return "imessage", f"iMessage to {to.get('name') or people or d.get('chat_id') or d.get('handle') or ''}".strip()
     except Exception:  # noqa: BLE001  -- a title is a nicety: an entry that cannot be read is still withdrawn
         pass
     return "", ""
