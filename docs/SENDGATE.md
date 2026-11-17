@@ -115,7 +115,7 @@ Rules every package keeps:
 | 2c | Versions of a request: the owner's edit and a changed target become new versions instead of a discard | gate | 2, 3 | yes |
 | 2d | The owner edits every field before approving: subject, To, Cc, Bcc, and every field an action type marks editable | gate | 2c | yes (gateway actions; mail with 6) |
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
-| 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | later |
+| 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | yes |
 | 5 | Calendar invitations on the same | connector | 1, 3 | later |
 | 6 | Mail on the same | connector | 1, 3 | later |
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
@@ -472,6 +472,54 @@ messages; mail, calendar and iMessage keep their JSON files until packages 4 to 
 being carried out. A row found `executing` at start ends `unclear` with reason `interrupted` and is logged once as an
 `approval.sent` with delivery `unconfirmed`; a `reported` column makes each such report and each expiry happen exactly once, also across a restart. Only the first store a process opens on a DATA_DIR recovers rows. A corrupt queue file is set aside and the start continues (E-1 replaces the "stops the start" of X15). `PRAGMA user_version` is 1; a newer database stops the start. The export lives in the package (`python -m icloud_mcp.gate.export_queue`), so it runs in the Docker image. `Store(data_dir, source, ...)` takes the source; the JSON `Outbox` keeps its
 `filename` until packages 4 to 6 move its sources. Health reports a queue file that could not be read as `approval_store`.
+
+## Package 4: iMessage on ActionType and Executor
+
+iMessage requests move from `imessage-outbox.json` to the store, and later onto the external source as action type
+`imessage.send`. Mapped on 2026-11-17 against `imessage.py`, `dashboard.py:313-350` and `gate/external.py`. The owner split it
+the same day, once the code showed the second half changes the card: 4a moves the queue and fixes the lost request without a
+visible change; 4b folds iMessage into the external source and needs a mock first.
+
+### 4a: the store
+
+| Today | After 4a |
+|-------|----------|
+| `imessage-outbox.json`, rewritten on every change, no state for "being sent" | Rows of source `imessage` in `approvals.db`, with the states of package 3; the file is read in once and renamed `.migrated` with ids and hashes kept |
+| A refusal or bridge error after the claim loses the request while the card says "still waiting" | Each ending is a state: see the table below |
+| Edit overwrites once (`edited_from`) | Edit makes a version (2c), so the card gets "Earlier versions" like a gateway action |
+| A crash between approve and the Mac's answer loses the request | It ends `unclear` at the next start and is logged once, also when another source's store opened first |
+| Members added to a group since queuing are sent to when the lists allow them | Nothing is sent: the request waits again as a version by the service with the members as they are now |
+
+| What happens after the owner approved | The request |
+|---------------------------------------|-------------|
+| Reading the conversation fails (Mac offline, any bridge error) | waits again; the owner sees why |
+| The conversation is gone | ends `discarded`, reason `target_changed` |
+| A member is no longer allowed (never-send, list) | ends `discarded`, reason `not_allowed` |
+| The members changed and all are allowed | waits again as a new version (2c) |
+| The Mac says nothing was sent, or never got it | waits again (`failed`) |
+| Any other bridge error | ends `unclear`, never repeated |
+| The Mac answers `sent` | ends `sent` |
+| The Mac answers `failed` or `unconfirmed` | ends `unclear` (it may have gone out) |
+
+Unchanged: the stored bytes and their hash, the tool's answer, the card, `approve_at`, the `/outbox` page, the log lines.
+`python -m icloud_mcp.gate.export_queue` writes `imessage-outbox.json` back as well.
+
+Acceptance criteria:
+
+1. The iMessage tests (`test_messages_send.py`, `test_imessage_send.py`, `test_imessage_sms_only.py`, `test_text_edit.py`) pass with
+   the store; a changed test is reported on its own line with its reason (rule 3).
+2. Each row of the table above has a test that checks the state and that nothing was sent twice.
+3. Starting on a `DATA_DIR` with an `imessage-outbox.json` gives the same waiting ids and hashes and a `.migrated` file; the export
+   writes a file the previous version loads with the same ids and hashes.
+4. A row of source `imessage` left `executing` ends `unclear` at start even when the external store opened first.
+
+### 4b: one source (later, mock first)
+
+iMessage becomes action type `imessage.send` on the external source, and the branches of gap 4 for it go: `withdraw.py`,
+`push.py`, `dashboard_api.py`, `textedit.py`, `dashboard.py`, `approvals.py`, `server.py`, `today.js`. Open points: a type's title
+is the same for every request ("iMessage", not "iMessage to Anna"), the "Group" tag and the bubble need fields on the type, the
+`/outbox` page has no external source without the dashboard, and the canonical bytes change every hash (D4-1, decided: new hash
+plus a log line `approval.migrated` naming both).
 
 ## Rules for whoever implements a package
 
