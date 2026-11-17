@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **iMessage approvals keep their state (fork).** A waiting iMessage now lives in the approval store (`approvals.db`) like the
+  connector's actions; `imessage-outbox.json` is read in once at the first start, with ids and hashes unchanged. What becomes of an
+  approval is now always clear: if the Mac never got it, it waits again; if it may have gone out, it reads „unclear“ and is never
+  sent again (before, a Mac error after Approve could lose the message while the card said it still waited); a conversation that
+  is gone or no longer allowed ends without sending. If people joined or left a group since you looked, nothing is sent and the
+  message waits again with the new members marked. Editing the text makes a version, as for actions. A server stopped while
+  sending marks the message unclear at the next start. `python -m icloud_mcp.gate.export_queue` writes waiting iMessages back to
+  `imessage-outbox.json` for a rollback.
+
 - **Change every field before you approve (fork).** An action from the connector file can mark fields as editable
   (`editable_fields`). „Edit“ then opens one form with those fields and the text, and the save is one new version. Someone you type
   in yourself who is not on your list is allowed for that request only; your list does not change, and your assistant still cannot

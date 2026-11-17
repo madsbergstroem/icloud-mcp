@@ -26,6 +26,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from . import access_sso
 from .auth import OwnerOAuthProvider
 from .config import Settings
+from .gate.actions import Rechecked, Revised
 from .mail import MailService
 
 log = logging.getLogger(__name__)
@@ -238,7 +239,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
             return _page("Outgoing message approval", '<div class="card"><p class="err">Invalid request. Re-enter the owner password.</p>'
                          '<p><a href="/outbox">Back</a></p></div>', 403)
         if action == "discard":
-            await asyncio.to_thread(box.claim, q.id)
+            await asyncio.to_thread(box.claim, q.id, "discarded")
             log.info("Owner discarded queued message %s", q.id)
             if audit is not None:
                 audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded a queued {kind} message", kind=kind, outbox_id=q.id)
@@ -250,9 +251,20 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                 return await asyncio.to_thread(_queue_page, '<p class="err">Not sent: this message answers one that looked like an '
                                                'attempt to steer the agent. Tick the box under it if you still want it sent.</p>')
         try:
-            result = (await asyncio.to_thread(imessage.release, box, q.id) if kind == "imessage"
+            result = (await asyncio.to_thread(imessage.release, box, q.id, q.sha256) if kind == "imessage"
                       else await asyncio.to_thread(mail.release, q.id))
-        except Exception as e:  # noqa: BLE001  -- release() re-queues on any failure, so the owner can retry or discard
+        except Revised as e:                     # the people in the conversation changed: a new version waits for a look
+            if audit is not None:
+                audit.record("approval.revised", actor="server", summary=f"Did not send a queued {kind} message: the target changed, "
+                             f"it waits as version {e.n}", kind=kind, outbox_id=q.id, sha256=q.sha256, new_sha256=e.sha256,
+                             reason="target_changed", version=e.n)
+            return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(str(e))}</p>')
+        except Rechecked as e:                   # gone, or no longer allowed: it ends here, nothing was sent
+            if audit is not None:
+                audit.record("approval.discarded", actor="server", summary=f"Did not send a queued {kind} message", kind=kind,
+                             outbox_id=q.id, sha256=q.sha256, reason=e.reason)
+            return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(str(e))}</p>')
+        except Exception as e:  # noqa: BLE001  -- release() re-queues what provably never went out, so the owner can retry or discard
             log.warning("Release of %s failed: %s", q.id, e)
             if audit is not None:
                 audit.record("approval.failed", actor="owner", via="password (/outbox)", ok=False, summary=f"Could not send a queued {kind} message", kind=kind, outbox_id=q.id)
@@ -260,11 +272,13 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         log.info("Owner approved queued %s %s", kind, q.id)
         if audit is not None:
             audit.record("approval.sent", actor="owner", via="password (/outbox)", summary=f"Approved a queued {kind} message", kind=kind,
-                         outbox_id=q.id, delivery=result.get("status") if kind == "imessage" and isinstance(result, dict) else None,
+                         outbox_id=q.id, delivery=({"unclear": "unconfirmed"}.get(result.get("status"), result.get("status"))
+                                                   if kind == "imessage" and isinstance(result, dict) else None), sha256=q.sha256,
                          recipients=list(result.get("recipients") or [result.get("to")] if isinstance(result, dict) else []))
         if kind == "imessage":
             status = result.get("status")
-            word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)"}.get(status, str(status))
+            word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)",
+                    "unclear": "Not sure it went out"}.get(status, str(status))
             note = f'<p><b>{html.escape(word)}</b>: iMessage to {html.escape(result.get("to", ""))}. {html.escape(result.get("note", ""))}</p>'
             return await asyncio.to_thread(_queue_page, note)
         extra = f" {html.escape(result['warning'])}" if result.get("warning") else ""

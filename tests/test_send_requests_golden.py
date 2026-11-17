@@ -57,7 +57,7 @@ def stored(box):
 def on_disk(box):
     if box.path.suffix == ".db":                     # the store: read the rows back through a second store on the same file
         from icloud_mcp.gate.store import Store
-        return stored(Store(str(box.dir), "external", 3600, 100))
+        return stored(Store(str(box.dir), box.source, 3600, 100))
     return [{k: v for k, v in d.items() if k not in ("id", "created_at", "expires_at")} for d in json.loads(box.path.read_text())["items"]]
 
 

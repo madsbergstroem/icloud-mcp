@@ -326,36 +326,66 @@ class IMessageService:
         return {"to": (to.get("name") + ": " if to.get("name") else "") + people, "chat_id": d.get("chat_id") or d.get("handle"),
                 "group": to.get("group", False), "text": d.get("text", ""), "name": to.get("name") or "", "people": people}
 
-    def release(self, outbox: Any, item_id: str) -> dict[str, Any]:
-        """Send a queued iMessage. Called only from the owner's approval pages, never from a tool. Both lists are
-        checked again, as they are now. Put back in the queue only when the Mac never got it (offline); a send the Mac tried is
-        never repeated from here, since that could deliver it twice."""
+    def release(self, outbox: Any, item_id: str, sha256: str | None = None) -> dict[str, Any]:
+        """Send a queued iMessage. Called only from the owner's approval pages, never from a tool. sha256: the version the owner
+        looked at; another one is not sent. Who is in the conversation and both lists are checked again, as they are now.
+
+        How it ends (docs/SENDGATE.md, package 4a): reading the conversation fails -> waits again; the conversation is gone ->
+        discarded (target_changed); someone is no longer allowed -> discarded (not_allowed); the members changed and all are allowed
+        -> waits again as a new version for the owner to look at; the Mac says nothing was sent or never got it -> waits again;
+        any other error, and a send the Mac did not confirm -> unclear, never repeated from here, since that could deliver it twice."""
         import json
         from .bridge import BridgeError
-        q = outbox.claim(item_id)
+        from .gate.actions import Rechecked, Revised
+        q = outbox.claim(item_id, "executing")
         if q is None:
             raise IMessageError("That message is no longer waiting (already released, discarded or expired).")
+        if sha256 is not None and q.sha256 != sha256:             # edited between the owner's look and the click
+            outbox.restore(q)
+            raise IMessageError("The message changed just now. Nothing was sent; look at it again.")
         d = json.loads(q.raw.decode())
-        # Who is in the conversation NOW (someone may have been added to a group since it was queued), against the lists as
-        # they are now. Anything no longer allowed, or a chat that is gone ('no conversation' from the Mac), is dropped, not put back.
+        if not self._shown(d.get("chat_id") or d.get("handle") or ""):      # hidden by the owner since it was queued
+            outbox.finish(q.id, "discarded", "not_allowed")
+            raise Rechecked("not_allowed", "Not sent: you hid this conversation since it was queued.")
         try:
             target = self._target(d.get("chat_id"), d.get("handle"))
         except BridgeError as e:
             if "no conversation" in str(e).lower():
-                raise IMessageError(f"Not sent, and dropped from the queue: {e}") from e
-            raise
-        self._permit(target)
+                outbox.finish(q.id, "discarded", "target_changed")
+                raise Rechecked("target_changed", f"Not sent: that conversation no longer exists ({e}).") from e
+            outbox.restore(q)                                     # only a read so far: nothing went out
+            raise IMessageError(f"Not sent, still waiting: {e}") from e
+        except IMessageError as e:                                # the Mac no longer has it
+            outbox.finish(q.id, "discarded", "target_changed")
+            raise Rechecked("target_changed", f"Not sent: {e}") from e
+        try:
+            self._permit(target)
+        except IMessageError as e:
+            outbox.finish(q.id, "discarded", "not_allowed")
+            raise Rechecked("not_allowed", f"Not sent: {e}") from e
+        then = sorted(_key(p.get("handle", "") if isinstance(p, dict) else p) for p in (d.get("to") or {}).get("participants", []))
+        now = sorted(_key(p) for p in target["participants"])
+        if d.get("chat_id") and then and now != then and hasattr(outbox, "revise"):     # someone joined or left since the owner looked
+            to = {**target, "participants": self._people_of(target["participants"], self._resolver())}
+            to.pop("services", None)
+            raw = json.dumps({**d, "to": to}, ensure_ascii=False).encode()
+            revised = outbox.revise(q, raw)
+            if revised is None:
+                raise IMessageError("Not sent: the people in the conversation changed since you looked, and the message is no longer waiting.")
+            raise Revised(len(outbox.versions(q.id)), q.id, revised.sha256)
         try:
             got = self.bridge.call("imessage_send", {k: v for k, v in {"chat_id": d.get("chat_id"), "handle": d.get("handle"),
                                                                         "text": d.get("text")}.items() if v})
         except BridgeError as e:
-            never_reached = ("did not pick up", "has not connected", "last seen", "or newer: update the helper")
+            never_reached = ("did not pick up", "has not connected", "last seen", "or newer: update the helper", "Nothing was sent")
             if any(x in str(e) for x in never_reached):
-                outbox.restore(q)                                    # the Mac never had it: safe to keep for a retry
-                raise IMessageError(f"Not sent, still queued: {e}") from e
-            raise
+                outbox.restore(q)                                 # the Mac never had it, or refused before Messages did: safe to keep
+                raise IMessageError(f"Not sent, still waiting: {e}") from e
+            outbox.finish(q.id, "unclear")
+            return {"status": "unclear", "note": "The Mac did not answer clearly, so it may or may not have gone out. Nothing is "
+                                                 "sent again; look in Messages first.", "to": describe_label(d)}
+        outbox.finish(q.id, "sent" if got.get("status") == "sent" else "unclear")
         return {**got, "to": describe_label(d)}
-
 
 def describe_label(d: dict[str, Any]) -> str:
     to = d.get("to") or {}

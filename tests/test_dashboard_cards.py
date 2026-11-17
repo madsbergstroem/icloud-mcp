@@ -64,7 +64,7 @@ async def test_a_mail_says_which_account_it_goes_out_from(web):
 async def test_an_unclear_send_is_flagged_in_sent_today_and_activity_spells_imessage_right(web, monkeypatch):
     app, mcp, *_ = web(**IMESSAGE_ENV)
     src, q = queue_imessage(mcp)
-    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id: (
+    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id, sha256=None: (
         box.claim(item_id) and {"status": "failed", "to": "Hiking crew", "note": ""}))
     async with client(app) as c:
         token = await signed_in(c)

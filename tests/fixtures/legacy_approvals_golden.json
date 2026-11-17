@@ -1217,6 +1217,7 @@
      "reason": "",
      "text": "imessage edited, ÜBER-café"
     },
+    "edited_rows": [],
     "expires_at": "<volatile>",
     "files": [],
     "group": true,
@@ -1243,6 +1244,48 @@
     "text": "imessage edited, ÜBER-café",
     "title": "iMessage to Hiking crew",
     "to": "Hiking crew",
+    "versions": [
+     {
+      "at": "<volatile>",
+      "by": "assistant",
+      "changes": [],
+      "n": 1,
+      "rows": [
+       [
+        "Chat with",
+        "Anna (anna@example.org)"
+       ],
+       [
+        "Conversation",
+        "chat900"
+       ]
+      ],
+      "text": "Running late, start without me"
+     },
+     {
+      "at": "<volatile>",
+      "by": "owner",
+      "changes": [
+       {
+        "label": "Text",
+        "new": "imessage edited, ÜBER-café",
+        "old": "Running late, start without me"
+       }
+      ],
+      "n": 2,
+      "rows": [
+       [
+        "Chat with",
+        "Anna (anna@example.org)"
+       ],
+       [
+        "Conversation",
+        "chat900"
+       ]
+      ],
+      "text": "imessage edited, ÜBER-café"
+     }
+    ],
     "warning": true,
     "warnings": [
      "A group conversation: everyone in it receives this."

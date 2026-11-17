@@ -14,7 +14,7 @@ export function editView(it, rows, sub) {
     + `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}
       <ion-textarea aria-label="Text of the request" auto-grow="true" rows="4" data-ta value="${esc(it.edit.text)}"></ion-textarea>
       <div class="capr"><span>Only the text changes. ${esc(STAYS[it.kind] || "")}</span><span class="num" data-count>${n.toLocaleString()} characters</span></div></div>
-      <p class="note">${it.kind === "external" ? "Your edit becomes a new version. The earlier ones stay in the list."
+      <p class="note">${it.kind === "external" || it.kind === "imessage" ? "Your edit becomes a new version. The earlier ones stay in the list."
         : "Your edit replaces what your assistant asked for. You can bring that back until you send."}</p>`;
 }
 

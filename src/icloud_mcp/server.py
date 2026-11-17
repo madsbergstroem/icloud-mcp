@@ -2653,7 +2653,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             if s.imessage_allow_send and writable:
                 messages_outbox = None
                 if s.imessage_send_requires_approval and not s.local_mode and provider is not None:
-                    messages_outbox = Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="imessage-outbox.json")
+                    from .gate.store import Store         # package 4a: the approval store; the JSON file is read in once
+                    messages_outbox = Store(s.data_dir, "imessage", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
+                                            legacy="imessage-outbox.json")
                     approval.update(imessage=messages, imessage_outbox=messages_outbox)
 
                 hub.add_sender(IMessageSender(messages, messages_outbox, s.public_url))
@@ -2959,7 +2961,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         return {"ok": all(r["ok"] for r in results.values()), "since_start_seconds": round(time.monotonic() - _STARTED),
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
-                **({"approval_store": {"ok": False, "problem": p}} if (p := getattr(getattr(mcp, "_icloud_outboxes", {}).get("external"), "problem", "")) else {}),
+                **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
+                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check

@@ -13,6 +13,8 @@ import pytest
 from icloud_mcp.bridge import BridgeError
 from icloud_mcp.config import Settings
 from icloud_mcp.imessage import IMessageError, IMessageService
+from icloud_mcp.gate.actions import Rechecked
+from icloud_mcp.gate.store import Store
 from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
 
@@ -54,7 +56,7 @@ class Bridge:
 
 def svc(s, tmp_path, **kw):
     b = Bridge(**kw)
-    return IMessageService(s, b, None), b, Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
+    return IMessageService(s, b, None), b, Store(str(tmp_path), "imessage", 3600, 20)
 
 
 def test_approval_is_on_by_default_even_when_mail_sends_directly(s, tmp_path):
@@ -103,19 +105,19 @@ def test_release_rechecks_the_lists_and_only_requeues_what_the_mac_never_got(s, 
     m, b, box = svc(s, tmp_path)
     q = m.send("Hi Anna", handle="anna@example.org", outbox=box)["outbox_id"]
     m.s = dataclasses.replace(s, imessage_send_allowlist=())                                    # the owner emptied the list meanwhile
-    with pytest.raises(IMessageError, match="nobody"):
+    with pytest.raises(Rechecked, match="nobody") as got:
         m.release(box, q)
+    assert got.value.reason == "not_allowed" and box.state_of(q) == ("discarded", "not_allowed")
     assert not box.pending() and not [op for op, _ in b.calls if op == "imessage_send"]
     m.s = s
     q = m.send("Hi again", handle="anna@example.org", outbox=box)["outbox_id"]
     m.bridge = Bridge(fail=BridgeError("The Mac did not pick up the request within 60s"))
-    with pytest.raises(IMessageError, match="still queued"):
+    with pytest.raises(IMessageError, match="still waiting"):
         m.release(box, q)
     assert [x.id for x in box.pending()] == [q]                                                 # offline: kept for a retry
     m.bridge = Bridge(fail=BridgeError("The Mac picked up the request but did not finish within 60s"))
-    with pytest.raises(BridgeError):
-        m.release(box, q)
-    assert not box.pending()                                                                    # it may have gone out: never twice
+    assert m.release(box, q)["status"] == "unclear"
+    assert not box.pending() and box.state_of(q)[0] == "unclear"                               # it may have gone out: never twice
     m.bridge = Bridge()
     q = m.send("Third", handle="anna@example.org", outbox=box)["outbox_id"]
     assert m.release(box, q)["status"] == "sent" and m.bridge.calls[-1] == ("imessage_send", {"handle": "anna@example.org", "text": "Third"})
@@ -170,10 +172,11 @@ def test_release_checks_who_is_in_the_group_now(s, tmp_path):
     q = m.send("Hi all", chat_id="chat900", outbox=box)["outbox_id"]
     CHATS["chats"][1]["participants"].append("bot@example.org")                 # the assistant was added to the group meanwhile
     try:
-        with pytest.raises(IMessageError, match="IMESSAGE_NEVER_SEND"):
+        with pytest.raises(Rechecked, match="IMESSAGE_NEVER_SEND"):
             m.release(box, q)
     finally:
         CHATS["chats"][1]["participants"].remove("bot@example.org")
+    assert box.state_of(q) == ("discarded", "not_allowed")
     assert not box.pending() and not [op for op, _ in b.calls if op == "imessage_send"]
 
 
@@ -188,10 +191,11 @@ def test_the_target_is_read_as_one_chat_and_a_missing_chat_sends_nothing(s, tmp_
     assert len(box.pending()) == 1
     CHATS["chats"][1]["chat_id"] = "chat901"                                              # the chat is gone by the time of approval
     try:
-        with pytest.raises(IMessageError, match="dropped"):
+        with pytest.raises(Rechecked, match="no longer exists"):
             m.release(box, q)
     finally:
         CHATS["chats"][1]["chat_id"] = "chat900"
+    assert box.state_of(q) == ("discarded", "target_changed")
     assert not box.pending() and not [op for op, _ in b.calls if op == "imessage_send"]  # dropped, not put back
 
 

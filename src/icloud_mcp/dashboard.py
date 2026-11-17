@@ -328,12 +328,14 @@ class IMessageApprovals(ApprovalSource):
                 "notes": ["Sent from your Mac once you approve."], "warnings": warnings, "needs_override": False, "group": bool(d["group"])}
 
     def release(self, q):
-        r = self.imessage.release(self.box, q.id)
-        word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)"}.get(r.get("status"), str(r.get("status")))
-        return Released(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), r.get("status"))
+        r = self.imessage.release(self.box, q.id, q.sha256)
+        status = r.get("status")
+        word = {"sent": "Sent", "failed": "Not delivered", "unconfirmed": "Handed to Messages (not yet confirmed)",
+                "unclear": "Not sure it went out"}.get(status, str(status))
+        return Released(f"{word}: iMessage to {r.get('to', '')}. {r.get('note', '')}".strip(), "unconfirmed" if status == "unclear" else status)
 
     def discard(self, q):
-        self.box.claim(q.id)
+        self.box.claim(q.id, "discarded")
 
     text_limit = T.IMESSAGE_MAX_CHARS
 

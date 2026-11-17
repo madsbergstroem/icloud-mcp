@@ -56,7 +56,7 @@ REFUSALS: dict[str, str] = {
     "not_replaceable": "replaces names a request of yours that still waits, for the same action; otherwise ask without replaces.",
 }
 RETRYABLE = ("describe_failed", "store_unavailable")
-RECHECK_CODES = ("target_changed",)     # what a recheck may answer; anything else it returns is logged as target_changed
+RECHECK_CODES = ("target_changed", "not_allowed")     # what a recheck may answer; anything else is logged as target_changed
 
 
 class ExternalError(Exception):
@@ -99,8 +99,8 @@ class Rechecked(ExternalError):
     and the request ends as discarded with `reason` (a code, never a parameter): it is not put back, because approving it again
     would fail the same way."""
 
-    def __init__(self, reason: str = "target_changed"):
-        super().__init__("Not sent: the target changed since you looked. Your assistant has to ask again.", "policy")
+    def __init__(self, reason: str = "target_changed", message: str | None = None):
+        super().__init__(message or "Not sent: the target changed since you looked. Your assistant has to ask again.", "policy")
         self.reason = reason
 
 
