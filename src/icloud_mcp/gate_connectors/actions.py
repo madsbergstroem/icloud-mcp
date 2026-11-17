@@ -66,6 +66,7 @@ FILE_SCHEMA: dict[str, Any] = {
                 "arguments": {"type": "object"},
                 "params_schema": {"type": "object"},
                 "text_field": {"type": "string"},
+                "editable_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
                 "recipient_fields": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": True},
                 "rows": {"type": "array", "minItems": 1,
                          "items": {"type": "array", "prefixItems": [{"type": "string", "minLength": 1}, {"type": "string"}],
@@ -115,6 +116,7 @@ class FileAction:
     params_schema: Mapping[str, Any]
     text_field: str | None
     recipient_fields: tuple[str, ...]
+    editable_fields: tuple[str, ...]
     rows: tuple[tuple[str, str], ...]
     describe: Mapping[str, Any] | None
     result: Mapping[str, Any]
@@ -248,11 +250,13 @@ def _check(a: Mapping[str, Any], at: str) -> FileAction:
         at_type = A.ActionType(
             id=a["action"], title=a["title"], badge=a["badge"], approve_label=a["approve_label"], params_schema=schema,
             rows=tuple((label, name) for label, name in a["rows"]), text_field=a.get("text_field"),
+            editable_fields=tuple(a.get("editable_fields", ())), recipient_fields=tuple(a["recipient_fields"]),
             recipients=lambda p, fields=tuple(a["recipient_fields"]): [str(p[f]) for f in fields if p.get(f) not in (None, "")])
     except ValueError as e:
         raise LoadError(at, str(e)) from None
     return FileAction(a["action"], a["title"], a["badge"], a["approve_label"], a["tool"], a["arguments"], schema,
-                      a.get("text_field"), tuple(a["recipient_fields"]), tuple((r[0], r[1]) for r in a["rows"]), describe,
+                      a.get("text_field"), tuple(a["recipient_fields"]), tuple(a.get("editable_fields", ())),
+                      tuple((r[0], r[1]) for r in a["rows"]), describe,
                       a["result"], a["allow_setting"], a.get("enabled", True), float(a.get("timeout_seconds", 30)), at_type)
 
 

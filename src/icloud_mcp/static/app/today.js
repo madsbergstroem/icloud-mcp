@@ -222,7 +222,7 @@ class Item extends HTMLElement {
     // an action of a registered type (external): who or what it reaches first, then the text, then its other rows (DESIGN.md)
     const ext = it.kind === "external";
     // a value the service changed since the owner looked is marked (package 2c)
-    const fresh = new Set((it.changed || []).map((c) => c.label));
+    const fresh = new Set([...(it.changed || []).map((c) => c.label), ...(it.edited_rows || [])]);
     const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
     const rows = ext ? it.rows.slice(0, 1).map(dd).join("") : this.rowsHtml();
     const more = ext ? it.rows.slice(1).map(dd).join("") : "";
@@ -230,10 +230,11 @@ class Item extends HTMLElement {
       : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
     const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : it.kind === "imessage" ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
     const edit = it.edit || { allowed: false, reason: "" };
+    const form = !!(edit.fields && edit.fields.length);          // package 2d: the fields the owner may change, edited as one form
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
       ${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
       ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}
-      ${ext && !own ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>Edit text</ion-button></div>`}
+      ${ext && !own && !form ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>${form ? "Edit" : "Edit text"}</ion-button></div>`}
       ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
       ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
   }
@@ -249,6 +250,9 @@ class Item extends HTMLElement {
       if (v.by === "service") return [`${it.badge} changed ${row ? `the ${row.label.toLowerCase()}` : "the target"}`, row ? `${row.old} → ${row.new}. Nothing was sent.` : "Nothing was sent."];
       if (v.by === "assistant") return ["Your assistant revised it", text ? `“${text.new}”` : c.map((x) => `${x.label}: ${x.new}`).join(" · ")];
       if (text && text.new === first.text) return ["You went back to your assistant's text", `“${text.new}”`];
+      const rows = c.filter((x) => x.label !== "Text");      // package 2d: the fields the owner changed, by name
+      const was = (x) => (x.new === "" ? `${x.old}, removed` : x.old === "" ? x.new : `${x.old} → ${x.new}`);
+      if (rows.length) return [`You changed ${[...(text ? ["the text"] : []), ...rows.map((x) => x.label)].join(", ")}`, rows.map((x) => `${x.label}: ${was(x)}`).join(" · ")];
       return ["You changed the text", text ? `“${text.new}”` : ""];
     };
     const items = vs.slice().reverse().map((v) => {

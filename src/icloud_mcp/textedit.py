@@ -13,6 +13,10 @@ page showed), so the entry gets a new hash and the old version can no longer be 
 the entry (`edited_from`) until it is sent or discarded. The activity log records that an edit happened, never the text.
 
   PUT /dashboard/api/items/{key}/text   {"sha": ..., "text": ...}  or  {"sha": ..., "restore": true}
+
+Package 2d: an action type that marks further fields editable (a connector's `editable_fields`) is edited as a form instead,
+every field in one save, through PUT /dashboard/api/items/{key}/fields {"sha": ..., "fields": {name: value}}. A recipient the
+owner types in who is not on the list is allowed for that request only; the version records it, and approving checks it.
 """
 from __future__ import annotations
 
@@ -164,8 +168,14 @@ def edit_info(src: Any, q: Any) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001  -- an unreadable message is not edited, and the page still opens
         log.warning("Could not read the text of %s %s for editing: %s", src.kind, q.id, e)
         reason, text = "The text of this request could not be read, so it cannot be edited here.", ""
-    return {"allowed": not reason, "reason": reason, "text": text, "limit": src.text_limit_of(q),
-            "edited": q.edited_from is not None, "original": q.edited_from}
+    fields = []
+    if hasattr(src, "fields_of"):
+        try:
+            fields = src.fields_of(q)
+        except Exception as e:  # noqa: BLE001  -- the form is left out, the text editor stays
+            log.warning("Could not read the fields of %s %s for editing: %s", src.kind, q.id, type(e).__name__)
+    return {"allowed": not reason or bool(fields), "reason": "" if fields else reason, "text": text, "limit": src.text_limit_of(q),
+            "edited": q.edited_from is not None, "original": q.edited_from, **({"fields": fields} if fields else {})}
 
 
 def apply(src: Any, q: Any, text: str | None, restore: bool = False) -> tuple[Any, bool]:
@@ -191,6 +201,19 @@ def apply(src: Any, q: Any, text: str | None, restore: bool = False) -> tuple[An
     if new is None:
         raise RuntimeError("The request changed or is no longer waiting. Reload the page.")
     return new, True
+
+
+def apply_fields(src: Any, q: Any, changes: Any) -> tuple[Any, list[str], list[str]]:
+    """Store the owner's changes to the fields as a new version. Returns (the entry as it is now, labels of what changed, people
+    the owner allowed by hand). Raises TextLocked, TextInvalid, or RuntimeError when the entry changed or went away meanwhile."""
+    raw, fp, people, changed, own = src.with_fields(q, changes)
+    if not changed:
+        return q, [], own
+    original = q.edited_from if q.edited_from is not None else (src.text_of(q) if not src.text_block(q) else "")
+    new = outbox_of(src).replace(q.id, q.sha256, raw, key_fingerprint=fp, recipients=people, edited_from=original)
+    if new is None:
+        raise RuntimeError("The request changed or is no longer waiting. Reload the page.")
+    return new, changed, own
 
 
 def register_text_api(mcp: Any, d: Any, audit: Any) -> None:
@@ -226,3 +249,37 @@ def register_text_api(mcp: Any, d: Any, audit: Any) -> None:
                          kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=new.sha256)
         return d.api_ok({"sha": new.sha256, "changed": changed,
                          "note": ("Brought back what was asked for." if restore else "Saved. It goes out exactly as shown.") if changed else "No change."})
+
+    @mcp.custom_route("/dashboard/api/items/{key}/fields", methods=["PUT"])
+    async def put_fields(request: Any) -> Response:
+        got = await d.api_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, body = got
+        kind, _, item_id = request.path_params["key"].partition(":")
+        src = d.sources.get(kind)
+        q = next((x for x in src.pending() if x.id == item_id), None) if src else None
+        if q is None or not hmac.compare_digest(str(body.get("sha", "")).encode(), q.sha256.encode()):
+            return d.api_err("That item is no longer waiting or has changed. Nothing was done.", 409)
+        if not hasattr(src, "with_fields"):
+            return d.api_err("This kind of request has no fields to change.", 422)
+        ctx = await asyncio.to_thread(src.contexts, [q], False)
+        v = await asyncio.to_thread(src.describe, q, ctx.get(q.id))
+        try:
+            new, changed, own = await asyncio.to_thread(apply_fields, src, q, body.get("fields"))
+        except TextLocked as e:
+            return d.api_err(str(e), 422)
+        except TextInvalid as e:
+            return d.api_err(f"{e} {_NOTHING}", 422)
+        except RuntimeError as e:
+            return d.api_err(f"{e} {_NOTHING}", 409)
+        if changed:
+            what = f"{v['badge'].lower()} “{v['title']}”"
+            audit.record("approval.edited", actor="owner", via=rec.get("via", ""),
+                         summary=f"Edited {what} before sending: {', '.join(changed)}", kind=src.kind, outbox_id=q.id,
+                         action_type=getattr(q, "action_type", None), sha256=new.sha256, fields=changed,
+                         **({"owner_allowed": len(own)} if own else {}))
+        note = "Saved. It goes out exactly as shown." if changed else "No change."
+        if changed and own:
+            note = "Saved. Not on your list, allowed for this request only."
+        return d.api_ok({"sha": new.sha256, "changed": bool(changed), "note": note})

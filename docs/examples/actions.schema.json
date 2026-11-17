@@ -73,6 +73,13 @@
         "text_field": {
           "type": "string"
         },
+        "editable_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "recipient_fields": {
           "type": "array",
           "minItems": 1,

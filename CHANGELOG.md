@@ -5,6 +5,11 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Change every field before you approve (fork).** An action from the connector file can mark fields as editable
+  (`editable_fields`). „Edit“ then opens one form with those fields and the text, and the save is one new version. Someone you type
+  in yourself who is not on your list is allowed for that request only; your list does not change, and your assistant still cannot
+  reach them. Mail, iMessage and calendar keep their text editor until they move to the new store.
+
 - **One list of every account, and archiving chats (fork).** `icloud_list_accounts` lists every account of the server in one call:
   the mail, calendar and contacts accounts (provider, address, areas, which area each is the default of, read only) and every chat
   channel with what agents can do there and its accounts (for Beeper: network, your name there and the account id, read with the
@@ -242,6 +247,23 @@ Update the Mac helper before the server whenever its version changes.
   again. The agent's upload link stays used up, so only the owner adds the next file.
   `FILE_TOKEN_PREFIX` starts every upload link with a name of your choice (`/files/<prefix>.<token>`), so one proxy in
   front of several of these servers can send each upload to the right one by its path.
+- **Optional owner sign-in through Cloudflare Access on `/outbox`.** Behind an Access application that already signs the
+  owner in (for example a passkey through an OIDC provider), the outbox no longer asks for the owner password a second
+  time. Set `OWNER_ACCESS_TEAM_DOMAIN`, `OWNER_ACCESS_AUD` and `OWNER_ACCESS_EMAILS`; the page then verifies the signed
+  `Cf-Access-Jwt-Assertion` token (RS256 against the team keys, audience, issuer, expiry, email) and shows the queue.
+  Without a valid token the password form appears as before. Off unless all three are set; `pyjwt[crypto]` is now a
+  direct dependency (it was already installed through `mcp`).
+
+## 0.13.0
+
+- **Connecting an app works again with the dashboard on.** The styled connect page's `form-action` now lists the
+  requesting client's callback origin, so the browser follows the approval redirect instead of silently blocking it
+  (clients showed "Request expired"). Only the pending request's own redirect origin is added; an invalid one adds nothing.
+- **Mac helper: iMessage works on macOS 14.** The reader no longer fails with `no such column: m.associated_message_emoji`: it checks
+  which columns `chat.db` has and reads the emoji column as empty where macOS 14 lacks it (custom-emoji reactions arrived in macOS 15).
+- **Mac helper installs on macOS 14.** `install.sh` no longer stops when the Maps program cannot be built (the macOS 14 SDK has no
+  `.cycling`; cycling is offered only on macOS 15 and later) and carries on with Reminders, Notes and Drive, and it creates
+  `~/Library/LaunchAgents` when it is missing on a fresh account.
 - **One interface for the owner.** With the dashboard on (the default) every `/outbox` address redirects to
   `/dashboard/approvals`, and tools return that page as `approve_at`. Approving now always follows the dashboard's sign-in
   rules: with `OWNER_PASSWORD_LOGIN=false` the owner password no longer releases messages on `/outbox`. The page that
@@ -282,12 +304,6 @@ Update the Mac helper before the server whenever its version changes.
   server does (areas, mail, invitations, contacts, the Mac helper, read-only, the dashboard). Values go to
   `DATA_DIR/settings.json`, are checked before saving and apply after a restart; weakening protection asks for the owner again.
   Addresses, ports, OAuth redirect hosts, tokens and connections stay in the environment. `DASHBOARD_SETTINGS=view|off`.
-- **Optional owner sign-in through Cloudflare Access on `/outbox`.** Behind an Access application that already signs the
-  owner in (for example a passkey through an OIDC provider), the outbox no longer asks for the owner password a second
-  time. Set `OWNER_ACCESS_TEAM_DOMAIN`, `OWNER_ACCESS_AUD` and `OWNER_ACCESS_EMAILS`; the page then verifies the signed
-  `Cf-Access-Jwt-Assertion` token (RS256 against the team keys, audience, issuer, expiry, email) and shows the queue.
-  Without a valid token the password form appears as before. Off unless all three are set; `pyjwt[crypto]` is now a
-  direct dependency (it was already installed through `mcp`).
 
 ## 0.12.1
 

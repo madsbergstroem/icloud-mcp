@@ -122,7 +122,10 @@ class ActionType:
     approve_label: str                         # the main button ('Send')
     params_schema: Mapping[str, Any]           # JSON Schema (draft 2020-12) of the parameters: an object
     rows: tuple[tuple[str, str], ...] = ()     # (label, parameter name) lines of the card
-    text_field: str | None = None              # the parameter the owner may edit before approving, or None
+    text_field: str | None = None              # the parameter shown as the request's text, which the owner may edit, or None
+    # further parameters the owner may change before approving (package 2d): shown as rows of the card, set by the agent
+    editable_fields: tuple[str, ...] = ()
+    recipient_fields: tuple[str, ...] = ()     # the parameters that say who it reaches, so the edit form can say the list applies
     recipients: Callable[[Mapping[str, Any]], Sequence[str]] = _nothing   # who the request reaches, for the list that is checked and shown
     warnings: Callable[[Mapping[str, Any]], Sequence[str]] = _nothing     # lines of caution for the owner, from checked parameters
 
@@ -147,8 +150,25 @@ class ActionType:
                 raise ValueError(f"Action type {self.id}: row {label!r} shows {name!r}, which is not in the schema.")
         if self.text_field is not None and (props.get(self.text_field) or {}).get("type") != "string":
             raise ValueError(f"Action type {self.id}: text_field {self.text_field!r} must be a string property of the schema.")
+        shown = {name for _, name in self.rows}
+        for name in self.editable_fields:
+            spec = props.get(name)
+            if not isinstance(spec, Mapping) or spec.get("readOnly") is True:
+                raise ValueError(f"Action type {self.id}: editable field {name!r} must be a property of the schema the agent sets.")
+            if spec.get("type") not in EDITABLE_TYPES:
+                raise ValueError(f"Action type {self.id}: editable field {name!r} must be of type string, number, integer or boolean.")
+            if name != self.text_field and name not in shown:
+                raise ValueError(f"Action type {self.id}: editable field {name!r} must be shown in a row, so every change is on the card.")
         if _nested_read_only(schema):
             raise ValueError(f"Action type {self.id}: readOnly is allowed only on top-level properties, where it is enforced.")
+
+
+EDITABLE_TYPES = ("string", "number", "integer", "boolean")
+
+
+def editable(action_type: ActionType) -> tuple[str, ...]:
+    """Every parameter the owner may change before approving: the text first, then the editable rows, each once."""
+    return tuple(dict.fromkeys(([action_type.text_field] if action_type.text_field else []) + list(action_type.editable_fields)))
 
 
 def _nested_read_only(node: Any, top: bool = True) -> bool:
@@ -289,10 +309,23 @@ def register(action_type: ActionType, executor: Executor, allowed_recipients: Ca
 
 
 # -- the stored form -------------------------------------------------------------------------------------------------------------
-def canonical(action_type_id: str, params: Mapping[str, Any]) -> bytes:
-    """The bytes an entry stores, and the hash is taken over: {action_type, params} as JSON with sorted keys and no spaces."""
-    return json.dumps({"action_type": action_type_id, "params": params}, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False, allow_nan=False).encode()
+def canonical(action_type_id: str, params: Mapping[str, Any], owner_allowed: Iterable[str] = ()) -> bytes:
+    """The bytes an entry stores, and the hash is taken over: {action_type, params} as JSON with sorted keys and no spaces.
+    owner_allowed: recipients the owner typed in by hand who are not on the list (package 2d); they belong to this version,
+    so its hash covers them, and are left out when there are none, so older entries keep their bytes."""
+    doc: dict[str, Any] = {"action_type": action_type_id, "params": params}
+    if extra := sorted({str(x) for x in owner_allowed if str(x)}):
+        doc["owner_allowed"] = extra
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+
+
+def owner_allowed(raw: bytes) -> list[str]:
+    """The recipients the owner allowed by hand for this version, or [] (also for bytes that cannot be read)."""
+    try:
+        got = json.loads(raw.decode()).get("owner_allowed")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return []
+    return [str(x) for x in got] if isinstance(got, list) else []
 
 
 def read(raw: bytes) -> tuple[str, dict[str, Any]]:

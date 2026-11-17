@@ -364,6 +364,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             if cur is not None and prev is not None:
                 before = dict(prev["rows"])
                 changes = [{"label": k, "old": before.get(k, ""), "new": val} for k, val in cur["rows"] if before.get(k) != val]
+                now = dict(cur["rows"])                          # a row the new version no longer has (an emptied field) changed too
+                changes += [{"label": k, "old": val, "new": ""} for k, val in prev["rows"] if k not in now]
                 if cur["text"] != prev["text"]:
                     changes.append({"label": "Text", "old": prev["text"], "new": cur["text"]})
             out.append({"n": v["n"], "by": v["author"], "at": v["created_at"], "changes": changes,
@@ -393,6 +395,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             out["versions"] = versions
             if versions[-1]["by"] == "service":
                 out["changed"] = versions[-1]["changes"]
+            elif versions[-1]["by"] == "owner":                  # package 2d: the rows the owner changed are marked, without a warning
+                out["edited_rows"] = [c["label"] for c in versions[-1]["changes"] if c["label"] != "Text"]
         if src.kind == "mail":
             dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
             added = {x["index"]: x["asked"] for x in dq["added_files"]}
