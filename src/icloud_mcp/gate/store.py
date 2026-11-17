@@ -491,6 +491,39 @@ class Store:
             self._note(f"{len(dropped_keys)} request(s) from {legacy.name} lost their request_id, which another waiting request holds: "
                        + ", ".join(dropped_keys))
 
+    def adopt(self, other: str, convert: Any, action_type: str) -> list[tuple[str, str, str]]:
+        """Take every row of source `other` into this store, once and in one transaction (package 4b: iMessage becomes an action
+        type). Ids, states, times, keys and versions stay; `convert(raw) -> raw` gives each stored version its new bytes, so a
+        waiting request gets a new hash (D4-1). A version whose bytes cannot be converted keeps its old ones, and its request
+        stops being approvable rather than vanishing. Ended requests have no bytes and only change source and type. Returns
+        (id, old hash, new hash) for every request that was waiting, for the log."""
+        moved: list[tuple[str, str, str]] = []
+        with self._lock, self._tx():
+            rows = self._db.execute("SELECT * FROM request WHERE source = ?", (other,)).fetchall()
+            for r in rows:
+                old_sha, new_sha, new_raw = r["sha256"], r["sha256"], r["raw"]
+                if r["raw"] is not None:
+                    try:
+                        new_raw = convert(bytes(r["raw"]))
+                        new_sha = hashlib.sha256(new_raw).hexdigest()
+                    except Exception:  # noqa: BLE001
+                        log.warning("approval store: request %s of %s could not be converted; it keeps its old form", r["id"], other)
+                        new_raw = r["raw"]
+                for v in self._db.execute("SELECT * FROM version WHERE request_id = ? AND raw IS NOT NULL", (r["id"],)).fetchall():
+                    try:
+                        vraw = new_raw if v["sha256"] == old_sha else convert(bytes(v["raw"]))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    self._db.execute("UPDATE version SET raw = ?, sha256 = ? WHERE request_id = ? AND n = ?",
+                                     (vraw, hashlib.sha256(vraw).hexdigest(), r["id"], v["n"]))
+                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ? WHERE id = ?",
+                                 (self.source, action_type, new_raw, new_sha, r["id"]))
+                if r["state"] == "waiting":
+                    moved.append((r["id"], old_sha, new_sha))
+        if rows:
+            log.info("approval store: %d %s request(s) moved to %s", len(rows), other, self.source)
+        return moved
+
     def _note(self, problem: str) -> None:
         self.problem = f"{self.problem} {problem}".strip()
         log.warning("approval store: %s", problem)

@@ -16,7 +16,8 @@ let lastV = null, timer = null;
 
 function itemFromHash() {
   const m = /^#\/item\/([a-z]+:[A-Za-z0-9_-]+)$/.exec(location.hash);
-  return m ? m[1] : null;
+  // links sent before package 4b name an iMessage "imessage:<id>"; the same request is "external:<id>" now
+  return m ? m[1].replace(/^imessage:/, "external:") : null;
 }
 
 function signin() {
