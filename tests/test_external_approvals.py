@@ -271,7 +271,7 @@ async def test_an_edit_that_breaks_the_schema_or_has_no_text_to_edit_is_refused(
     ping = src.queue_external("test.ping", {"target": "box"}, "Claude")
     async with client(app) as c:
         token = await signed_in(c)
-        for bad, why in (("x" * 201, "does not fit"), ("", "does not fit"), (None, "missing")):
+        for bad, why in (("x" * 201, "does not fit"), ("", "empty"), (None, "missing")):
             r = await c.put(url(q.id) + "/text", json={"sha": q.sha256, "text": bad}, headers=api(token))
             assert r.status_code == 422 and why in r.json()["error"] and src.pending()[0].sha256 == q.sha256, bad
         it = (await c.get(url(ping.id))).json()

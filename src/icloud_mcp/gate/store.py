@@ -491,6 +491,11 @@ class Store:
             self._note(f"{len(dropped_keys)} request(s) from {legacy.name} lost their request_id, which another waiting request holds: "
                        + ", ".join(dropped_keys))
 
+    def has_source(self, source: str) -> bool:
+        """Whether any row of `source` is in the database (package 4b looks before it moves iMessage rows)."""
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM request WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
+
     def adopt(self, other: str, convert: Any, action_type: str) -> list[tuple[str, str, str]]:
         """Take every row of source `other` into this store, once and in one transaction (package 4b: iMessage becomes an action
         type). Ids, states, times, keys and versions stay; `convert(raw) -> raw` gives each stored version its new bytes, so a

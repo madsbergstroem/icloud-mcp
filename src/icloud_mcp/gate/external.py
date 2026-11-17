@@ -152,6 +152,8 @@ class ExternalApprovals(ApprovalSource):
         reg, type_id, params = self._entry(q)
         if reg is None or not reg.action_type.text_field:
             raise T.TextLocked(self.text_block(q))
+        if not text.strip() and reg.action_type.text_field in (reg.action_type.params_schema.get("required") or []):
+            raise T.TextInvalid("The text is empty.")
         changed = {**params, reg.action_type.text_field: text}
         try:
             A.check_params(reg.action_type, changed)

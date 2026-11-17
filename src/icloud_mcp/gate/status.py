@@ -112,7 +112,8 @@ class ApprovalLedger:
                           action_type=getattr(q, "action_type", None), sha256=getattr(q, "sha256", None))
 
     def _log_expiry(self, kind: str, q: Any) -> None:
-        self.audit.record("approval.expired", actor="server", summary=f"A queued {kind} message expired without an answer",
+        what = "request" if kind == "external" else f"{kind} message"     # an action of any type, an iMessage among them (4b)
+        self.audit.record("approval.expired", actor="server", summary=f"A queued {what} expired without an answer",
                           kind=kind, outbox_id=q.id, expired_at=round(q.expires_at, 3), action_type=getattr(q, "action_type", None),
                           sha256=getattr(q, "sha256", None))
 
