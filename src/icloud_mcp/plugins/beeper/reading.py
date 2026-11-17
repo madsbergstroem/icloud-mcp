@@ -354,7 +354,8 @@ class BeeperBackend:
     # -- searching ----------------------------------------------------------------------------------------------------------
     def search(self, query: str, chat_id: str | None, since: str | None, before: str | None, limit: int) -> Matches:
         def run() -> Matches:
-            args: dict[str, Any] = {"query": query, "limit": max(1, min(limit, 50))}
+            # Beeper's MCP answers 400 Invalid input above 20 (2026-11-17), so more than 20 is asked for with complete=false.
+            args: dict[str, Any] = {"query": query, "limit": max(1, min(limit, 20))}
             if chat_id:
                 args["chatIDs"] = [split_id(chat_id)[1]]
             if after := _later(_when(since, "since"), self.rules.floor()):
