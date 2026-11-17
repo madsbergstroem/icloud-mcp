@@ -250,6 +250,9 @@ class Item extends HTMLElement {
       if (v.by === "service") return [`${it.badge} changed ${row ? `the ${row.label.toLowerCase()}` : "the target"}`, row ? `${row.old} → ${row.new}. Nothing was sent.` : "Nothing was sent."];
       if (v.by === "assistant") return ["Your assistant revised it", text ? `“${text.new}”` : c.map((x) => `${x.label}: ${x.new}`).join(" · ")];
       if (text && text.new === first.text) return ["You went back to your assistant's text", `“${text.new}”`];
+      const rows = c.filter((x) => x.label !== "Text");      // package 2d: the fields the owner changed, by name
+      const was = (x) => (x.new === "" ? `${x.old}, removed` : x.old === "" ? x.new : `${x.old} → ${x.new}`);
+      if (rows.length) return [`You changed ${[...(text ? ["the text"] : []), ...rows.map((x) => x.label)].join(", ")}`, rows.map((x) => `${x.label}: ${was(x)}`).join(" · ")];
       return ["You changed the text", text ? `“${text.new}”` : ""];
     };
     const items = vs.slice().reverse().map((v) => {
