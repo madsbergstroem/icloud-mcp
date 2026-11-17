@@ -820,9 +820,6 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
                             headers=_HEADERS)
 
     # -- activity ------------------------------------------------------------------------------------------------------
-    _FILTERS = {"all": ("All", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agents", ("tool.",)),
-                "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
-
     @mcp.custom_route("/dashboard/activity.json", methods=["GET"])
     async def activity_json(request: Request) -> Response:
         got = signed_in(request)
@@ -843,7 +840,7 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
             box.on_new = (lambda q, kind=src.kind: d.push.notify(kind, f"{kind}:{q.id}"))
     from .dashboard_api import register_api
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
-                 record_failure_line=record_failure_line, headers=_HEADERS, filters=_FILTERS, for_owner=for_owner,
+                 record_failure_line=record_failure_line, headers=_HEADERS, for_owner=for_owner,
                  owner_password_problem=owner_password_problem)
     from .dashboard_accounts import register_accounts_api
     from .textedit import register_text_api

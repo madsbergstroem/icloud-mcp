@@ -143,6 +143,17 @@ async def test_activity_filters_combine_and_each_line_says_who_did_what_to_what(
         assert odd["range"] == 7 and odd["filter"] == "all"
 
 
+async def test_a_changed_setting_shows_its_old_and_new_value_in_activity(web):
+    app, *_ = web()
+    async with client(app) as c:
+        h = await signed(c)
+        r = await c.post("/dashboard/api/settings/calendar", json={"values": {"DEFAULT_TIMEZONE": "Europe/Vienna"}}, headers=h)
+        assert r.status_code == 200
+        rows = [e for d in (await c.get("/dashboard/api/activity?action=settings")).json()["days"] for e in d["entries"]]
+        assert rows[0]["action"] == "Setting" and rows[0]["target"] == "Calendar settings"
+        assert [(x["old"], x["new"]) for x in rows[0]["diff"]] == [("Europe/Berlin", "Europe/Vienna")]
+
+
 async def test_protected_steps_ask_to_confirm_after_five_minutes(web, monkeypatch):
     app, *_ = web()
     async with client(app) as c:

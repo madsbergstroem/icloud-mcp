@@ -490,7 +490,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         state["restart_needed"] = True
         d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), ok=True,
                        summary=f"Changed {g.title.lower()} settings: " + ", ".join(f"{sp.label} {display(sp, o)} → {display(sp, v)}" for sp, o, v in changes),
-                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser])
+                       keys=[sp.key for sp, _, _ in changes], weakened=[sp.key for sp in looser],
+                       changes=[[sp.label, display(sp, o), display(sp, v)] for sp, o, v in changes])      # Activity shows old → new
         log.warning("Owner changed %s from the dashboard; they apply after a restart", ", ".join(sp.key for sp, _, _ in changes))
         return d.api_ok({"note": "Saved. It applies after a restart.", "restart_needed": True})
 
@@ -514,5 +515,6 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
             return d.api_err(f"Not reset: {problem[1]}", 400)
         store.update(remove=(key,))
         state["restart_needed"] = True
-        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key])
+        d.audit.record("settings.changed", actor="owner", via=rec.get("via", ""), summary=f"Reset {sp.label} to {display(sp, back)}", keys=[key],
+                       changes=[[sp.label, display(sp, stored[key]), display(sp, back)]])
         return d.api_ok({"note": f"{sp.label} now follows the server again ({display(sp, back)}). Restart to apply.", "restart_needed": True})
