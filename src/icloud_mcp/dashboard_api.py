@@ -37,7 +37,7 @@ _WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assista
 
 
 def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_in: Callable, recent: Callable,
-                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str], filters: dict[str, Any] | None = None,
+                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str],
                  for_owner: Callable[[str], str],
                  owner_password_problem: Callable[[str, str], str]) -> None:
     from . import passkeys as P
