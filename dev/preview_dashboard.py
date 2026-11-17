@@ -104,7 +104,7 @@ import uvicorn  # noqa: E402
 from icloud_mcp import accounts as A  # noqa: E402
 from icloud_mcp.cal import CalendarError, CalendarService  # noqa: E402
 from icloud_mcp.config import Settings  # noqa: E402
-from icloud_mcp.imessage import IMessageError, IMessageService  # noqa: E402
+
 from icloud_mcp.mail import MailService  # noqa: E402
 from icloud_mcp.server import build_app, create_server  # noqa: E402
 from test_outbox import FakeIMAP  # noqa: E402
@@ -182,20 +182,38 @@ mail = d.sources["mail"].mail
 cal = d.sources["calendar"].cal
 im = d.sources["imessage"]
 
-# -- how a release goes, chosen by a word in the text ----------------------------------------------------------------------------
-def release(self, box, item_id):
-    q = box.claim(item_id)
-    text = json.loads(q.raw)["text"]
-    time.sleep(1.6)                                                  # long enough to see "Sending…"
-    if "[unclear]" in text:
-        return {"status": "unconfirmed", "to": "Hiking crew", "note": "Messages did not report it back."}
-    if "[fail]" in text:
-        box.restore(q)
-        raise IMessageError("The Mac helper did not pick up. Nothing reached it.")
-    return {"status": "sent", "to": "Hiking crew" if "chat900" in q.raw.decode() else "Anna Rivera", "note": ""}
+# -- how a release goes: a made-up Mac, steered by a word in the text --------------------------------------------------------------
+# The real IMessageService.release runs (package 4a: every ending is a state of the approval store); only the Mac is made up.
+from icloud_mcp.bridge import BridgeError  # noqa: E402
+
+GROUPS = {"chat900": {"chat_id": "chat900", "name": "Weekend hike", "group": True, "services": ["iMessage"],
+                      "participants": ["anna@example.org", "tom@example.net"]},
+          "chat901": {"chat_id": "chat901", "name": "Book club", "group": True, "services": ["iMessage"],   # Sam joined after it was queued
+                      "participants": ["anna@example.org", "sam@example.net", "tom@example.net"]}}
 
 
-IMessageService.release = release
+class PreviewMac:
+    def call(self, op, args=None):
+        args = args or {}
+        if op == "imessage_read":
+            c = GROUPS.get(args.get("chat_id"))
+            if c is None:
+                raise BridgeError(f"no conversation with chat_id '{args.get('chat_id')}' (take it from imessage_list_chats)")
+            return {"chat": c, "messages": [], "complete": True}
+        if op == "imessage_send":
+            time.sleep(1.6)                                          # long enough to see "Sending…"
+            text = args.get("text", "")
+            if "[unclear]" in text:
+                return {"status": "unconfirmed"}
+            if "[fail]" in text:
+                raise BridgeError("The Mac did not pick up the request within 60s.")
+            if "[lost]" in text:
+                raise BridgeError("The Mac picked up the request but did not finish within 60s.")
+            return {"status": "sent", "message_id": "m1", "delivered": True}
+        raise BridgeError(f"the preview Mac does not do {op}")
+
+
+im.imessage.bridge = PreviewMac()
 
 
 def cal_release(self, q):
@@ -223,7 +241,7 @@ mail.outbox.add(html.as_bytes(), ["newsletter@example.net"])
 
 
 def imsg(text, chat="anna@example.org", name="", group=False, people=None):
-    raw = json.dumps({"chat_id": chat, "handle": None if group else chat, "text": text,
+    raw = json.dumps({"chat_id": chat if group else None, "handle": None if group else chat, "text": text,
                       "to": {"name": name, "group": group, "participants": people or [{"handle": chat, "name": "Anna Rivera"}]}}, ensure_ascii=False).encode()
     return im.box.add(raw, [chat])
 
@@ -233,6 +251,9 @@ imsg("Saturday works for me. I can drive, three seats free.", chat="chat900", na
      people=[{"handle": "anna@example.org", "name": "Anna Rivera"}, {"handle": "tom@example.net", "name": "Tom Berger"}])
 imsg("Dinner on Sunday? [unclear]", chat="anna2@example.org", people=[{"handle": "anna2@example.org", "name": "Anna Rivera"}])
 imsg("This one will not leave the Mac. [fail]", chat="anna3@example.org", people=[{"handle": "anna3@example.org", "name": "Anna Rivera"}])
+imsg("Chapter four for Thursday?", chat="chat901", name="Book club", group=True,
+     people=[{"handle": "anna@example.org", "name": "Anna Rivera"}, {"handle": "tom@example.net", "name": "Tom Berger"}])
+imsg("Is the parcel with you? [lost]", chat="anna4@example.org", people=[{"handle": "anna4@example.org", "name": "Anna Rivera"}])
 
 from icalendar import Calendar, Event  # noqa: E402
 c = Calendar(); c.add("prodid", "-//preview//"); c.add("version", "2.0")
