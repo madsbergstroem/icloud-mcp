@@ -164,6 +164,8 @@ class FakeGateway:
         def search_messages(query: str = "", chatIDs: list[str] | None = None, dateAfter: str = "", dateBefore: str = "",
                             limit: int = 20) -> str:
             beeper_times(dateAfter=dateAfter, dateBefore=dateBefore)
+            if limit > 20:                                     # as Beeper's MCP: 400 Invalid input
+                raise ValueError("Invalid input")
             self.msearch_calls.append({"query": query, "chatIDs": chatIDs, "dateAfter": dateAfter, "dateBefore": dateBefore, "limit": limit})
             out = []
             for cid, msgs in self.messages.items():

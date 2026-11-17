@@ -140,6 +140,12 @@ async def test_search_in_one_chat_and_within_the_age(web, hub, chats):
     assert got["matches"] == [] and chats.msearch_calls[-1]["chatIDs"] == [GROUP] and chats.msearch_calls[-1]["dateAfter"]
 
 
+async def test_search_asks_beeper_for_at_most_twenty(web, hub, chats):
+    app, mcp, _src = reading(web, hub)
+    got = await call(mcp, "messages_search", query="o", limit=100)
+    assert got["matches"] and chats.msearch_calls[-1]["limit"] == 20
+
+
 def test_search_text_is_read_as_beeper_writes_it():
     """The shape of the owner's gateway (2026-11-12), names and texts made up."""
     text = """Found 3+ messages across 1 chat (showing 3)
