@@ -37,7 +37,7 @@ _WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assista
 
 
 def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_in: Callable, recent: Callable,
-                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str], filters: dict[str, Any],
+                 set_cookie: Callable, record_failure_line: Callable, headers: dict[str, str], filters: dict[str, Any] | None = None,
                  for_owner: Callable[[str], str],
                  owner_password_problem: Callable[[str, str], str]) -> None:
     from . import passkeys as P
@@ -112,6 +112,88 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": who,
                 "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", ""),
                 "tag": tag, "note": note}
+
+    # -- the activity table: what each entry did, to what, and its details (the log holds names, addresses and hashes, no text)
+    actions = {"all": ("All actions", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agent requests", ("tool.",)),
+               "settings": ("Settings", ("settings.", "accounts.", "push.", "server.", "owner_password.")),
+               "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
+    labels = {"approval.sent": "Approved", "approval.discarded": "Discarded", "approval.edited": "Edited", "approval.edit_undone": "Edited",
+              "approval.withdrawn": "Withdrawn", "approval.revised": "Changed", "approval.expired": "Expired", "approval.failed": "Failed",
+              "approval.file_added": "File added", "approval.file_removed": "File removed", "tool.queued": "Asked",
+              "signin.passkey": "Sign-in", "signin.password": "Sign-in", "signin.access": "Sign-in", "signin.confirm": "Confirmed",
+              "signin.signout": "Signed out", "passkey.added": "Passkey added", "passkey.removed": "Passkey removed",
+              "app.connected": "App connected", "app.denied": "App refused", "app.signed_out": "App signed out",
+              "app.signed_out_all": "App signed out", "settings.changed": "Setting", "accounts.changed": "Accounts",
+              "push.added": "Notifications", "push.removed": "Notifications", "server.paused": "Paused", "server.resumed": "Resumed",
+              "server.restart": "Restarted", "owner_password.changed": "Password"}
+    warn_tags = ("Changed", "Unclear", "Withdrawn", "Expired", "Not sent")
+    lead = re.compile(r"^(?:Approved|Discarded|Did not send|Could not send|Withdrew|Edited|Brought back the original text of|Added|Removed"
+                      r"|Took the file for|Signed in (?:with|through)|Confirmed with|Connected|Refused to connect|Signed out(?: of)?"
+                      r"|Turned (?:on|off) notifications for|Asked to|Changed|Reset|Paused|Resumed|Restarted|An upload added)\s+")
+    results = {"confirmed": "Delivered", "sent": "Sent", "unconfirmed": "Not confirmed: it may or may not have gone through",
+               "failed": "Failed: it may or may not have gone through"}
+    reasons = {"target_changed": "The target changed after you looked", **REASON_WORDS}
+
+    def actor_label(actor: str) -> str:
+        return {"owner": "You", "server": "Server", "unknown": "Someone", "agent": "Upload"}.get(actor, actor or "?")
+
+    def short(h: Any) -> str:
+        h = str(h or "")
+        return f"{h[:8]}…{h[-4:]}" if len(h) > 16 else h
+
+    def when(t: float | None) -> str:
+        if not t:
+            return ""
+        day, today_ = datetime.fromtimestamp(t, d.tz).date(), datetime.now(d.tz).date()
+        name = "Today" if day == today_ else "Yesterday" if day == today_ - timedelta(days=1) else day.strftime("%a %d %b")
+        return f"{name} {d.fmt_time(t)}"
+
+    def target(e: dict[str, Any], diff: list[Any]) -> str:
+        """What the entry acted on: its summary without the verb the action tag already says, and without the reason."""
+        action, text = str(e.get("action", "")), str(e.get("summary") or e.get("action", ""))
+        text = re.sub(r"\bimessage\b", "iMessage", text)
+        if action.startswith("tool.") and action != "tool.queued":
+            return text                            # an agent's own action: the verb is the news
+        text = lead.sub("", text, count=1).replace(" (waiting for your approval)", "").removesuffix(" before sending")
+        if diff or action in ("approval.revised", "approval.discarded", "approval.withdrawn"):
+            text = text.split(": ", 1)[0]
+        return text if text[1:2].isupper() else text[:1].upper() + text[1:]      # “iMessage …” keeps its small i
+
+    def details(e: dict[str, Any]) -> list[list[str]]:
+        x, rows = e.get("details") or {}, []
+        add = lambda label, v: rows.append([label, str(v)]) if v not in (None, "", [], {}) else None  # noqa: E731
+        add("Request", x.get("outbox_id"))
+        add("Replaces request", x.get("replaced"))
+        add("Version", x.get("version"))
+        add("Action", x.get("action_type"))
+        add("Tool", x.get("tool"))
+        add("Sent to", ", ".join(map(str, x.get("recipients") or [])))
+        add("Count", x.get("count"))
+        add("To", x.get("destination"))
+        add("Result", results.get(str(x.get("delivery")), x.get("delivery")))
+        add("Why", reasons.get(str(x.get("reason")), x.get("reason")))
+        add("Loosened", ", ".join(map(str, x.get("weakened") or [])))
+        if x.get("new_sha256"):
+            add("Hash before", short(x.get("sha256")))
+            add("Hash after", short(x.get("new_sha256")))
+        else:
+            add("Hash", short(x.get("sha256")))
+        add("Hash it replaced", short(x.get("previous_sha256")))
+        add("Error", x.get("error"))
+        add("Signed in with" if e.get("actor") == "owner" else "Client", via_text(e))
+        return rows
+
+    def row(e: dict[str, Any]) -> dict[str, Any]:
+        """One line of the table: time, actor, action, target; opened, the details and what changed from what to what."""
+        action, base = str(e.get("action", "")), entry(e)
+        x = e.get("details") or {}
+        diff = [{"label": str(c[0]), "old": str(c[1]), "new": str(c[2])} for c in (x.get("changes") or []) if isinstance(c, list) and len(c) == 3]
+        name = base["tag"] if base["tag"] in ("Unclear", "Not sent") else labels.get(action, "Agent" if action.startswith("tool.") else action)
+        if not e.get("ok", True):
+            name = "Sign-in failed" if action.startswith("signin.") else "Failed" if name not in ("Unclear",) else name
+        tone = "bad" if not e.get("ok", True) else "warn" if name in warn_tags else ""
+        return {**base, "when": when(e.get("t")), "actor": actor_label(str(e.get("actor") or "")), "action": name, "tone": tone,
+                "target": target(e, diff), "details": details(e), "diff": diff}
 
     # -- session -------------------------------------------------------------------------------------------------------
     @route("/session", ["GET"])
@@ -409,13 +491,30 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
     # -- activity ------------------------------------------------------------------------------------------------------
     @route("/activity", ["GET"])
     async def activity(request: Request) -> Response:
+        """Filters, combined: days (1, 7, 30 or how long the log keeps), action (a group of actions; `filter` is the older
+        name), actor (one actor of the entries in that time and group). The newest first, at most 1000."""
         got = reader(request)
         if isinstance(got, Response):
             return got
-        which = request.query_params.get("filter", "all")
-        which = which if which in filters else "all"
-        entries = await asyncio.to_thread(audit.entries, 300, filters[which][1])
+        qp = request.query_params
+        keep = int(s.audit_keep_days or 90)
+        ranges = [(n, f"{n} days" if n > 1 else "24 hours") for n in sorted({n for n in (1, 7, 30) if n < keep} | {keep})]
+        try:
+            days_ = int(qp.get("days", 7))
+        except ValueError:
+            days_ = 7
+        days_ = days_ if days_ in dict(ranges) else min(7, keep)
+        which = qp.get("action") or qp.get("filter") or "all"
+        which = which if which in actions else "all"
+        since = time.time() - days_ * 86400
+        found = await asyncio.to_thread(audit.entries, 1000, actions[which][1], since)
         chain = await asyncio.to_thread(audit.verify)
+        seen = {}
+        for e in found:
+            seen.setdefault(str(e.get("actor") or ""), actor_label(str(e.get("actor") or "")))
+        who = qp.get("actor", "all")
+        who = who if who in seen else "all"
+        entries = [e for e in found if who == "all" or str(e.get("actor") or "") == who]
         today_ = datetime.now(d.tz).date()
         days: dict[Any, list[dict[str, Any]]] = {}
         for e in entries:
@@ -423,9 +522,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         out = []
         for day, items in days.items():
             label = "Today" if day == today_ else "Yesterday" if day == today_ - timedelta(days=1) else day.strftime("%a %d %b %Y")
-            out.append({"day": label, "entries": [entry(e) for e in items]})
-        return ok({"filter": which, "filters": [[k, label] for k, (label, _) in filters.items()], "days": out,
-                   "log_on": bool(s.audit_log), "keep_days": s.audit_keep_days,
+            out.append({"day": label, "entries": [row(e) for e in items]})
+        return ok({"filter": which, "filters": [[k, label] for k, (label, _) in actions.items()], "days": out,
+                   "range": days_, "ranges": [[n, label] for n, label in ranges],
+                   "actor": who, "actors": [["all", "Everyone"]] + sorted(([k, v] for k, v in seen.items()), key=lambda kv: (kv[0] != "owner", kv[1].lower())),
+                   "more": len(found) >= 1000, "log_on": bool(s.audit_log), "keep_days": s.audit_keep_days,
                    "chain": {"ok": chain["ok"], "entries": chain.get("entries", 0), "broken_at": chain.get("broken_at")}})
 
     # -- security ------------------------------------------------------------------------------------------------------

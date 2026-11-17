@@ -107,6 +107,42 @@ async def test_activity_is_grouped_by_day_in_plain_words(web):
         assert (await c.get("/dashboard/api/activity?filter=approvals")).json()["days"] == []
 
 
+async def test_activity_filters_combine_and_each_line_says_who_did_what_to_what(web, monkeypatch):
+    app, mcp, *_ = web()
+    audit = mcp._icloud_dashboard.audit
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() - 3 * 86400)          # three days ago: inside 7 days, outside 24 hours
+    audit.record("approval.revised", actor="server", summary="Did not send marketplace reply “Bike trailer”: the target changed, it waits as version 2",
+                 kind="external", outbox_id="r-1", sha256="a" * 64, new_sha256="b" * 64, reason="target_changed", version=2)
+    monkeypatch.setattr(time, "time", real)
+    audit.record("tool.queued", actor="Claude Desktop", via="client-1", summary="Asked to send email “Lunch” (waiting for your approval)",
+                 tool="mail_send_message", outbox_id="m-1", sha256="c" * 64)
+    audit.record("signin.password", actor="unknown", via="password", ok=False, summary="Wrong owner password")
+    async with client(app) as c:
+        await signed(c)
+        a = (await c.get("/dashboard/api/activity")).json()
+        assert a["range"] == 7 and [n for n, _ in a["ranges"]] == [1, 7, 30, 90] and a["filter"] == "all"
+        rows = [e for d in a["days"] for e in d["entries"]]
+        by = {e["action"]: e for e in rows}
+        changed = by["Changed"]
+        assert changed["actor"] == "Server" and changed["target"] == "Marketplace reply “Bike trailer”" and changed["tone"] == "warn"
+        assert ["Hash before", "aaaaaaaa…aaaa"] in changed["details"] and ["Hash after", "bbbbbbbb…bbbb"] in changed["details"]
+        assert ["Version", "2"] in changed["details"] and ["Why", "The target changed after you looked"] in changed["details"]
+        asked = by["Asked"]
+        assert asked["actor"] == "Claude Desktop" and asked["target"] == "Send email “Lunch”" and ["Client", "client-1"] in asked["details"]
+        assert by["Sign-in failed"]["actor"] == "Someone" and by["Sign-in failed"]["tone"] == "bad"
+        assert by["Sign-in"]["actor"] == "You" and ["Signed in with", "the owner password"] in by["Sign-in"]["details"]
+        assert ["Claude Desktop", "Claude Desktop"] in a["actors"] and a["actors"][:2] == [["all", "Everyone"], ["owner", "You"]]
+        # one day back leaves the change of three days ago out; one actor leaves the others out; an action group narrows again
+        assert "Changed" not in {e["action"] for d in (await c.get("/dashboard/api/activity?days=1")).json()["days"] for e in d["entries"]}
+        only = (await c.get("/dashboard/api/activity?actor=Claude%20Desktop")).json()
+        assert [e["action"] for d in only["days"] for e in d["entries"]] == ["Asked"] and only["actor"] == "Claude Desktop"
+        both = (await c.get("/dashboard/api/activity?action=approvals&actor=Claude%20Desktop")).json()
+        assert both["actor"] == "all" and [e["action"] for d in both["days"] for e in d["entries"]] == ["Changed"]   # no such actor here: everyone
+        odd = (await c.get("/dashboard/api/activity?days=5&action=nope")).json()
+        assert odd["range"] == 7 and odd["filter"] == "all"
+
+
 async def test_protected_steps_ask_to_confirm_after_five_minutes(web, monkeypatch):
     app, *_ = web()
     async with client(app) as c:

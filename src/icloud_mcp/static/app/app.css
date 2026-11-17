@@ -97,6 +97,42 @@ ion-toggle::part(label) { white-space: normal; }
 
 ion-item.sel { --background: var(--active); }                          /* the open request; an entry Home pointed to in Activity */
 
+/* Activity: a table on a wide screen (time, actor, action, target), two lines per entry on a phone; an entry opens in place */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px 0; }
+.filters ion-item { flex: 1 1 0; min-width: 0; --background: var(--surface); --min-height: 46px; --padding-start: 12px; --inner-padding-end: 8px;
+  border: 1px solid var(--border); border-radius: 12px; font-size: 14px; }
+.filters { flex-wrap: nowrap; gap: 8px; }
+.act-table { margin: 14px 16px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.act-head { display: none; }
+.act-item { --min-height: 50px; --inner-padding-end: 8px; }
+.act-row { display: grid !important; grid-template-columns: auto 1fr; grid-template-areas: "action action" "target target" "actor time";
+  gap: 3px 8px; margin: 10px 0 !important; font-size: 15px; }
+.act-time { grid-area: time; color: var(--muted); font-size: 13.5px; text-align: right; }
+.act-actor { grid-area: actor; color: var(--muted); font-size: 13.5px; }
+.act-action { grid-area: action; }
+.act-target { grid-area: target; overflow-wrap: anywhere; }
+.act-det { padding: 4px 16px 16px; font-size: 14px; line-height: 1.45; }
+.act-det p { margin: 6px 0 0; color: var(--muted); }
+.act-det dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 10px 0 0; }
+.act-det dt { color: var(--muted); }
+.act-det dd { margin: 0; overflow-wrap: anywhere; }
+.act-det .diff { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.act-det .diff div { padding: 6px 10px; overflow-wrap: anywhere; }
+.act-det .diff .old { background: var(--neg-bg); color: var(--neg-ink); }
+.act-det .diff .new { background: var(--ok-bg); color: var(--ok-ink); }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.tag.end.bad, .tag.end.warn { border-color: transparent; }
+@media (min-width: 900px) {
+  .act-head { display: grid; grid-template-columns: 128px 140px 140px 1fr; gap: 12px; padding: 10px 16px; color: var(--muted); font-size: 13px;
+    border-bottom: 1px solid var(--border); }
+  .act-row { grid-template-columns: 128px 140px 140px 1fr; grid-template-areas: "time actor action target"; gap: 12px; align-items: center; margin: 0 !important; font-size: 14.5px; }
+  .act-time, .act-actor { font-size: 14.5px; text-align: left; }
+  .filters { gap: 10px; }
+  .filters ion-item { --padding-start: 16px; font-size: 16px; }
+  .act-actor { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-det { padding-left: 156px; }
+}
+
 /* notices: a result, a pause, the install tip, how a send went */
 .notice { margin: 12px 16px 0; border-radius: var(--radius); padding: 14px 16px; font-size: 15px; line-height: 1.5; display: flex; gap: 12px; align-items: flex-start; background: var(--raised); color: var(--text); }
 .notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
@@ -208,5 +244,6 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .split > .detail [data-foot] { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); margin-top: 16px; }
   .single { max-width: 720px; }                                       /* Home with nothing waiting: one column */
   /* Activity and the settings pages read in one column */
-  ion-tab[tab="activity"] [data-body], ion-tab[tab="settings"] [data-body] { max-width: 720px; }
+  ion-tab[tab="settings"] [data-body] { max-width: 720px; }
+  ion-tab[tab="activity"] [data-body] { max-width: 1180px; }
 }

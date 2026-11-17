@@ -113,8 +113,8 @@ class AuditLog:
             f.write("".join(x + "\n" for x in keep))
         os.replace(tmp, self.path)
 
-    def entries(self, limit: int = 200, kinds: tuple[str, ...] = ()) -> list[dict[str, Any]]:
-        """The newest entries first. kinds filters by action prefix ('approval.', 'signin.')."""
+    def entries(self, limit: int = 200, kinds: tuple[str, ...] = (), since: float = 0) -> list[dict[str, Any]]:
+        """The newest entries first. kinds filters by action prefix ('approval.', 'signin.'); since stops at older entries."""
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -125,6 +125,8 @@ class AuditLog:
                 e = json.loads(line)
             except ValueError:
                 continue
+            if since and e.get("t", 0) < since:
+                break
             if kinds and not str(e.get("action", "")).startswith(kinds):
                 continue
             out.append(e)

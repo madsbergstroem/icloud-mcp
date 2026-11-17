@@ -14,14 +14,16 @@ export function page(el, title, back, body) {
 function push(from, tag, props) { from.closest("ion-nav").push(tag, props || {}); }
 
 // -- Activity -----------------------------------------------------------------------------------------------------------
+// One line per entry, like an admin console's audit log: time, who, what kind of action, what it acted on. A line with more
+// to say opens in place: the old and new values, the request and its hashes, how it was confirmed. Three filters combine.
 class Activity extends HTMLElement {
   connectedCallback() {
-    this.filter = "all";
+    this.f = { days: 7, action: "all", actor: "all" };
     this.innerHTML = `<ion-content><div data-body></div></ion-content>`;
     this.load();
     window.addEventListener("icm:changed", (this.onChange = () => this.load()));
-    // Home asks to show one entry (a request the assistant took back): all entries, scrolled to it and marked
-    window.addEventListener("icm:activity-focus", (this.onFocus = () => { this.filter = "all"; this.load(); }));
+    // Home asks to show one entry (a request the assistant took back): every action and actor, the entry opened and marked
+    window.addEventListener("icm:activity-focus", (this.onFocus = () => { this.f = { ...this.f, action: "all", actor: "all" }; this.load(); }));
   }
 
   disconnectedCallback() {
@@ -29,27 +31,54 @@ class Activity extends HTMLElement {
     window.removeEventListener("icm:activity-focus", this.onFocus);
   }
 
+  select(key, label, value, options) {
+    return `<ion-item><ion-select data-f="${key}" label="${esc(label)}" interface="${selectUi()}" label-placement="${wide() ? "start" : "stacked"}" value="${esc(String(value))}">${options.map(([v, l]) =>
+      `<ion-select-option value="${esc(String(v))}">${esc(l)}</ion-select-option>`).join("")}</ion-select></ion-item>`;
+  }
+
+  line(e, i) {
+    const open = e.note || e.error || e.diff.length || e.details.length;
+    const head = `<ion-label class="act-row"><span class="act-time num">${esc(e.when)}</span><span class="act-actor">${esc(e.actor)}</span>
+      <span class="act-action">${tag(e.action, `end ${e.tone}`)}</span><span class="act-target">${esc(e.target)}</span></ion-label>`;
+    if (!open) return `<ion-item class="act-item" lines="full" data-t="${esc(e.t)}">${head}</ion-item>`;
+    const diff = e.diff.length ? `<div class="diff">${e.diff.map((c) => `<div class="old">− ${esc(c.label)}: ${esc(c.old)}</div><div class="new">+ ${esc(c.label)}: ${esc(c.new)}</div>`).join("")}</div>` : "";
+    const notes = [e.note, e.error].filter(Boolean).map((n) => `<p>${esc(n)}</p>`).join("");
+    const rows = e.details.length ? `<dl>${e.details.map(([k, v]) => `<dt>${esc(k)}</dt><dd${/^Hash|^Request|^Replaces/.test(k) ? ' class="mono"' : ""}>${esc(v)}</dd>`).join("")}</dl>` : "";
+    return `<ion-accordion value="${i}" data-t="${esc(e.t)}"><ion-item slot="header" class="act-item" lines="full">${head}</ion-item>
+      <div slot="content" class="act-det">${notes}${diff}${rows}</div></ion-accordion>`;
+  }
+
   async load() {
     let a;
-    try { a = await get("/activity?filter=" + encodeURIComponent(this.filter)); } catch (e) { fail(e); return; }
-    const days = a.days.map((d) => section(d.day) + `<ion-list class="inset">${d.entries.map((e) => `<ion-item data-t="${esc(e.t)}">
-      <ion-label class="ion-text-wrap" style="display:flex;gap:12px"><span class="num" style="color:var(--muted);min-width:44px">${esc(e.time)}</span>
-      <span><span${e.ok ? "" : ' style="color:var(--negative)"'}>${esc(e.who)} ${esc(e.what)}</span>${e.error ? `<br><small style="color:var(--muted)">${esc(e.error)}</small>` : ""}
-      ${e.note ? `<br><small style="color:var(--muted)">${esc(e.note)}</small>` : ""}</span>
-      </ion-label>${e.tag ? tag(e.tag, e.tag === "Unclear" ? "warn end" : "end").replace('class="tag', 'slot="end" class="tag') : ""}</ion-item>`).join("")}</ion-list>`).join("");
-    const chain = a.chain.ok ? `The chain of entries is intact (${a.chain.entries} entries).`
-      : `<span style="color:var(--negative)">The log was changed after it was written, at entry ${esc(a.chain.broken_at)}. Entries from there on cannot be trusted.</span>`;
-    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `Everything that was sent, dropped or changed in the last ${esc(a.keep_days)} days.`)
-      + (a.log_on ? "" : `<div class="notice pause"><span>The activity log is turned off on this server.</span></div>`)
-      + `<div style="padding:10px 16px 0"><ion-segment value="${esc(a.filter)}" scrollable>${a.filters.map(([k, l]) =>
-        `<ion-segment-button value="${esc(k)}"><ion-label>${esc(l)}</ion-label></ion-segment-button>`).join("")}</ion-segment></div>`
-      + (days || `<div class="empty"><b>Nothing recorded${this.filter === "all" ? " yet" : " of this kind"}.</b>What your assistant does and what you change shows up here.</div>`)
-      + `<p class="note">${chain} No message text, passwords or tokens. <a href="/dashboard/activity.json" download>Download</a></p>`;
-    this.querySelector("ion-segment").addEventListener("ionChange", (e) => { this.filter = e.detail.value; this.load(); });
+    const q = new URLSearchParams({ days: this.f.days, action: this.f.action, actor: this.f.actor });
+    try { a = await get("/activity?" + q); } catch (e) { fail(e); return; }
+    Object.assign(this.f, { days: a.range, action: a.filter, actor: a.actor });
+    const entries = a.days.flatMap((d) => d.entries);
+    const chain = a.chain.ok ? tag("Log intact", "end")
+      : tag("Log changed", "end bad");
+    const broken = a.chain.ok ? "" : `<div class="notice bad"><span>The log was changed after it was written, at entry ${esc(a.chain.broken_at)}. Entries from there on cannot be trusted.</span></div>`;
+    const filtered = this.f.action !== "all" || this.f.actor !== "all";
+    this.querySelector("[data-body]").innerHTML = titleBlock("Activity", `Every approval, change and sign-in of the last ${esc(a.keep_days)} days. ${chain}`)
+      + (a.log_on ? "" : `<div class="notice pause"><span>The activity log is turned off on this server.</span></div>`) + broken
+      + `<div class="filters">${this.select("days", "Timeframe", a.range, a.ranges)}${this.select("action", "Action", a.filter, a.filters)}${this.select("actor", "Actor", a.actor, a.actors)}</div>`
+      + (entries.length ? `<div class="act-table"><div class="act-head"><span>Time</span><span>Actor</span><span>Action</span><span>Target</span></div>
+          <ion-accordion-group multiple>${entries.map((e, i) => this.line(e, i)).join("")}</ion-accordion-group></div>`
+        : `<div class="empty"><b>Nothing ${filtered ? "of this kind " : ""}in this time.</b>${filtered ? "Try all actions and everyone, or a longer timeframe." : "What your assistant does and what you change shows up here."}</div>`)
+      + (a.more ? `<p class="note">Only the newest 1000 entries are shown. A shorter timeframe or a filter shows the rest.</p>` : "")
+      + `<p class="note">No message text, passwords or tokens: names, addresses and hashes only. <a href="/dashboard/activity.json" download>Download all</a></p>`;
+    this.querySelectorAll("ion-select[data-f]").forEach((sel) => sel.addEventListener("ionChange", (ev) => {
+      this.f[sel.dataset.f] = ev.detail.value;
+      if (sel.dataset.f !== "actor") this.f.actor = "all";       // the actors come from the entries the other two filters leave
+      this.load();
+    }));
     if (app.activityFocus) {
-      const hit = this.querySelector(`ion-item[data-t="${CSS.escape(String(app.activityFocus))}"]`);
+      const hit = this.querySelector(`[data-t="${CSS.escape(String(app.activityFocus))}"]`);
       app.activityFocus = null;
-      if (hit) { hit.classList.add("sel"); hit.scrollIntoView({ block: "center" }); }
+      if (hit) {
+        hit.classList.add("sel");
+        if (hit.tagName === "ION-ACCORDION") this.querySelector("ion-accordion-group").value = [hit.getAttribute("value")];
+        hit.scrollIntoView({ block: "center" });
+      }
     }
   }
 }

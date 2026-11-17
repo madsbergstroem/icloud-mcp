@@ -251,7 +251,10 @@ if "external" in d.sources:                                  # and a request who
     from icloud_mcp import actions as AT
     d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")
 
+d.audit.record("signin.password", actor="unknown", via="password", ok=False, summary="Wrong owner password")
 d.audit.record("signin.password", actor="owner", via="password", summary="Signed in with the owner password")
+d.audit.record("settings.changed", actor="owner", via="password", summary="Changed safety settings: Quiet hours 22:00 → 23:00",
+               keys=["QUIET_HOURS"], changes=[["Quiet hours", "22:00", "23:00"]])      # a change with its old and new value (Activity)
 # One request the assistant queued and then took back, through the real tool, so Home and Activity show what a withdrawal leaves.
 taken_back = mail.send(to=["jordan.lee@example.org"], subject="Offer for the delivery van", body="Hi Jordan, we can offer 18,400 EUR for the van.")["outbox_id"]
 asyncio.run(mcp.call_tool("approval_withdraw", {"id": taken_back, "reason": "mistake"}))

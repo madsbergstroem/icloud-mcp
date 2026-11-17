@@ -21,6 +21,17 @@ def test_entries_chain_and_verify(tmp_path):
     assert AuditLog(str(tmp_path)).verify()["ok"] is True
 
 
+def test_entries_since_stop_at_the_first_older_one(tmp_path, monkeypatch):
+    log = AuditLog(str(tmp_path))
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() - 2 * 86400)
+    log.record("signin.password", actor="owner", summary="two days ago")
+    monkeypatch.setattr(time, "time", real)
+    log.record("approval.sent", actor="owner", summary="now")
+    assert [e["summary"] for e in log.entries(since=real() - 86400)] == ["now"]
+    assert [e["summary"] for e in log.entries(since=real() - 3 * 86400)] == ["now", "two days ago"]
+
+
 def test_a_changed_or_removed_line_breaks_the_chain(tmp_path):
     a = AuditLog(str(tmp_path))
     for i in range(4):

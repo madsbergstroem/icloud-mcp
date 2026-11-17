@@ -19,7 +19,7 @@ from test_dashboard import SAME, api, client, queue, signed_in, web  # noqa: F40
 from test_text_edit import IMESSAGE_ENV, queue_calendar, queue_imessage
 
 GOLDEN = Path(__file__).parent / "fixtures" / "legacy_approvals_golden.json"
-_VOLATILE = {"t", "created_at", "expires_at", "expired_at", "at", "h", "prev", "cursor", "v", "time", "signed_in_at", "last_sent_at", "withdrawn"}
+_VOLATILE = {"t", "created_at", "expires_at", "expired_at", "at", "h", "prev", "cursor", "v", "time", "signed_in_at", "last_sent_at", "withdrawn", "when"}
 
 
 def _scrub(value, ids):
@@ -31,7 +31,7 @@ def _scrub(value, ids):
     if isinstance(value, str):
         for item_id, label in ids.items():
             value = value.replace(item_id, f"<id:{label}>")
-        return re.sub(r"\b[0-9a-f]{64}\b", "<sha>", value)
+        return re.sub(r"\b[0-9a-f]{8}…[0-9a-f]{4}\b", "<short sha>", re.sub(r"\b[0-9a-f]{64}\b", "<sha>", value))
     return value
 
 
