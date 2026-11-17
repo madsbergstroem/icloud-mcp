@@ -180,10 +180,12 @@ d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
 mail = d.sources["mail"].mail
 cal = d.sources["calendar"].cal
-im = d.sources["imessage"]
+ext = d.sources["external"]
+from icloud_mcp.imessage import ACTION_ID as IMESSAGE, params_of  # noqa: E402
+im_service = ext.registry.get(IMESSAGE).recheck.__self__        # the server's own IMessageService (package 4b: an action type)
 
 # -- how a release goes: a made-up Mac, steered by a word in the text --------------------------------------------------------------
-# The real IMessageService.release runs (package 4a: every ending is a state of the approval store); only the Mac is made up.
+# The real recheck and executor of imessage.send run (package 4b; every ending is a state of the approval store); only the Mac is made up.
 from icloud_mcp.bridge import BridgeError  # noqa: E402
 
 GROUPS = {"chat900": {"chat_id": "chat900", "name": "Weekend hike", "group": True, "services": ["iMessage"],
@@ -213,7 +215,7 @@ class PreviewMac:
         raise BridgeError(f"the preview Mac does not do {op}")
 
 
-im.imessage.bridge = PreviewMac()
+im_service.bridge = PreviewMac()
 
 
 def cal_release(self, q):
@@ -241,9 +243,9 @@ mail.outbox.add(html.as_bytes(), ["newsletter@example.net"])
 
 
 def imsg(text, chat="anna@example.org", name="", group=False, people=None):
-    raw = json.dumps({"chat_id": chat if group else None, "handle": None if group else chat, "text": text,
-                      "to": {"name": name, "group": group, "participants": people or [{"handle": chat, "name": "Anna Rivera"}]}}, ensure_ascii=False).encode()
-    return im.box.add(raw, [chat])
+    d = {"chat_id": chat if group else None, "handle": None if group else chat, "text": text,
+         "to": {"name": name, "group": group, "participants": people or [{"handle": chat, "name": "Anna Rivera"}]}}
+    return ext.queue_external(IMESSAGE, params_of(d), None)
 
 
 imsg("Hi Anna, running ten minutes late. Start without me.")
