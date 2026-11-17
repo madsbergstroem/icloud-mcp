@@ -40,7 +40,8 @@ _LOG_LIMIT = 1_000_000               # the log keeps AUDIT_KEEP_DAYS days; this 
 _PAGE = 50                           # records per `since` answer
 _MAX_ID = 64                         # outbox ids are 16 characters; anything longer is not one
 # why the server, not the owner, discarded a request (a code in the log, never a parameter), and what an agent should do about it
-_REASONS = {"target_changed": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it."}
+_REASONS = {"target_changed": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it.",
+            "not_allowed": "The owner's lists no longer allow someone it would reach, so it was not sent. Only the owner can change the lists."}
 
 
 class Released(str):

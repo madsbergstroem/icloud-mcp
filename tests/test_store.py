@@ -541,3 +541,57 @@ def test_the_migration_covers_ended_and_edited_rows_and_runs_once(tmp_path):
         again = make(tmp_path)
         assert [(v["author"], v["raw"]) for v in again.versions(ended.id)] == [("assistant", None)]
         assert [v["author"] for v in again.versions(edited.id)] == ["owner"]
+
+
+# -- package 4a: iMessage in the same file ------------------------------------------------------------------------------------
+IMSG = b'{"chat_id": null, "handle": "+31600000001", "text": "Hi", "to": {"participants": []}}'
+
+
+def test_a_crashed_imessage_is_recovered_even_when_the_external_store_opens_first(tmp_path):
+    """protects=package 4a criterion 4: whichever store of the process opens first ends every source's half-sent request as
+    unclear, and the iMessage ledger logs it once; fails_when=the iMessage row stays executing because the external store took the
+    lock; no_claim=a real process kill: the restart is a second process that exits without finishing."""
+    code = ("import os, sys; sys.path.insert(0, %r)\n" % str(ROOT / "src")
+            + "from icloud_mcp.gate.store import Store\n"
+            + "st = Store(%r, 'imessage', 3600, 20)\n" % str(tmp_path)
+            + "q = st.add(%r, ['+31600000001'])\n" % IMSG
+            + "st.claim(q.id, 'executing')\nprint(q.id, flush=True)\nos._exit(0)\n")
+    qid = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True).stdout.strip()
+    make(tmp_path)                                                        # the external store takes the lock first
+    imsg = S.Store(str(tmp_path), "imessage", 3600, 20)
+    audit = AuditLog(str(tmp_path))
+    ApprovalLedger({"imessage": imsg}, audit)
+    assert row(imsg, qid)["state"] == "unclear" and row(imsg, qid)["outcome_reason"] == "interrupted"
+    lines = [e for e in audit.entries(10) if e["action"] == "approval.sent"]
+    assert len(lines) == 1 and lines[0]["details"]["kind"] == "imessage" and lines[0]["details"]["delivery"] == "unconfirmed"
+
+
+def test_the_export_writes_waiting_imessages_back_with_their_ids_and_hashes(tmp_path):
+    """protects=package 4a criterion 3: a rollback keeps the waiting iMessages, in the file and format the previous version reads;
+    fails_when=no imessage-outbox.json, another id or hash, or a file written when no iMessage waits; no_claim=the previous version
+    itself (its Outbox class reads the file here)."""
+    st = S.Store(str(tmp_path), "imessage", 3600, 20)
+    q = st.add(IMSG, ["+31600000001"])
+    st._db.close()
+    os.close(S._locks.pop(str(Path(tmp_path).resolve())))                 # as if this process stopped: the command opens it again
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    run = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(tmp_path)], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0 and "Wrote 1 waiting request(s) to imessage-outbox.json" in run.stdout, run.stderr
+    old = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
+    assert [(x.id, x.sha256, x.raw) for x in old.pending()] == [(q.id, q.sha256, IMSG)]
+    empty = tmp_path / "none"
+    empty.mkdir()
+    S.Store(str(empty), "external", 3600, 20)._db.close()
+    os.close(S._locks.pop(str(empty.resolve())))
+    subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(empty)], check=True, env=env, timeout=60, capture_output=True)
+    assert not (empty / "imessage-outbox.json").exists()
+
+
+def test_the_json_imessage_queue_is_read_in_with_its_ids_and_hashes(tmp_path):
+    """protects=package 4a criterion 3: the first start with the store keeps every waiting iMessage, byte for byte; fails_when=an
+    id, a hash or the bytes change, or the file is not renamed; no_claim=none beyond protects."""
+    old = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
+    q = old.add(IMSG, ["+31600000001"])
+    st = S.Store(str(tmp_path), "imessage", 3600, 20, legacy="imessage-outbox.json")
+    assert [(x.id, x.sha256, x.raw) for x in st.pending()] == [(q.id, q.sha256, IMSG)]
+    assert (tmp_path / "imessage-outbox.json.migrated").exists() and not (tmp_path / "imessage-outbox.json").exists()

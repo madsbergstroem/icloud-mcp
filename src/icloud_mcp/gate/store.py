@@ -1,6 +1,6 @@
 """The approval store: requests in one SQLite file, DATA_DIR/approvals.db, with an explicit state for each (docs/SENDGATE.md,
 package 3). It has the methods of the JSON queue (outbox.py): add, pending, claim, replace, restore, on_new, on_expiry, so a source
-uses either. For now it holds the external source only; mail, calendar and iMessage move to it with packages 4 to 6.
+uses either. It holds the external source and iMessage (package 4a); mail and calendar move to it with packages 5 and 6.
 
 States, and who moves a request between them:
 
@@ -27,7 +27,7 @@ What else holds:
 
 - One process per DATA_DIR: an exclusive lock on DATA_DIR/approvals.lock is taken when the first store opens and held for the
   life of the process. A second process refuses to start and names the lock. Only that first open recovers rows left in
-  `executing` by a crash: they become `unclear` (reason interrupted; it may have gone out; never repeated). A second store on
+  `executing` by a crash, of every source: they become `unclear` (reason interrupted; it may have gone out; never repeated). A second store on
   the same DATA_DIR in the same process never touches rows the first is carrying out.
 - Expiry is lazy: every read and write first ends what has timed out. Each expired or recovered request is reported exactly
   once through on_expiry / on_recovered; the `reported` column remembers it, so a report that could not be made (nothing was
@@ -152,7 +152,7 @@ class Store:
     keeps_keys = True                        # a key stays bound after its request ended (external.py asks for the fingerprint)
 
     def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None):
-        """source: which kind of request this store holds (external). legacy: the JSON queue file to read in once."""
+        """source: which kind of request this store holds (external, imessage). legacy: the JSON queue file to read in once."""
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source, self.ttl, self.max_items, self.keep_days = source, ttl, max_items, max(1, keep_days)
@@ -267,11 +267,12 @@ class Store:
 
     def _recover(self) -> None:
         with self._lock, self._tx():
-            rows = [r["id"] for r in self._db.execute("SELECT id FROM request WHERE source = ? AND state = 'executing'", (self.source,))]
+            # every source: only the first store of the process gets here, and the others open later on the same file
+            rows = [r["id"] for r in self._db.execute("SELECT id FROM request WHERE state = 'executing'")]
             for item_id in rows:
                 self._end(item_id, "unclear", "interrupted")
         if rows:
-            log.warning("%d %s request(s) were being carried out when the server stopped; they are unclear and never repeated", len(rows), self.source)
+            log.warning("%d request(s) were being carried out when the server stopped; they are unclear and never repeated", len(rows))
 
     # -- the clock -------------------------------------------------------------------------------------------------------
     def _expire(self) -> None:
@@ -494,6 +495,15 @@ class Store:
         self.problem = f"{self.problem} {problem}".strip()
         log.warning("approval store: %s", problem)
 
+    def check_export(self, legacy: str) -> None:
+        """Raise RuntimeError when an export to `legacy` would be refused: a request is being carried out, or the file exists."""
+        with self._lock:
+            busy = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'executing'", (self.source,)).fetchone()[0]
+            if busy:
+                raise RuntimeError(f"{busy} request(s) are being carried out right now. Wait until they end, then export again.")
+            if (self.dir / legacy).exists():
+                raise RuntimeError(f"{legacy} exists already. Move it away first, so nothing in it is overwritten.")
+
     def export_waiting(self, legacy: str) -> dict[str, int]:
         """Write the waiting requests back to the JSON queue file, for a rollback to a version without the store, and end them
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
@@ -501,11 +511,7 @@ class Store:
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
         path = self.dir / legacy
         with self._lock:
-            busy = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'executing'", (self.source,)).fetchone()[0]
-            if busy:
-                raise RuntimeError(f"{busy} request(s) are being carried out right now. Wait until they end, then export again.")
-            if path.exists():
-                raise RuntimeError(f"{path.name} exists already. Move it away first, so nothing in it is overwritten.")
+            self.check_export(legacy)
             waiting = [self._q(r) for r in self._db.execute(
                 "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]

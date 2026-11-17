@@ -1,5 +1,7 @@
-"""Write the waiting external requests from DATA_DIR/approvals.db back to external-outbox.json, for a rollback to a version
-without the approval store (docs/SENDGATE.md, package 3, "Rollback"). It ships in the package, so it runs in the Docker image:
+"""Write the waiting requests from DATA_DIR/approvals.db back to their JSON queue files, for a rollback to a version without the
+approval store (docs/SENDGATE.md, package 3, "Rollback"): external requests to external-outbox.json, and waiting iMessages to
+imessage-outbox.json (package 4a; that file is written only when an iMessage waits). It ships in the package, so it runs in the
+Docker image:
 
     docker run --rm -v <your data volume>:/data <this image> python -m icloud_mcp.gate.export_queue /data
     PYTHONPATH=src python -m icloud_mcp.gate.export_queue DATA_DIR          (from a checkout)
@@ -19,14 +21,21 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     try:
-        store = Store(argv[1], "external", ttl=86400, max_items=10**6)
-        got = store.export_waiting("external-outbox.json")
+        stores = [(Store(argv[1], source, ttl=86400, max_items=10**6), name) for source, name in SOURCES]
+        stores = [(store, name) for store, name in stores if name == "external-outbox.json" or store.pending()]
+        for store, name in stores:                    # refuse before anything is written, so no file is half done
+            store.check_export(name)
+        done = [(name, store.export_waiting(name)) for store, name in stores]
     except RuntimeError as e:
         print(f"Not exported: {e}", file=sys.stderr)
         return 1
-    print(f"Wrote {got['written']} waiting request(s) to external-outbox.json. A rollback loses {got['ended_lost']} ended request(s), "
-          f"{got['unclear_lost']} of them unclear, and their keys.")
+    for name, got in done:
+        print(f"Wrote {got['written']} waiting request(s) to {name}. A rollback loses {got['ended_lost']} ended request(s), "
+              f"{got['unclear_lost']} of them unclear, and their keys.")
     return 0
+
+
+SOURCES = (("external", "external-outbox.json"), ("imessage", "imessage-outbox.json"))
 
 
 if __name__ == "__main__":

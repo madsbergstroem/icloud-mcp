@@ -97,6 +97,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return "Changed", "The target changed after you looked. Nothing was sent; it waits with the new details."
         if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "target_changed":
             return "Not sent", "The target changed after you looked. Nothing was sent."
+        if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "not_allowed":
+            return "Not sent", "Your lists no longer allow someone it would reach. Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
             if (e.get("details") or {}).get("kind") == "external":
                 return "Unclear", "It may or may not have gone through. Nothing is sent again."
@@ -132,7 +134,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                       r"|Turned (?:on|off) notifications for|Asked to|Changed|Reset|Paused|Resumed|Restarted|An upload added)\s+")
     results = {"confirmed": "Delivered", "sent": "Sent", "unconfirmed": "Not confirmed: it may or may not have gone through",
                "failed": "Failed: it may or may not have gone through"}
-    reasons = {"target_changed": "The target changed after you looked", **REASON_WORDS}
+    reasons = {"target_changed": "The target changed after you looked", "not_allowed": "Your lists no longer allow someone it would reach",
+               **REASON_WORDS}
 
     def actor_label(actor: str) -> str:
         return {"owner": "You", "server": "Server", "unknown": "Someone", "agent": "Upload"}.get(actor, actor or "?")
@@ -478,7 +481,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                          sha256=q.sha256, new_sha256=e.sha256, reason="target_changed", version=e.n)
             return err(str(e), 409, state="waiting", revised=True, version=e.n)
         except Rechecked as e:                     # checked again just before sending: not the target the owner saw; it ends here
-            audit.record("approval.discarded", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed",
+            why = "your lists no longer allow it" if e.reason == "not_allowed" else "the target changed"
+            audit.record("approval.discarded", actor="server", summary=f"Did not send {v['badge'].lower()} “{v['title']}”: {why}",
                          kind=src.kind, outbox_id=q.id, action_type=getattr(q, "action_type", None), sha256=q.sha256, reason=e.reason)
             return err(str(e), 409, gone=True, state="discarded")
         except Exception as e:  # noqa: BLE001  -- release() puts the item back; the owner can retry or discard
