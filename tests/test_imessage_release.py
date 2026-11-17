@@ -101,3 +101,17 @@ def test_a_chat_the_owner_hid_after_queuing_is_not_sent(s, tmp_path):
     with pytest.raises(Rechecked, match="hid") as got:
         m.release(box, q)
     assert got.value.reason == "not_allowed" and box.state_of(q) == ("discarded", "not_allowed") and not sends(b)
+
+
+def test_the_server_reads_the_old_queue_file_in_and_runs_imessages_from_the_store(s, tmp_path):
+    """protects=package 4a criterion 3 at start-up: an upgrade keeps every waiting iMessage with its id and hash, and the server
+    queues new ones in approvals.db; fails_when=the file is ignored, read twice, or the server still writes the JSON file;
+    no_claim=the Docker volume (same DATA_DIR rules)."""
+    from icloud_mcp.outbox import Outbox
+    from icloud_mcp.server import create_server
+    old = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
+    q = old.add(b'{"chat_id": null, "handle": "anna@example.org", "text": "Hi", "to": {"participants": []}}', ["anna@example.org"])
+    mcp, _ = create_server(s)
+    box = mcp._icloud_outboxes["imessage"]
+    assert box.path.name == "approvals.db" and [(x.id, x.sha256) for x in box.pending()] == [(q.id, q.sha256)]
+    assert (tmp_path / "imessage-outbox.json.migrated").exists() and not (tmp_path / "imessage-outbox.json").exists()

@@ -235,7 +235,7 @@ async def test_an_edited_imessage_is_sent_as_edited_and_an_unconfirmed_send_says
     src, q = queue_imessage(mcp)
     calls = []
     status = {"v": "sent"}
-    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id: (
+    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id, sha256=None: (
         calls.append(json.loads(box.claim(item_id).raw)["text"]) or {"status": status["v"], "to": "Hiking crew", "note": ""}))
     async with client(app) as c:
         token = await signed_in(c)
@@ -252,7 +252,7 @@ async def test_an_edited_imessage_is_sent_as_edited_and_an_unconfirmed_send_says
 async def test_a_sent_imessage_has_no_state_flag(web, monkeypatch):
     app, mcp, *_ = web(**IMESSAGE_ENV)
     src, q = queue_imessage(mcp)
-    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id: (
+    monkeypatch.setattr(type(src.imessage), "release", lambda self, box, item_id, sha256=None: (
         box.claim(item_id) and {"status": "sent", "to": "Hiking crew", "note": ""}))
     async with client(app) as c:
         token = await signed_in(c)

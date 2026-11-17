@@ -40,7 +40,10 @@ async def _tool(mcp, name, **args):
 
 
 def _expire(box, item_id):
-    box._items[item_id] = dataclasses.replace(box._items[item_id], expires_at=time.time() - 30)
+    if hasattr(box, "_items"):                       # the JSON queue (mail, calendar)
+        box._items[item_id] = dataclasses.replace(box._items[item_id], expires_at=time.time() - 30)
+    else:                                            # the approval store (iMessage, package 4a)
+        box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, item_id))
 
 
 async def _scenario(web, monkeypatch) -> dict:
@@ -64,7 +67,7 @@ async def _scenario(web, monkeypatch) -> dict:
         return real_smtp(self, msg, rcpts)
 
     monkeypatch.setattr(MailService, "_smtp_send", smtp_send)
-    monkeypatch.setattr(type(msg_src.imessage), "release", lambda self, box, item_id: (
+    monkeypatch.setattr(type(msg_src.imessage), "release", lambda self, box, item_id, sha256=None: (
         box.claim(item_id) and {"status": imessage["v"], "to": "Hiking crew", "note": ""}))
     monkeypatch.setattr(type(cal_src.cal), "release", lambda self, q: "Added “Autumn fair”. iCloud now emails jana@example.org.")
 
