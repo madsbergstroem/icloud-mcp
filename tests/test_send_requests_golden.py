@@ -101,8 +101,11 @@ async def _scenario(web, monkeypatch) -> dict:
     bp["with_reply_and_key"] = name("bp-key", await send_beeper(mcp, SINGLE, "Yes, nine is fine", reply_to="msg-1", request_id="ask-1"))
     bp["same_key"] = await send_beeper(mcp, SINGLE, "Yes, nine is fine", reply_to="msg-1", request_id="ask-1")
     boxes = mcp._icloud_outboxes
-    im["stored"], im["on_disk"] = decoded(stored(boxes["imessage"])), decoded(on_disk(boxes["imessage"]))
-    bp["stored"], bp["on_disk"] = decoded(stored(boxes["external"])), decoded(on_disk(boxes["external"]))
+    of = lambda entries, t: [e for e in entries if e.get("action_type") == t]          # noqa: E731  -- one source since package 4b
+    im["stored"], im["on_disk"] = (decoded(of(stored(boxes["external"]), "imessage.send")),
+                                   decoded(of(on_disk(boxes["external"]), "imessage.send")))
+    bp["stored"], bp["on_disk"] = (decoded(of(stored(boxes["external"]), "beeper.message.send")),
+                                   decoded(of(on_disk(boxes["external"]), "beeper.message.send")))
     rec["status"] = {label: await call(mcp, "approval_status", {"id": oid}) for oid, label in ids.items()}
     return _scrub(steady(rec), ids)
 
@@ -124,4 +127,4 @@ def test_the_record_really_holds_stored_entries():
     assert want["beeper"]["same_key"]["already_queued"] is True and want["beeper"]["with_reply_and_key"]["status"] == "queued_for_owner_approval"
     assert "ÜBER-café" in want["imessage"]["stored"][0]["raw_text"] and want["beeper"]["stored"][2]["key"] == "ask-1"
     assert want["imessage"]["same_again"]["outbox_id"] == "<id:im-handle>"          # the same bytes: the same entry, not a second
-    assert want["status"]["bp-key"]["kind"] == "external" and want["status"]["im-group"]["kind"] == "imessage"
+    assert want["status"]["bp-key"]["kind"] == "external" and want["status"]["im-group"]["kind"] == "external"   # one source since package 4b

@@ -103,15 +103,29 @@ def test_a_chat_the_owner_hid_after_queuing_is_not_sent(s, tmp_path):
     assert got.value.reason == "not_allowed" and box.state_of(q) == ("discarded", "not_allowed") and not sends(b)
 
 
-def test_the_server_reads_the_old_queue_file_in_and_runs_imessages_from_the_store(s, tmp_path):
-    """protects=package 4a criterion 3 at start-up: an upgrade keeps every waiting iMessage with its id and hash, and the server
-    queues new ones in approvals.db; fails_when=the file is ignored, read twice, or the server still writes the JSON file;
-    no_claim=the Docker volume (same DATA_DIR rules)."""
+def test_the_server_moves_queued_imessages_to_the_action_type_once(s, tmp_path):
+    """protects=package 4b criterion 3: iMessages queued before 4b (the JSON file of before 4a, and rows of source imessage) wait
+    on as requests of type imessage.send with their ids, each with a new hash and one approval.migrated line naming both; ended
+    rows keep their state; a second start moves nothing; fails_when=a request is lost, doubled, keeps its old hash or source, or
+    the log line is missing or repeated; no_claim=the Docker volume (same DATA_DIR rules)."""
+    import hashlib
+    from icloud_mcp.gate.store import Store
+    from icloud_mcp.imessage import convert
     from icloud_mcp.outbox import Outbox
     from icloud_mcp.server import create_server
     old = Outbox(str(tmp_path), 3600, 20, filename="imessage-outbox.json")
-    q = old.add(b'{"chat_id": null, "handle": "anna@example.org", "text": "Hi", "to": {"participants": []}}', ["anna@example.org"])
+    raw = b'{"chat_id": null, "handle": "anna@example.org", "text": "Hi", "to": {"participants": [{"handle": "anna@example.org"}]}}'
+    q = old.add(raw, ["anna@example.org"])
+    rows = Store(str(tmp_path), "imessage", 3600, 20)
+    gone = rows.add(b'{"chat_id": null, "handle": "tom@example.net", "text": "Bye", "to": {"participants": []}}', ["tom@example.net"])
+    rows.claim(gone.id, "discarded")
     mcp, _ = create_server(s)
-    box = mcp._icloud_outboxes["imessage"]
-    assert box.path.name == "approvals.db" and [(x.id, x.sha256) for x in box.pending()] == [(q.id, q.sha256)]
+    box = mcp._icloud_outboxes["external"]
+    assert [(x.id, x.sha256, x.action_type) for x in box.pending()] == [(q.id, hashlib.sha256(convert(raw)).hexdigest(), "imessage.send")]
+    assert box.state_of(gone.id) == ("discarded", None) and not box.has_source("imessage") and "imessage" not in mcp._icloud_outboxes
     assert (tmp_path / "imessage-outbox.json.migrated").exists() and not (tmp_path / "imessage-outbox.json").exists()
+    lines = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]
+    assert [(e["details"]["outbox_id"], e["details"]["old_sha256"], e["details"]["sha256"]) for e in lines] == \
+           [(q.id, q.sha256, box.pending()[0].sha256)]
+    create_server(s)
+    assert len([x for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]) == 1

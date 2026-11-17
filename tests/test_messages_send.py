@@ -80,7 +80,7 @@ async def refused(mcp, **args):
     return str(e.value)
 
 
-def waiting(mcp, kind="imessage"):
+def waiting(mcp, kind="external"):
     return mcp._icloud_outboxes[kind].pending()
 
 
@@ -103,7 +103,7 @@ async def test_a_message_to_an_address_or_to_a_chat_waits_for_the_owner_and_noth
     in_group = await call(mcp, text=TEXT, chat_id="imessage:chat900")
     for got in (by_address, in_group):
         assert got["status"] == "queued_for_owner_approval" and got["sent"] is False
-        assert got["approve_at"].endswith(f"/dashboard#/item/imessage:{got['outbox_id']}") and "approval_status" in got["notice"]
+        assert got["approve_at"].endswith(f"/dashboard#/item/external:{got['outbox_id']}") and "approval_status" in got["notice"]
     assert by_address["to"]["handle"] == "anna@example.org" and in_group["to"]["chat_id"] == "chat900" and in_group["to"]["group"] is True
     assert len(waiting(mcp)) == 2 and mac.sent() == []
 
@@ -183,10 +183,10 @@ def test_local_mode_never_sends_without_the_owner(tmp_path, monkeypatch):
 async def test_approving_sends_once_and_approval_status_says_so(web, monkeypatch):
     app, mcp, mac = launch(web, monkeypatch)
     got = await call(mcp, text=TEXT, handle="anna@example.org")
-    code, body = await approve(app, f"imessage:{got['outbox_id']}")
+    code, body = await approve(app, f"external:{got['outbox_id']}")
     assert code == 200 and mac.sent() == [{"handle": "anna@example.org", "text": TEXT}]
     status = json.loads((await mcp.call_tool("approval_status", {"id": got["outbox_id"]})).content[0].text)
-    assert status["kind"] == "imessage" and status["status"] == "sent" and TEXT not in json.dumps(status)
+    assert status["kind"] == "external" and status["status"] == "sent" and TEXT not in json.dumps(status)
     assert waiting(mcp) == []
 
 
@@ -194,7 +194,7 @@ async def test_a_send_the_mac_did_not_confirm_is_unclear_and_never_repeated(web,
     app, mcp, mac = launch(web, monkeypatch)
     mac.send_status = "unconfirmed"
     got = await call(mcp, text=TEXT, handle="anna@example.org")
-    await approve(app, f"imessage:{got['outbox_id']}")
+    await approve(app, f"external:{got['outbox_id']}")
     status = json.loads((await mcp.call_tool("approval_status", {"id": got["outbox_id"]})).content[0].text)
     assert status["status"] == "unclear" and len(mac.sent()) == 1 and waiting(mcp) == []
 
@@ -202,7 +202,7 @@ async def test_a_send_the_mac_did_not_confirm_is_unclear_and_never_repeated(web,
 async def test_what_the_owner_edits_is_what_is_sent_and_approval_status_says_it_was_edited(web, monkeypatch):
     app, mcp, mac = launch(web, monkeypatch)
     got = await call(mcp, text=TEXT, handle="anna@example.org")
-    key = f"imessage:{got['outbox_id']}"
+    key = f"external:{got['outbox_id']}"
     async with client(app) as c:
         h = api(await signed_in(c))
         sha = (await c.get(f"/dashboard/api/items/{key}")).json()["sha"]
@@ -248,7 +248,7 @@ async def test_the_activity_log_and_the_push_note_hold_no_text_and_no_chat_id(we
     assert '"tool.queued"' in audit and "messages_send_request" in audit                            # the request is on record ...
     for secret in ("Running late", "ÜBER", "chat900", "Hiking crew"):                                   # ... and nothing of what it says
         assert secret not in audit and secret not in caplog.text, secret
-    assert pushed == [("imessage", f"imessage:{got['outbox_id']}")]                                 # kind and id, no words
+    assert pushed == [("external", f"external:{got['outbox_id']}")]                                 # kind and id, no words
 
 
 # -- the id prefix picks the channel ---------------------------------------------------------------------------------------------
@@ -257,10 +257,11 @@ async def test_the_prefix_sends_a_request_to_its_own_approval_flow_and_the_other
     to_beeper = await call(mcp, text=WORDS, chat_id=f"beeper:{SINGLE}")
     to_phone = await call(mcp, text=TEXT, chat_id="imessage:chat900")
     assert to_beeper["approve_at"].endswith(f"#/item/external:{to_beeper['outbox_id']}") and to_beeper["chat"]["title"] == "Example Person"
-    assert to_phone["approve_at"].endswith(f"#/item/imessage:{to_phone['outbox_id']}")
-    assert [q.recipients for q in waiting(mcp, "external")] == [[SINGLE]]                           # Beeper gets the id without its prefix
+    assert to_phone["approve_at"].endswith(f"#/item/external:{to_phone['outbox_id']}")
+    by_type = {q.action_type: q for q in waiting(mcp)}                                                  # one source since package 4b
+    assert by_type["beeper.message.send"].recipients == [SINGLE]                                    # Beeper gets the id without its prefix
     assert gateway.chat_calls == [{"chatID": SINGLE, "maxParticipantCount": 0}] and gateway.sent == []
-    assert len(waiting(mcp)) == 1 and mac.sent() == []
+    assert sorted(by_type) == ["beeper.message.send", "imessage.send"] and mac.sent() == []
 
 
 async def test_a_beeper_chat_does_not_take_an_address_a_reply_or_a_key_from_imessage(web, hub, gateway, monkeypatch):

@@ -767,7 +767,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     warm: dict[str, Any] = {}                   # area -> zero-argument warm-up, run in the background at start (WARMUP_ON_START)
     pools: dict[str, Any] = {}                  # area -> zero-argument view of its kept connections, for the health check
     mcp._icloud_warmups = warm
-    approval = {"mail": None, "imessage": None, "imessage_outbox": None}   # what the owner's approval pages serve, if anything
+    approval = {"mail": None, "imessage": None}   # what the owner's approval pages serve, if anything
     hub = Hub()                                  # the owner's chats on every channel: backends and senders are added where each one is set up
 
     # ------------------------------------------------------------------ mail
@@ -2651,14 +2651,10 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             register_chat_reading("mac")
 
             if s.imessage_allow_send and writable:
-                messages_outbox = None
                 if s.imessage_send_requires_approval and not s.local_mode and provider is not None:
-                    from .gate.store import Store         # package 4a: the approval store; the JSON file is read in once
-                    messages_outbox = Store(s.data_dir, "imessage", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
-                                            legacy="imessage-outbox.json")
-                    approval.update(imessage=messages, imessage_outbox=messages_outbox)
-
-                hub.add_sender(IMessageSender(messages, messages_outbox, s.public_url))
+                    approval.update(imessage=messages)    # package 4b: an action of type imessage.send, its sender added with the source
+                else:
+                    hub.add_sender(IMessageSender(messages, None, s.public_url))
 
         if s.enable_maps:
             _maps_cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
@@ -3043,10 +3039,13 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     external = None                        # requests of the action types registered in actions.py and by the plugins that send
     senders = [p.capabilities.messages for p in plugins if p.capabilities.messages is not None
                and p.capabilities.messages.action_type is not None and p.capabilities.messages.sending_on(s)]
-    if s.dashboard and provider is not None and _audit is not None:
+    if provider is not None and _audit is not None and (s.dashboard or approval["imessage"] is not None):
         from . import actions
         from .plugins import PluginContext
         registry = actions.REGISTRY.copy()         # this server's own, so what its settings turn on stays with it
+        if approval["imessage"] is not None:       # iMessage is an action type of the server's own (package 4b)
+            from .imessage import register_type as register_imessage
+            register_imessage(registry, approval["imessage"])
         for m in senders:                          # the core calls the executor once, after approval; list and policy at queue and approval
             registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s), channel_tool="messages_send_request")
         for p in plugins:                          # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
@@ -3064,19 +3063,24 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             from .gate.store import Store
             external = ExternalApprovals(Store(s.data_dir, "external", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
                                               legacy="external-outbox.json"), registry)
+            _adopt_imessages(s, external.box, _audit)
+            if approval["imessage"] is not None:
+                hub.add_sender(IMessageSender(approval["imessage"], None, s.public_url, external=external))
     mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
-                            "imessage": approval["imessage_outbox"],
                             "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,
                             **({"external": external.box} if external is not None else {})}                       # counts for the admin API
     global _audit_outboxes
     _audit_outboxes = mcp._icloud_outboxes          # tool.queued names the hash of what it queued (_audit_call)
-    mcp._icloud_approval_tools = ("on" if external is not None else "off: no action types are set up") if s.dashboard \
+    # approval_request and approval_list_actions are for the types an agent asks for itself; iMessage, the server's own type, has
+    # its own tool, so it alone does not bring them (package 4b changes nothing an agent sees)
+    asked_for = external is not None and any(not r.builtin for r in external.registry.registrations())
+    mcp._icloud_approval_tools = ("on" if asked_for else "off: no action types are set up") if s.dashboard \
         else "off: the dashboard is not enabled"
     if provider is not None and _audit is not None and any(mcp._icloud_outboxes.values()):
         ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
         register_approval_status(tool, _guard, ledger)
         register_approval_withdraw(tool, _guard, ledger, external)
-        if external is not None:                    # approval_list_actions and approval_request (gate/requests.py)
+        if asked_for:                               # approval_list_actions and approval_request (gate/requests.py)
             from .gate import requests as gate_requests
             gate_requests.register(tool, _guard, gate_requests.Requests(external, s.approval_link, max(1, s.effective_tool_timeout - 2)), _WRITE)
         if external is not None:
@@ -3111,19 +3115,32 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             Returns: status queued_for_owner_approval (sent=false, outbox_id: tell the owner, do not resend; approval_status(id=outbox_id) says what became of it; approval_withdraw takes it back while it waits), with approve_at and, for iMessage, to (the recipients) or, for Beeper, chat {title, network, group, people}, expires_in_seconds, and already_queued when request_id matched a waiting request. For iMessage also not_sent_needs_owner (show the owner the text), or, where the owner turned approval off, sent (message_id, delivered), failed or unconfirmed (check messages_read_chat before any retry).
             Errors: refusals say nothing was sent and only the owner can change the lists; a chat Beeper does not know, a full queue, a request_id used for a different request, and an offline Mac (check icloud_get_helper_status, do not retry) raise an error."""
             return hub.send_request(text, chat_id=chat_id, handle=handle, reply_to=reply_to, request_id=request_id)
-    if (approval["mail"] or approval["imessage_outbox"]) and provider is not None:
-        register_outbox_routes(mcp, provider, s, approval["mail"], approval["imessage"], approval["imessage_outbox"], audit=_audit)
+    if (approval["mail"] or external is not None) and provider is not None:
+        register_outbox_routes(mcp, provider, s, approval["mail"], external=external, audit=_audit)
     if s.dashboard and provider is not None and _audit is not None:
-        from .dashboard import IMessageApprovals, MailApprovals, register_dashboard
+        from .dashboard import MailApprovals, register_dashboard
         from .dashboard import CalendarApprovals
         sources = ([MailApprovals(approval["mail"])] if approval["mail"] is not None else []) + \
                   ([CalendarApprovals(approval["calendar"])] if approval.get("calendar") is not None else []) + \
-                  ([IMessageApprovals(approval["imessage"], approval["imessage_outbox"])] if approval["imessage_outbox"] is not None else []) + \
                   ([external] if external is not None else [])
         mcp._icloud_dashboard = register_dashboard(mcp, provider, s, _audit, sources)
         if s.dashboard_settings != "off":
             from .settings import register_settings
             register_settings(mcp._icloud_dashboard, mcp, s)
+
+def _adopt_imessages(s: Settings, box: Any, audit: Any) -> None:
+    """Package 4b: iMessage requests queued before it (source imessage in approvals.db, or the older imessage-outbox.json) become
+    requests of type imessage.send, once, with their ids; each waiting one gets a new hash and one log line naming both (D4-1).
+    Runs on every start and finds nothing after the first."""
+    from .gate.store import Store
+    from .imessage import ACTION_ID, convert
+    if not (Path(s.data_dir) / "imessage-outbox.json").exists() and not box.has_source("imessage"):
+        return
+    Store(s.data_dir, "imessage", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days, legacy="imessage-outbox.json")
+    for item_id, old, new in box.adopt("imessage", convert, ACTION_ID):
+        audit.record("approval.migrated", actor="server", summary="A waiting iMessage became a request of type imessage.send",
+                     kind="external", outbox_id=item_id, action_type=ACTION_ID, sha256=new, old_sha256=old)
+
 
 def build_app(s: Settings, mcp: MCPServer):
     """The ASGI app exactly as served in production (used by main() and by the tests)."""

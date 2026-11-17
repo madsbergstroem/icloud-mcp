@@ -100,7 +100,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "not_allowed":
             return "Not sent", "Your lists no longer allow someone it would reach. Nothing was sent."
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
-            if (e.get("details") or {}).get("kind") == "external":
+            if (e.get("details") or {}).get("kind") == "external" and (e.get("details") or {}).get("action_type") != "imessage.send":
                 return "Unclear", "It may or may not have gone through. Nothing is sent again."
             return "Unclear", "Messages did not confirm it. Nothing is sent again."
         return "", ""
@@ -267,7 +267,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         m = re.match(r"Approved (.+?) “(.*)”$", text)
         rcpt = (e.get("details") or {}).get("recipients") or []
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else text,
-                "what": ("iMessage" if m.group(1) == "imessage" else m.group(1)[:1].upper() + m.group(1)[1:]) if m else "", "to": short_names(", ".join(map(str, rcpt[:1]))),
+                "what": ("iMessage" if m.group(1) == "imessage" else m.group(1)[:1].upper() + m.group(1)[1:]) if m else "",
+                # an action names who it reached as its type says it ("Hiking crew"), not as mail addresses to shorten
+                "to": str(rcpt[0]) if rcpt and (e.get("details") or {}).get("kind") == "external" else short_names(", ".join(map(str, rcpt[:1]))),
                 "unclear": (e.get("details") or {}).get("delivery") in ("unconfirmed", "failed")}
 
     def withdrawn_item(e: dict[str, Any]) -> dict[str, Any]:
@@ -290,6 +292,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
+                **({"tags": v["tags"]} if v.get("tags") else {}), **({"to_shown": True} if v.get("log_to") else {}),
                 **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
@@ -390,6 +393,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src, q, v = found[0]
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
+               **({"text_style": v["text_style"]} if v.get("text_style") else {}), **({"confirm": v["confirm"]} if v.get("confirm") else {}),
                "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
                **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
@@ -492,7 +496,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None), sha256=q.sha256,
-                     recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
+                     recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")]
+                     + ([v["label"]] if v.get("log_to") and v.get("label") else []))     # D4-2: a type the server registers itself
         # "state" only when the send is not certain; nothing is sent again from here
         return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})
 

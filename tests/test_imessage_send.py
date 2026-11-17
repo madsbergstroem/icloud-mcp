@@ -146,11 +146,11 @@ async def test_the_outbox_page_shows_and_sends_a_queued_imessage(s, monkeypatch)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://mcp.example.com") as c:
             page = (await c.post("/outbox", data={"password": "x" * 16})).text
             assert "iMessage to anna@example.org" in page and "Lunch &lt;b&gt;tomorrow&lt;/b&gt;?" in page
-            m = re.search(r'name="id" value="([^"]+)"><input type="hidden" name="kind" value="imessage"><input type="hidden" name="action" '
+            m = re.search(r'name="id" value="([^"]+)"><input type="hidden" name="kind" value="external"><input type="hidden" name="action" '
                           r'value="approve"><input type="hidden" name="exp" value="(\d+)"><input type="hidden" name="tok" value="([0-9a-f]+)"', page)
             forged = await c.post("/outbox/act", data={"id": m[1], "kind": "mail", "action": "approve", "exp": m[2], "tok": m[3]})
             assert forged.status_code == 400 and not sent                                         # a token for one queue fits no other
-            done = await c.post("/outbox/act", data={"id": m[1], "kind": "imessage", "action": "approve", "exp": m[2], "tok": m[3]})
+            done = await c.post("/outbox/act", data={"id": m[1], "kind": "external", "action": "approve", "exp": m[2], "tok": m[3]})
             assert "Sent" in done.text and sent == [("imessage_send", {"handle": "anna@example.org", "text": "Lunch <b>tomorrow</b>?"})]
 
 
