@@ -9,7 +9,8 @@ import pytest
 
 from icloud_mcp.cal import CalendarError, CalendarService
 from icloud_mcp.config import Settings
-from icloud_mcp.mail import ANSWERED, MailError, MailService
+from icloud_mcp.gate.actions import Rechecked
+from icloud_mcp.mail import ANSWERED, MailError, MailService, SmtpFailed
 from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
 
@@ -77,14 +78,14 @@ def test_release_sends_stored_message_once(env):
     s, fake, sent = env
     mail = MailService(s)
     qid = send(mail, subject="Quarterly numbers", body="See attached", bcc=["carol@example.org"])["outbox_id"]
-    res = mail.release(qid)
+    res = mail.approve(qid)
     assert res["status"] == "sent" and res["saved_to"] == "Sent Messages"
     (msg, rcpts), = sent
     assert str(msg["Subject"]) == "Quarterly numbers" and "See attached" in msg.get_body(("plain",)).get_content()
     assert sorted(rcpts) == ["bob@example.org", "carol@example.org"]
     assert len(fake.appended) == 1 and fake.appended[0][0] == "Sent Messages"
     with pytest.raises(MailError):                        # second release of the same id must fail
-        mail.release(qid)
+        mail.approve(qid)
     assert len(sent) == 1
 
 
@@ -92,12 +93,13 @@ def test_failed_send_stays_queued_and_can_retry(env, monkeypatch):
     s, fake, sent = env
     mail = MailService(s)
     qid = send(mail)["outbox_id"]
-    monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: (_ for _ in ()).throw(MailError("SMTP send failed")))
+    # package 6a: only a failure that proves nothing went out puts it back (SmtpFailed with maybe_sent false)
+    monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: (_ for _ in ()).throw(SmtpFailed("SMTP send failed", False)))
     with pytest.raises(MailError):
-        mail.release(qid)
+        mail.approve(qid)
     assert [q.id for q in mail.outbox.pending()] == [qid]
     monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: sent.append((m, r)) or {})
-    assert mail.release(qid)["status"] == "sent"
+    assert mail.approve(qid)["status"] == "sent"
 
 
 def test_reply_flags_original_only_after_release(env, monkeypatch):
@@ -107,7 +109,7 @@ def test_reply_flags_original_only_after_release(env, monkeypatch):
     mail = MailService(s)
     r = mail.reply("INBOX", 7, "Yes, happy to.")
     assert r["status"] == "queued_for_owner_approval" and fake.flags == []
-    res = mail.release(r["outbox_id"])
+    res = mail.approve(r["outbox_id"])
     assert res["original_marked_answered"] is True and fake.flags == [([7], [ANSWERED])]
     assert str(sent[0][0]["In-Reply-To"]) == "<1@example.org>"
 
@@ -123,7 +125,7 @@ def test_release_skips_stale_original_flags(env, monkeypatch, operation, current
               else mail.forward("INBOX", 7, ["bob@example.org"], note="FYI"))
     assert mail.outbox.pending()[0].followup["uidvalidity"] == 7
     fake.uidvalidity = current
-    result = mail.release(queued["outbox_id"])
+    result = mail.approve(queued["outbox_id"])
     assert result["status"] == "sent" and len(sent) == 1
     assert "out of date" in result["original_flag_skipped"]
     assert "original_marked_answered" not in result and "original_flagged" not in result
@@ -164,9 +166,9 @@ def test_allowlist_checked_when_queued_and_again_on_release(env):
         send(mail, to=["eve@evil.test"])
     qid = send(mail)["outbox_id"]
     tightened = MailService(dataclasses.replace(s, send_allowlist=("someone@else.test",)))
-    with pytest.raises(MailError, match="SEND_ALLOWLIST"):
-        tightened.release(qid)
-    assert sent == [] and len(tightened.outbox.pending()) == 1
+    with pytest.raises(Rechecked, match="SEND_ALLOWLIST"):     # package 6a: it ends (not_allowed) instead of waiting again
+        tightened.approve(qid)
+    assert sent == [] and tightened.outbox.pending() == []
 
 
 def test_send_disabled_and_approval_off_modes(env):

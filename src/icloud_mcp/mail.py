@@ -2306,31 +2306,6 @@ class MailService:
             note += f" The original was not marked: {result['original_flag_skipped']}"
         return {**result, "status": "sent", "note": note}
 
-    def release(self, item_id: str) -> dict[str, Any]:
-        """Send a queued message. Called only from the owner's approval pages (the dashboard, /outbox), never from an MCP tool."""
-        q = self.outbox.claim(item_id)
-        if q is None:
-            raise MailError("That message is no longer waiting (already released, discarded or expired).")
-        with self._contexts_lock:
-            self._contexts.pop(self._context_key(q), None)
-        try:
-            if not self.s.allow_send:
-                raise MailError("Sending is disabled on this server (ALLOW_SEND=false).")
-            msg = email.message_from_bytes(q.raw, policy=policy.default)
-            if waiting := pending_files(msg):
-                raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
-            raw = q.raw
-            if added := [p for p in iter_attachment_parts(msg) if p.get(ADDED_HEADER)]:
-                for p in added:                       # what the owner approved, without the server's own bookkeeping
-                    del p[ADDED_HEADER]
-                raw = msg.as_bytes(policy=policy.SMTP)
-            recipients = self._check_recipients(msg)  # current allowlist / cap, not the ones at queue time
-            with self.imap() as c:
-                return self._send_and_file(c, msg, raw, recipients, q.followup, self._summary_of(msg))
-        except Exception:
-            self.outbox.restore(q)  # not sent: keep it so the owner can retry or discard
-            raise
-
     def send(self, *, to, subject, body, body_html=None, cc=None, bcc=None, attachments=None, draft=False) -> dict[str, Any]:
         to_p, cc_p, bcc_p = parse_recipients(to, "to"), parse_recipients(cc, "cc"), parse_recipients(bcc, "bcc")
         if not to_p and not draft:
