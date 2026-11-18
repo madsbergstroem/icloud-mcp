@@ -111,7 +111,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         return _tok(kind, "*all*", hashlib.sha256(ids.encode()).hexdigest(), "discard_all", exp)
 
     def _discard_all_button(kind: str, qs: list[Any], exp: int) -> str:
-        label = "requests" if kind == "external" else "emails"
+        label = "requests"                       # every kind is an action since package 6b, mail among them
         return (f'<form method="post" action="/outbox/act" style="display:inline"><input type="hidden" name="kind" value="{kind}">'
                 f'<input type="hidden" name="action" value="discard_all"><input type="hidden" name="exp" value="{exp}">'
                 f'<input type="hidden" name="ids" value="{html.escape(",".join(q.id for q in qs))}">'
