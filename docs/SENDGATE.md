@@ -698,7 +698,24 @@ names the calendar tools, so `approval_request` refuses the calendar types. The 
 Unchanged for the agent: the calendar tools answer as now (`queued_for_owner_approval`, `outbox_id`, `approve_at`,
 `would_email`), and `approval_status` and `approval_withdraw` answer for an id from before the update.
 
-What the card loses unless the type gains something. All of it is decided on the mock:
+The owner chose the card on 2026-11-18 from a mock with three variants (variant C, Artifact "Sendgate 5b Kalenderkarte"): the
+title is the type's own, and the event's summary moves to the line below it, before the guests, as the chat did in 4b. The text
+block is hidden when the description is empty, with a calendar caption from a new optional field `text_caption`.
+
+| On the screen | Today | After 5b |
+|---------------|-------|----------|
+| List, first line | Autumn fair | Invitation |
+| List, second line | Calendar · Invitation · to jana@example.org, … | Invitation · Autumn fair · to jana@example.org, … |
+| Card title and line under it | Autumn fair / Invitation · asked by … | Invitation / Autumn fair · to jana@example.org, … · asked by … |
+| Rows | When, Calendar, Where, Guests | When, Calendar, Where (the guests are in the line under the title) |
+| Text block | hidden when empty, caption "The description exactly as it will be saved." | unchanged, through `text_caption`; any type with an empty text hides the block |
+| Note | the effect with a count ("… to 2 people") | the type's fixed `note` ("… to the guests"), plus its second sentence |
+
+The line under the title needs one thing a type cannot give today: a short label per request. The type gains an optional
+function `subject(params)`, whose result goes in front of "to …" on that line and in the list, never in the title. Only
+`builtin` types may have it, for the same reason the title is fixed (D4-2); its text is the agent's, as on today's card.
+
+What the card would have lost without new fields, as weighed on the mock:
 
 | On the screen | Today | 5b without new fields |
 |---------------|-------|-----------------------|
@@ -738,7 +755,7 @@ Acceptance criteria:
 | D5-2 | What if the connection drops after the write was sent? | `unclear`, no read-back | iCloud rewrites the stored object, so comparing it with what was sent is not reliable; a repeat would email the guests twice |
 | D5-3 | Deleting an event that is already gone | `discarded`, `target_changed` | Today it says "Deleted … iCloud now emails …", which did not happen |
 | D5-4 | One type, or one per operation? | One per operation | Badge and button stay fixed per type, and the owner's list of types names what each one does |
-| D5-5 | The card title | open, decided on the mock | Variants A to C above |
+| D5-5 | The card title | C: the type's title, the summary on the line below (owner, 2026-11-18) | The same pattern as the iMessage in 4b, and no parameter becomes a title |
 | D5-6 | A 412 or 404 to the write itself, after the read found the event unchanged | `failed`, then `target_changed` at the next read | It is true that nothing was written, and the gate keeps its three answers. The other way, a fourth executor answer that ends a request, changes the gate for a race of seconds |
 
 Reviewed on 2026-11-18 with gstack `/plan-eng-review` and a second opinion from Codex. Codex raised five points, all taken in
