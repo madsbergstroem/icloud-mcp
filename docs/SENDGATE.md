@@ -121,13 +121,15 @@ Rules every package keeps:
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
 | 8 | Signed checkpoints of the log, export | gate | 3 | later |
 | 9 | Webhook as a way in and as a notice of status changes | gate | 3 | later |
+| 10 | Standing approval: the owner names people a type may reach without waiting, through a request the owner approves | gate | 3, 5b | yes |
 
 ```
 0 Line ─┬─> 1 Actions ─┬─> 2 Gateway connector
         │              ├─> 7 plugin_api
         └─> 3 Store ───┼─> 4 iMessage ─> 5 Calendar ─> 6 Mail
                        ├─> 8 Log checkpoints
-                       └─> 9 Webhook
+                       ├─> 9 Webhook
+                       └─> 10 Standing approval (first use after 5b)
 ```
 
 Package 0 moves files and changes no behaviour, so it is the cheapest point to agree on the line with upstream.
@@ -745,6 +747,135 @@ above: the 412 or 404 at the write (D5-6), the calendar's own list rules, the fu
 
 Effort, estimated and not measured: 5a about 240 min of work and 30 min of review; 5b about 300 min of work after the mock,
 plus 45 min of review.
+
+## Package 10: standing approval for named people
+
+Owners say things like "invitations to my partner don't need my approval". Today the server cannot express that. `INVITE_ALLOWLIST`,
+`SEND_ALLOWLIST` and the type lists say who may be reached at all; whether a request waits is one switch for everyone
+(`ALLOW_CALENDAR_INVITES`, `SEND_REQUIRES_APPROVAL`). An agent that hears the wish can only tell the owner to loosen the switch,
+and that loosens it for every guest (seen in the live system on 2026-11-18).
+
+Package 10 adds a second list per action type: who may be reached **without** waiting. The agent may ask for an entry, and the
+entry only exists once the owner approves it, so a rule change is itself a request on the gate. The rule "the owner approves"
+still holds: for these requests the owner approved in advance, with a fresh sign-in, for one person and a limited time.
+
+### What it adds
+
+| Part | What it is |
+|------|------------|
+| Standing rule | One action type, one recipient, an end date. Stored in a new table `standing` in `approvals.db`: id, type, recipient (case-folded), created, expires, the id of the request that created it, revoked |
+| Type `gate.trust` | A request for a rule, registered by the server itself (`builtin`). Parameters `action_type`, `recipient`, `days`, `reason`. Asked for with `approval_request`, so no new tool |
+| Standing release | When a request is first queued, the server checks its rules. If every person the request reaches has a live rule for its type, the server releases it itself, through the same `release()` the owner's click uses |
+| `gate.submit()` | One call for every tool that queues: it queues, tries the standing release, and answers either "waiting" or the release's outcome. The push for a new request goes out only when the answer is "waiting" |
+| Settings list | "Without approval" in the dashboard: type, person, until when, how often used, Remove |
+
+### The request for a rule
+
+The card is built from the fields alone, never from the agent's words: title "Allow without approval", rows "Action"
+(the type's title and badge, not its id), "Person", "Until" (a date). The reason is shown as a quote marked as the assistant's
+words. `days` defaults to 90 and may not exceed 365.
+
+`queue` refuses, with `policy`:
+
+- an `action_type` that is not registered, is `gate.trust` itself, or has not opted in (below);
+- a recipient the type's own list does not allow (a rule never widens who may be reached, it only skips the wait);
+- a recipient that is a domain, a wildcard or empty: a rule names one person, matched exactly.
+
+Approving needs a recent sign-in, as loosening a setting does today (`dashboard.py:509`, five minutes). The approve endpoint
+has no such check per type yet, so `ActionType` gains `step_up: bool = False`, and the endpoint answers with the same
+`confirm` 403 that settings use (`dashboard_api.py:52`) when the type asks for it and the sign-in is old. `gate.trust` registers
+with `allowed` `["*"]`, because its `recipient` is checked by its policy against the target type's own list, not the gate's. The executor writes the
+row locally and answers `sent`; a write that fails answers `failed`, so the request waits again. It never answers `unclear`.
+
+A rule for the same type and recipient replaces the older one (new end date). Removing a rule takes effect at once and needs no
+approval, because it only makes requests wait again. The owner removes rules in the dashboard; agents cannot.
+
+### The standing release
+
+Who a request reaches, for this purpose, comes from a new function of the type, `standing_identity(params)`: a list of stable
+identities of single people (a lower-case email address), or `None` when the type cannot say (a group, a name only, an empty
+list). `recipients()` is not enough: iMessage gives a display name there (`imessage.py:398`) and Beeper a chat id that may be a
+group. `None` or an empty list always waits.
+
+| Request | What happens |
+|---------|--------------|
+| `standing_identity` names one or more people, each has a live rule for the type, no hold | released by the server at once; the agent's answer carries the outcome |
+| `standing_identity` answers `None` or `[]` | waits, whatever rules exist |
+| The request already waited once and the owner has not decided it (asked again with the same bytes or key, or put back after `failed` or a new version) | waits: a standing release is tried once per request, when it is first queued |
+| One recipient without a rule, an expired or removed rule | waits for the owner as today |
+| The type's `confirm_twice` returns a reason (a group chat) | waits; a rule never answers a second question |
+| The release answers `failed` (nothing reached the service) | waits for the owner, with the reason |
+| The rule's daily limit is reached (default 20 uses a day) | waits, and the card says the limit was reached |
+
+Checking the rules, counting the use and claiming the request happen in one SQLite transaction in `approvals.db`, so two
+requests cannot both take the last use of a day, and a rule removed before that transaction no longer counts. A rule removed
+after it does not stop the request already being carried out. Uses are rows of a table `standing_use` (rule id, request id,
+time); the daily limit counts them over the last 24 hours.
+
+The release runs every check the owner's click runs: the lists, the policy, the hold (an agent key that can call the send tool
+directly still blocks), the recheck and the executor's three answers. `unclear` stays `unclear` and is never repeated.
+
+What the agent sees: the queuing tool answers `sent` or `unclear` with the `outbox_id` and `without_approval: true`, instead of
+`queued_for_owner_approval`. Today each tool builds its "queued, not sent" answer itself (for example
+`plugins/beeper/gateway.py:456`), and `Store.add` fires the push before it returns (`gate/store.py:347`). Both move behind
+`gate.submit()`, and every tool that queues uses it: the calendar tools, `messages_send_request` and `approval_request`. `approval_status` answers as for any request.
+
+What the owner sees: Activity marks the line "without approval" and names the rule. The log line carries the rule id as the actor
+(`standing:<id>`), never the recipient of a type that is not `builtin`. A push only goes out for requests that wait, as today.
+
+### Which types may use it
+
+A type opts in by having `standing_identity`. Package 10 gives it to the five calendar types (guests and organizer are email
+addresses). iMessage and Beeper get it later, once they can name one person for a one-to-one chat and refuse groups; until then
+they always wait. Mail gets it with package 6. A connector file cannot opt in, because it has no way to say who a chat id is.
+`gate.trust` itself never opts in.
+
+Before 5b the calendar is not an action type, so package 10 needs 5b.
+
+### Out of scope for package 10
+
+- Domains, groups or "everyone in my contacts" as a rule. One rule, one person.
+- Rules that depend on the content (only invitations on weekends). That would be a policy language.
+- An agent removing or extending a rule without the owner.
+
+### Decisions for package 10
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D10-1 | A new tool, or `approval_request` with type `gate.trust`? | `approval_request` | One way to ask for anything; `approval_list_actions` already describes the type to agents |
+| D10-2 | Exact match only, or domains too? | Exact only | A domain rule for `@example.org` lets an agent reach people the owner never named |
+| D10-3 | End date | 90 days by default, 365 at most | A rule nobody remembers should not last for ever |
+| D10-4 | Step-up sign-in to approve a rule | yes | It loosens protection, as `SEND_REQUIRES_APPROVAL=false` does |
+| D10-5 | Daily limit per rule | 20 | Bounds what a misled agent can send to one person before the owner looks |
+| D10-6 | Push for released requests | no | The owner asked not to be asked; Activity shows each one |
+
+Reviewed on 2026-11-18 with gstack `/plan-eng-review` and a second opinion from Codex (gpt-6-astra). Taken in: the per-type
+step-up, `gate.trust`'s own list check and the use table from the review; from Codex, `standing_identity` instead of
+`recipients()`, waiting on an empty identity, one try per request, one transaction for rule, use and claim, and `gate.submit()`
+with the push only for waiting requests.
+
+The dashboard parts (the settings list and the Activity marker) need a mock before they are built. The card of `gate.trust`
+uses the general card of actions and needs none.
+
+Acceptance criteria:
+
+1. Each row of the standing release table has a test against a made-up type. The test checks the state, the answer to the agent,
+   how many times the executor ran, and that a request with one uncovered recipient waits. A type whose `standing_identity`
+   answers `None` or `[]` waits even when rules exist.
+7. Asking again with the same bytes or key after a `failed` release leaves the request waiting and runs the executor no more.
+8. Two requests racing for the last use of a day: exactly one is released. A rule removed before the transaction releases nothing.
+9. A request released by a rule sends no push; one that waits sends one, as today. Each tool that queues answers through
+   `gate.submit()` (a test per tool against its real answer, not a fake type).
+2. A `gate.trust` request for an unknown type, for `gate.trust`, for a type that has not opted in, for a recipient outside the
+   type's list and for a domain is refused with `policy`; nothing is queued.
+3. Approving a rule without a recent sign-in is refused and the request keeps waiting; with one, the row exists and a request to
+   that person is released.
+4. An expired rule, a removed rule and a rule past its daily limit all leave the request waiting.
+5. The log line of a standing release names the rule and no recipient of a non-builtin type.
+6. Rollback: the version before package 10 starts on the same `DATA_DIR` and ignores the table; every request waits again.
+
+Effort, estimated and not measured: about 480 min of work (store, rule and use table 90, standing release in one transaction 90,
+`gate.submit()` and moving every caller 90, `gate.trust` type and step-up 60, tests 150) after the mock, plus 60 min of review.
 
 ## Rules for whoever implements a package
 
