@@ -296,7 +296,8 @@ class Item extends HTMLElement {
     const r = this.result, it = this.it;
     if (!r) return "";
     const to = it.kind === "external" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
-    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div><b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.
+    // a type's own note says where to look (a calendar change: the calendar), so the line does not name the type as a place
+    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div>${r.note ? "<b>Not sure it went through.</b> Nothing will be sent again." : `<b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.`}
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
     if (r.state === "failed" && it.kind === "external") return `<div class="notice bad"><div><b>Did not go out:</b> ${esc(r.note)}
       <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;
