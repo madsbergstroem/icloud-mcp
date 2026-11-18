@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Calendar approvals keep their state (fork).** A calendar change that would email people now waits in the approval store
+  (`approvals.db`); `calendar-outbox.json` is read in once at the first start, with ids and hashes unchanged. Approving checks
+  `INVITE_ALLOWLIST` and `MAX_ATTENDEES` again and reads the event once more before writing. An event that changed or is gone ends
+  the request, and so does a guest your list no longer allows; nothing is written then. If iCloud could not be reached, it waits
+  again. If the write may have reached iCloud without a clear answer, it reads „unclear“ and is never written again, so nobody
+  gets the same invitation twice (before, any error put it back to be approved again). The card shows the whole description, and
+  a sent change says iCloud was asked to email the guests, since the server cannot see whether the mail arrived.
+  `python -m icloud_mcp.gate.export_queue` writes waiting calendar changes back to `calendar-outbox.json` for a rollback.
+
 - **An iMessage is an action like the others (fork).** A waiting iMessage is now an action of type `imessage.send` on the same
   queue as the connector's actions. The list reads „iMessage“ with „to Weekend hike“ underneath, like a mail; the Group tag, the
   chat bubble and „Send anyway…“ for a group stay, and the server now insists on that second confirmation too. Activity names the

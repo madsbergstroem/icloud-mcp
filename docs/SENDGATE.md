@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0, 1 and 3 are built; the others are not.
+shows. Packages 0 to 4 and 5a are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
 
 ## Context
@@ -618,9 +618,10 @@ What the calendar does today, and where that breaks a rule of the gate:
 | iCloud answers 5xx, a read timeout, or the connection drops after the write went out | ends `unclear`, never repeated (D5-2) |
 | iCloud answers 2xx | ends `sent` |
 
-Which network errors count as "before the write goes out" is a closed list. Of the errors that `requests` raises, only
-`ConnectTimeout` and `ConnectionError` raised while connecting count (`NewConnectionError`, `NameResolutionError`, refused). Every
-other transport error ends `unclear`. A delete of an event that is already gone ends at the read, with `target_changed` (D5-3).
+Which network errors count as "before the write goes out" is a closed list. Of the errors that `niquests` raises (the HTTP
+library caldav uses, with the names of `requests`), only `ConnectTimeout` and a `ConnectionError` caused by
+`NewConnectionError` count (`NameResolutionError` is one; a refused connection is one), and a refused sign-in. Every other
+transport error ends `unclear`, and so does caldav's `RateLimitError`, because it reports a 429 and a 503 with Retry-After alike. A delete of an event that is already gone ends at the read, with `target_changed` (D5-3).
 
 The lists are the calendar's own, as when the agent asks: an empty `INVITE_ALLOWLIST` allows everyone, a domain entry allows
 the domain (`mail.recipient_allowed`), the owner's own addresses do not count, and a reply checks the organizer
@@ -654,6 +655,15 @@ Acceptance criteria:
 3. Starting on a `DATA_DIR` with a `calendar-outbox.json` gives the same waiting ids and hashes and a `.migrated` file. The export
    writes a file the previous version loads with the same ids and hashes.
 4. A row of source `calendar` left `executing` ends `unclear` at start, also when another source's store opened first.
+
+### As built (5a)
+
+`CalendarService.approve(outbox, item_id, sha256)` in `cal.py` replaces `release()` and ends every row as the table says; the
+dashboard's calendar source only maps its answer. `Store(type_of=...)` types the rows read in from the file (`cal.calendar_type_of`).
+The read before the write is a GET of the event, which also proves the connection works before anything is written. A sent change
+logs as before (no `delivery`), an unclear one with delivery `unconfirmed`. Tests: `tests/test_calendar_release.py` (every row of
+the table, the list rules, a reply, the full description, the start-up), two tests in `tests/test_store.py`; `caldav_fakes.Server`
+honours `If-Match` and `If-None-Match`.
 
 ### 5b: one source
 
