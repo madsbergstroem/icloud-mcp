@@ -218,12 +218,35 @@ class PreviewMac:
 im_service.bridge = PreviewMac()
 
 
-def cal_release(self, q):
-    time.sleep(1.0)
-    return f"Added “{(q.followup or {}).get('summary')}”. iCloud now emails {', '.join(q.recipients)}."
+# -- calendar changes: a made-up iCloud calendar server, steered by a word in the summary ---------------------------------------
+# The real approve() runs (package 5a; every ending is a state of the approval store); only the CalDAV server is made up
+# (tests/caldav_fakes.py, which honours If-Match). [unclear]: the write times out after it left. [gone]: the event is deleted
+# in the calendar before the owner approves.
+import caldav_fakes  # noqa: E402
+import niquests  # noqa: E402
+
+from icloud_mcp import cal as _cal_mod  # noqa: E402
 
 
-CalendarService.release = cal_release
+class PreviewCalDAV(caldav_fakes.Server):
+    def __call__(self, method, url, data=None, headers=None, auth=None, **kw):
+        if method in ("PUT", "DELETE"):
+            time.sleep(1.2)                                      # long enough to see "Sending…"
+            if "[unclear]" in (data.decode() if isinstance(data, bytes) else (data or "")):
+                raise niquests.exceptions.ReadTimeout("the calendar server did not answer in time")
+        return super().__call__(method, url, data=data, headers=headers, auth=auth, **kw)
+
+
+cal_server = PreviewCalDAV(password=s.app_password)
+
+
+class _PreviewClient(_cal_mod.caldav.DAVClient):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.session.request = cal_server
+
+
+_cal_mod.caldav.DAVClient = _PreviewClient
 
 # -- saved accounts (what Connect a service keeps)----------------------------------------------------------------------------------
 A.save(DATA, {"accounts": [
@@ -257,15 +280,27 @@ imsg("Chapter four for Thursday?", chat="chat901", name="Book club", group=True,
      people=[{"handle": "anna@example.org", "name": "Anna Rivera"}, {"handle": "tom@example.net", "name": "Tom Berger"}])
 imsg("Is the parcel with you? [lost]", chat="anna4@example.org", people=[{"handle": "anna4@example.org", "name": "Anna Rivera"}])
 
-from icalendar import Calendar, Event  # noqa: E402
-c = Calendar(); c.add("prodid", "-//preview//"); c.add("version", "2.0")
-ev = Event(); ev.add("uid", "preview-1@example.org"); ev.add("summary", "Dinner with the Okafors")
-ev.add("dtstart", datetime.datetime(2026, 11, 14, 19, 0)); ev.add("description", "Table for four at 19:00. Bring the wine list.")
-c.add_component(ev)
-cal.outbox.add(c.to_ical(), ["jana@example.org", "tom@example.net"],
-               {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Home", "uid": "preview-1@example.org",
-                "summary": "Dinner with the Okafors", "start": "2026-11-14T19:00:00+01:00", "end": None, "location": "Harbour Street 4",
-                "description": "Table for four at 19:00. Bring the wine list.", "organizer": None, "href": None, "etag": None})
+SEED = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//preview//EN\r\nBEGIN:VEVENT\r\nUID:{uid}\r\nDTSTAMP:20261101T090000Z\r\n"
+        "DTSTART:{start}\r\nDTEND:{end}\r\nSUMMARY:{summary}\r\nORGANIZER:mailto:{org}\r\n{guests}END:VEVENT\r\nEND:VCALENDAR\r\n")
+
+
+def seed(uid, summary, org="alex.morgan@example.org", guests=("jana@example.org",), start="20261121T180000Z", end="20261121T193000Z"):
+    lines = "".join(f"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:{g}\r\n" for g in guests)
+    cal_server.events["home"][f"{uid}.ics"] = (SEED.format(uid=uid, summary=summary, org=org, guests=lines, start=start, end=end), f'"seed-{uid}"')
+
+
+cal.create_event(summary="Dinner with the Okafors", start="2026-11-14T19:00", end="2026-11-14T21:30", calendar="Calendar",
+                 location="Harbour Street 4", attendees=["jana@example.org", "tom@example.net"],
+                 description="Table for four at 19:00. Bring the wine list.")
+seed("bookclub", "Book club")
+cal.update_event("bookclub", summary="Book club, new room", location="Library, room 2")
+seed("yoga", "Yoga class", guests=("kim@example.net",))
+cal.delete_event("yoga")
+del cal_server.events["home"]["yoga.ics"]                     # [gone]: deleted in the calendar before the owner approves
+cal.create_event(summary="Board meeting [unclear]", start="2026-11-26T09:00", end="2026-11-26T10:00", calendar="Calendar",
+                 attendees=["jana@example.org"])
+seed("fair", "Autumn fair", org="lead@example.org", guests=("alex.morgan@example.org",))
+cal.rsvp("fair", "accepted")
 
 if args.beeper in ("ok", "no-key", "refused"):              # a Beeper message to a made-up chat, through the real tool
     asyncio.run(mcp.call_tool("messages_send_request", {"chat_id": "beeper:!single:beeper.test", "text": "See you at the north gate at nine."}))
