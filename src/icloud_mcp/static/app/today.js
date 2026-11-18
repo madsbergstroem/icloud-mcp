@@ -296,7 +296,8 @@ class Item extends HTMLElement {
     if (r.state === "failed" && it.kind === "external") return `<div class="notice bad"><div><b>Did not go out:</b> ${esc(r.note)}
       <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;
     if (r.state === "sending") return `<div class="notice"><ion-spinner name="crescent"></ion-spinner><div><b>Sending to ${to}…</b><br>Nothing is sent twice.</div></div>`;
-    if (r.state === "unclear") return `<div class="notice warn"><div><b>Not sure it arrived.</b> Nothing is sent again. Look at the conversation first, then decide.
+    // the source's own note says where to look (a calendar change: the calendar); without one, the chat advice
+    if (r.state === "unclear") return `<div class="notice warn"><div><b>Not sure it arrived.</b> Nothing is sent again. ${r.note ? "" : "Look at the conversation first, then decide."}
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
     if (r.state === "failed") return `<div class="notice bad"><div><b>Not sent, still waiting.</b> ${esc(r.note)}
       <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;

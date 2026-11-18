@@ -595,3 +595,39 @@ def test_the_json_imessage_queue_is_read_in_with_its_ids_and_hashes(tmp_path):
     st = S.Store(str(tmp_path), "imessage", 3600, 20, legacy="imessage-outbox.json")
     assert [(x.id, x.sha256, x.raw) for x in st.pending()] == [(q.id, q.sha256, IMSG)]
     assert (tmp_path / "imessage-outbox.json.migrated").exists() and not (tmp_path / "imessage-outbox.json").exists()
+
+
+ICS = b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:Autumn fair\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+CAL_META = {"op": "create", "calendar": "Club", "uid": "u1", "summary": "Autumn fair"}
+
+
+def test_a_calendar_queue_file_is_read_in_with_its_ids_hashes_and_the_type_of_each_change(tmp_path):
+    """protects=package 5a criterion 3: the first start keeps every waiting calendar change byte for byte, and the row learns its
+    type (calendar.invite for a create), which outlasts the content; fails_when=an id, hash or byte changes, the file stays, the
+    type is missing, or a type function that raises stops the start; no_claim=the calendar's own mapping (tested with cal.py)."""
+    old = Outbox(str(tmp_path), 3600, 20, filename="calendar-outbox.json")
+    q = old.add(ICS, ["jana@example.org"], CAL_META)
+    bad = old.add(ICS + b" ", ["ben@example.org"], {"op": "update"})
+    st = S.Store(str(tmp_path), "calendar", 3600, 20, legacy="calendar-outbox.json",
+                 type_of=lambda x: {"create": "calendar.invite"}[(x.followup or {})["op"]])
+    assert sorted((x.id, x.sha256, x.raw) for x in st.pending()) == sorted([(q.id, q.sha256, ICS), (bad.id, bad.sha256, ICS + b" ")])
+    assert (tmp_path / "calendar-outbox.json.migrated").exists() and not (tmp_path / "calendar-outbox.json").exists()
+    st.claim(q.id, "discarded")                                     # an ended row keeps its type although its content is gone
+    types = dict(st._db.execute("SELECT id, action_type FROM request").fetchall())
+    assert types == {q.id: "calendar.invite", bad.id: None}
+
+
+def test_the_export_writes_waiting_calendar_changes_back_for_the_previous_version(tmp_path):
+    """protects=package 5a criterion 3: a rollback keeps the waiting calendar changes with their metadata, in the file the
+    previous version reads; fails_when=no calendar-outbox.json, another id, hash, byte or op, or a file written when none waits;
+    no_claim=the previous version itself (its Outbox class reads the file here)."""
+    st = S.Store(str(tmp_path), "calendar", 3600, 20)
+    q = st.add(ICS, ["jana@example.org"], CAL_META, action_type="calendar.invite")
+    st._db.close()
+    os.close(S._locks.pop(str(Path(tmp_path).resolve())))
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    run = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(tmp_path)], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0 and "Wrote 1 waiting request(s) to calendar-outbox.json" in run.stdout, run.stderr
+    old = Outbox(str(tmp_path), 3600, 20, filename="calendar-outbox.json")
+    assert [(x.id, x.sha256, x.raw, x.followup["op"], x.recipients) for x in old.pending()] == [(q.id, q.sha256, ICS, "create", ["jana@example.org"])]
+    assert not (tmp_path / "imessage-outbox.json").exists()
