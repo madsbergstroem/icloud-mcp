@@ -116,7 +116,7 @@ Rules every package keeps:
 | 2d | The owner edits every field before approving: subject, To, Cc, Bcc, and every field an action type marks editable | gate | 2c | yes (gateway actions; mail with 6) |
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | yes |
-| 5 | Calendar invitations on the same | connector | 1, 3 | later |
+| 5 | Calendar invitations on the same | connector | 1, 3 | yes (5a, 5b) |
 | 6 | Mail on the same | connector | 1, 3 | later |
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
 | 8 | Signed checkpoints of the log, export | gate | 3 | later |
@@ -578,6 +578,163 @@ Acceptance criteria:
    under `external`, one `approval.migrated` line per waiting row, and no row of source `imessage`; a second start changes nothing.
 4. After 4b, a search of `src/` for `kind == "imessage"` finds nothing outside `imessage.py` and the migration.
 5. Rollback: the export, then 4a, shows the same waiting requests.
+
+## Package 5: calendar invitations on ActionType and Executor
+
+Calendar changes that make iCloud email other people (`ALLOW_CALENDAR_INVITES=approve`) move from `calendar-outbox.json` to the
+store, and later onto the external source. This was checked against `cal.py:1640-1733`, `dashboard.py:247-310` and
+`server.py:1373` on 2026-11-18. The proposed split follows package 4 (D5-1). 5a moves the queue and fixes what goes wrong after
+approval, and the owner sees nothing new. 5b folds the calendar into the external source and changes the card, so it needs a
+mock first.
+
+What the calendar does today, and where that breaks a rule of the gate:
+
+| # | Today | Rule it breaks | Evidence |
+|---|-------|----------------|----------|
+| C1 | Any error after the claim puts the request back (`restore`), including a timeout after iCloud already wrote the event and emailed the guests | `failed` only when the other side provably never got it | `dashboard.py:288-296` |
+| C2 | A 412 (the event changed since the agent asked) puts the request back, and every later approval fails the same way | An ending that cannot change ends the request | `cal.py:1726-1728` |
+| C3 | `INVITE_ALLOWLIST` and `MAX_ATTENDEES` are checked when the agent asks, never at approval | The owner's lists are checked at queue and at approval | `cal.py:1660`, `cal.py:1710` |
+| C4 | A crash between the claim and iCloud's answer loses the request | Gap 7 | `outbox.py` |
+| C5 | Deleting an event that is already gone counts as done, although nobody was emailed | The log says what happened | `cal.py:1729` |
+| C6 | An edited description overwrites once (`edited_from`) | Versions (2c) | `dashboard.py:308-310` |
+
+### 5a: the store
+
+| Today | After 5a |
+|-------|----------|
+| `calendar-outbox.json`, no state for "being written" | Rows of source `calendar` in `approvals.db`. The file is read in once and renamed `.migrated`, keeping ids and hashes |
+| Any error puts the request back | Each ending is a state (table below) |
+| Lists checked only when asked | Checked again at approval, before anything is written |
+| Edit overwrites once | Edit makes a version (2c) |
+| A crash after approval loses the request | It ends `unclear` at the next start and is logged once |
+
+| What happens after the owner approved | The request |
+|---------------------------------------|-------------|
+| A guest (for a reply: the organizer) is no longer allowed by `INVITE_ALLOWLIST`, or there are more than `MAX_ATTENDEES` | ends `discarded`, reason `not_allowed`; nothing is written |
+| The event changed (another ETag) or is gone, read before the write | ends `discarded`, reason `target_changed` |
+| iCloud cannot be reached before the write goes out: refused connection, name lookup, connect timeout, sign-in refused | waits again (`failed`); the owner sees why |
+| iCloud answers 412 or 404 to the write itself: the event changed or went in the seconds since the read | waits again (`failed`), and the next approval ends it `target_changed` at the read (D5-6) |
+| iCloud answers another 4xx | waits again (`failed`): a 4xx means nothing was written |
+| iCloud answers 5xx, a read timeout, or the connection drops after the write went out | ends `unclear`, never repeated (D5-2) |
+| iCloud answers 2xx | ends `sent` |
+
+Which network errors count as "before the write goes out" is a closed list. Of the errors that `requests` raises, only
+`ConnectTimeout` and `ConnectionError` raised while connecting count (`NewConnectionError`, `NameResolutionError`, refused). Every
+other transport error ends `unclear`. A delete of an event that is already gone ends at the read, with `target_changed` (D5-3).
+
+The lists are the calendar's own, as when the agent asks: an empty `INVITE_ALLOWLIST` allows everyone, a domain entry allows
+the domain (`mail.recipient_allowed`), the owner's own addresses do not count, and a reply checks the organizer
+(`cal.py:2070`). The check at approval calls the same function as the check at queue time and has no copy of it.
+
+`sent` means iCloud saved the change. Whether iCloud's emails then reached the guests is not known to this server, and the
+success line says so: "Added “Autumn fair”. iCloud now emails jana@example.org." (`cal.py:1732`) becomes "Added “Autumn
+fair”. iCloud was asked to email jana@example.org." (`cal.py:722-750` already tells a saved event apart from a delivered one). Nothing is written again to repair
+a delivery.
+
+5a also writes the request's later type into the row's `action_type` column (`calendar.invite`, `calendar.update`, … in 5b),
+because the operation lives in the request's content, and an ended row has no content left (package 3). The description is
+kept in full: the copy in the metadata is cut at 4000 characters (`cal.py:1695`), and the card and the write take it from the
+stored object.
+
+Unchanged: the stored bytes and their hash, the tools' answers (`queued_for_owner_approval`, `outbox_id`, `approve_at`,
+`would_email`), the card, the log lines. `python -m icloud_mcp.gate.export_queue` writes `calendar-outbox.json` back as well.
+Without the dashboard, a change that would email someone stays refused, as today (`server.py:1373`).
+
+Acceptance criteria:
+
+1. The calendar approval tests (`test_dashboard.py`, `test_dashboard_cards.py`, `test_text_edit.py`, `test_approval_withdraw.py`,
+   `test_dashboard_links.py`) pass with the store. A changed test is reported on its own line with its reason (rule 3).
+2. Each row of the endings table has a test against a made-up CalDAV server. The test checks the state, the reason, and how many
+   PUT or DELETE calls were made: one at most per approval, none after `not_allowed`. The server honours `If-Match` and
+   `If-None-Match` (the fake in `tests/caldav_fakes.py` ignores them today), so the 412 row changes the event between the read
+   and the write and checks that the server's copy stayed the other writer's.
+5. A description longer than 4000 characters is written in full when the owner approves without editing.
+6. An empty `INVITE_ALLOWLIST`, a domain entry and a reply to an organizer who is not on the list behave at approval as they do
+   when the agent asks.
+3. Starting on a `DATA_DIR` with a `calendar-outbox.json` gives the same waiting ids and hashes and a `.migrated` file. The export
+   writes a file the previous version loads with the same ids and hashes.
+4. A row of source `calendar` left `executing` ends `unclear` at start, also when another source's store opened first.
+
+### 5b: one source
+
+Calendar changes become actions on the external source, and the calendar branches of gap 4 go: `withdraw.py:46-58`,
+`dashboard_api.py:279`, `:292`, `today.js:29`, `:239-240`, `app.js:10`, `edit.js:7`, `dashboard.py` (`CalendarApprovals`) and
+`server.py` (`approval["calendar"]`).
+
+One type per operation (D5-4), so the badge and the main button stay fixed per type as `ActionType` requires:
+
+| Type | Badge | Main button | Who it reaches |
+|------|-------|-------------|----------------|
+| `calendar.invite` | Invitation | Add and invite | the guests |
+| `calendar.update` | Event update | Save and notify | the guests |
+| `calendar.delete` | Cancellation | Delete and notify | the guests |
+| `calendar.cancel` | Cancellation | Cancel and notify | the guests |
+| `calendar.reply` | Reply | Send answer | the organizer |
+
+Parameters: `calendar_url`, `calendar`, `uid`, `href`, `etag`, `summary`, `start`, `end`, `location`, `guests` or `organizer`,
+and `ics`, the whole object as it will be written. `ics` is the only source of the description: the text field shows the
+description of its one VEVENT, and an edit rewrites that VEVENT inside `ics`, so the stored bytes are what is written. The
+locks of today stay: only `calendar.invite` and `calendar.update` have a text field, and an object with more than one VEVENT
+(a recurring event with an overridden occurrence) cannot be edited (`textedit.py:77-85`). If the external source cannot lock
+the text for one request while its type allows it, 5b adds that.
+
+Registration follows `imessage.py:442`: `allowed` is `["*"]`, because the calendar's lists differ from the gate's exact
+matching (an empty list allows everyone, a domain entry allows the domain); the type's `policy` and `recheck` call the
+calendar's own check, and `recheck` reads the ETag, which gives the endings at the read. `builtin=True`, and `channel_tool`
+names the calendar tools, so `approval_request` refuses the calendar types. The executor gives the other endings.
+
+Unchanged for the agent: the calendar tools answer as now (`queued_for_owner_approval`, `outbox_id`, `approve_at`,
+`would_email`), and `approval_status` and `approval_withdraw` answer for an id from before the update.
+
+What the card loses unless the type gains something. All of it is decided on the mock:
+
+| On the screen | Today | 5b without new fields |
+|---------------|-------|-----------------------|
+| Card and list title | the event's summary ("Autumn fair") | the type's title ("Invitation"); `ActionType.title` is never taken from a parameter |
+| List, second line | Invitation · to 3 people | Invitation · to jana@example.org, … |
+| Text block | hidden when the description is empty, caption "The description exactly as it will be saved." | an empty block, caption "Exactly as it will be sent." |
+| Notes | the effect per operation ("Approving deletes the event, and iCloud emails a cancellation to 3 people.") | the type's `note`, the same for every request of that type |
+
+The mock shows three variants. A: the type's title, with the summary as the first row ("Event: Autumn fair"). B: a new optional
+field `title_field`, only for types the server registers itself (`builtin`). The summary is the agent's text in either case,
+as on today's card; B keeps that exception to the server's own types, so a connector file cannot make a parameter the title. C: like A, with the summary also on the list's second line. The text block is hidden when
+the text is empty for every type, and a new optional field `text_caption` keeps the calendar's caption. A card with a
+text and no caption of its own looks as before.
+
+Start-up moves every row of source `calendar` to source `external` once, as in 4b: same id, state, versions and expiry, a new hash,
+one `approval.migrated` line per row. `#/item/calendar:<id>` opens `external:<id>`. `Store.adopt` takes one type and converts the
+raw bytes alone (`gate/store.py:499`), but a calendar request is the object plus its metadata and has one of five types, so
+`adopt` gains a conversion that sees the whole row and reads the type from the `action_type` column 5a wrote. The export needs
+the inverse, from the parameters back to the object and its metadata in the 5a form, because the export of 4b only writes JSON.
+
+Acceptance criteria:
+
+1. Each row of the screen table, in the variant the owner chose, has a test against the JSON the dashboard reads. The QA run
+   (gstack `/qa`) checks every type on desktop and at 375 px, including a description edit.
+2. The 5a ending tests pass against the external source with the same states and call counts.
+3. Starting on a `DATA_DIR` with waiting and ended calendar rows gives the same ids, states and versions under `external`, with
+   one `approval.migrated` line per waiting row; a second start changes nothing.
+4. After 5b, a search of `src/` for `kind == "calendar"` or `"calendar"` as a source finds nothing outside `cal.py` and the
+   migration.
+5. Rollback: the export, then 5a, shows the same waiting requests, and approving one of them writes the event.
+
+### Decisions for package 5
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D5-1 | One package or 5a and 5b? | 5a, then 5b | 5a fixes C1 to C4 without a visible change; only 5b needs a mock |
+| D5-2 | What if the connection drops after the write was sent? | `unclear`, no read-back | iCloud rewrites the stored object, so comparing it with what was sent is not reliable; a repeat would email the guests twice |
+| D5-3 | Deleting an event that is already gone | `discarded`, `target_changed` | Today it says "Deleted … iCloud now emails …", which did not happen |
+| D5-4 | One type, or one per operation? | One per operation | Badge and button stay fixed per type, and the owner's list of types names what each one does |
+| D5-5 | The card title | open, decided on the mock | Variants A to C above |
+| D5-6 | A 412 or 404 to the write itself, after the read found the event unchanged | `failed`, then `target_changed` at the next read | It is true that nothing was written, and the gate keeps its three answers. The other way, a fourth executor answer that ends a request, changes the gate for a race of seconds |
+
+Reviewed on 2026-11-18 with gstack `/plan-eng-review` and a second opinion from Codex. Codex raised five points, all taken in
+above: the 412 or 404 at the write (D5-6), the calendar's own list rules, the full description, the migration by row, and what
+`sent` means for the guests.
+
+Effort, estimated and not measured: 5a about 240 min of work and 30 min of review; 5b about 300 min of work after the mock,
+plus 45 min of review.
 
 ## Rules for whoever implements a package
 
