@@ -7,6 +7,8 @@ from email.message import EmailMessage
 
 import pytest
 
+from mail_held import held, pending
+
 import icloud_mcp.mail as mail_mod
 from icloud_mcp.config import Settings
 from icloud_mcp.mail import MailError, MailService
@@ -154,6 +156,7 @@ def test_only_drafts_can_be_sent_this_way(env):
 
 def test_approval_and_local_mode_apply_to_drafts_too(env, monkeypatch):
     svc, imap, sent = env
+    held(svc)                                   # package 6b: mail waits as an action on the external source
     uid = imap.add("Drafts", draft_bytes(), (b"\\Draft",))
     svc.s = dataclasses.replace(svc.s, require_approval=True)
     r = svc.send_draft(uid, uidvalidity=7)
@@ -166,25 +169,27 @@ def test_sending_the_same_draft_twice_for_approval_queues_it_once(env):
     # A draft saved without Message-ID or Date gets fresh ones on every send_draft, so the bytes differ each time: the outbox
     # used to hold two copies, and the owner could release both.
     svc, imap, sent = env
+    held(svc)                                   # package 6b: mail waits as an action on the external source
     uid = imap.add("Drafts", draft_bytes(stamped=False), (b"\\Draft",))
     svc.s = dataclasses.replace(svc.s, require_approval=True)
     first = svc.send_draft(uid, uidvalidity=7)
     again = svc.send_draft(uid, uidvalidity=7)
-    assert len(svc.outbox.pending()) == 1 and not sent
+    assert len(pending(svc)) == 1 and not sent
     assert again["outbox_id"] == first["outbox_id"] and again["already_queued"] is True and "already_queued" not in first
     assert again["message_id"] == first["message_id"] and again["subject"] == "Lunch" and again["to"] == first["to"]
     assert 0 < again["expires_in_seconds"] <= first["expires_in_seconds"]
     changed = svc.update_draft(uid, uidvalidity=7, subject="Lunch on Friday")["uid"]  # a changed draft is a new message
     other = svc.send_draft(changed, uidvalidity=7)
-    assert other["outbox_id"] != first["outbox_id"] and len(svc.outbox.pending()) == 2
+    assert other["outbox_id"] != first["outbox_id"] and len(pending(svc)) == 2
 
 
 def test_a_draft_with_its_own_message_id_is_also_reported_as_already_queued(env):
     svc, imap, sent = env
+    held(svc)                                   # package 6b: mail waits as an action on the external source
     uid = imap.add("Drafts", draft_bytes(), (b"\\Draft",))
     svc.s = dataclasses.replace(svc.s, require_approval=True)
     first, again = svc.send_draft(uid, uidvalidity=7), svc.send_draft(uid, uidvalidity=7)
-    assert again["outbox_id"] == first["outbox_id"] and again["already_queued"] is True and len(svc.outbox.pending()) == 1
+    assert again["outbox_id"] == first["outbox_id"] and again["already_queued"] is True and len(pending(svc)) == 1
     assert again["message_id"] == "<d1@example.org>" and not sent
 
 

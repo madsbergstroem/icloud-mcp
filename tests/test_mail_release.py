@@ -20,13 +20,13 @@ import pytest
 
 import icloud_mcp.mail as mail_mod
 import smtp_fakes
+from mail_held import approve, held, pending
 from test_dashboard import web  # noqa: F401  -- a fixture
 from icloud_mcp.config import Settings
 from icloud_mcp.gate import actions as A
 from icloud_mcp.gate.actions import Rechecked
-from icloud_mcp.gate.external import ExternalApprovals
 from icloud_mcp.gate.store import Store
-from icloud_mcp.mail import MAIL_TYPES, MailError, MailService, mail_type_of
+from icloud_mcp.mail import MailError, MailService, mail_type_of
 
 ME = "me@icloud.com"
 REAL_CONNECT = socket.create_connection
@@ -85,12 +85,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(MailService, "_select", staticmethod(select))
     monkeypatch.setattr(MailService, "_move_messages", staticmethod(move))
     s = Settings.from_env()
-    mail = MailService(s, outbox=Store(str(tmp_path), "mail", 3600, 20, keep_days=s.audit_keep_days, tombstones=True,
-                                                type_of=mail_type_of, report_type=False))
-    reg = A.ActionRegistry()
-    mail_mod.register_types(reg, mail)
-    mail.external = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20, keep_days=s.audit_keep_days, tombstones=tuple(MAIL_TYPES)),
-                                      reg)                    # package 6b: the mail types on the external source
+    mail = held(MailService(s))                                  # package 6b: the mail types on the external source
     yield mail, server, fake, state
     mail._smtp_drop(quit=False)
     server.close()
@@ -104,32 +99,12 @@ def queue(mail, **kw):
     return r["outbox_id"]
 
 
-def approve(mail, item_id, sha256=None):
-    """The owner's approval of a waiting mail, as the dashboard does it; sha256: the version the owner looked at. Returns
-    {"status": sent | unclear, "note", "refused": how many the server refused}; raises Rechecked when it ended not_allowed,
-    MailError when it waits again (in the words the owner reads)."""
-    q = next((x for x in mail.external.box.pending() if x.id == item_id), None)
-    if q is None:
-        raise MailError("That message is no longer waiting (already released, discarded or expired).")
-    try:
-        got = mail.external.release(dataclasses.replace(q, sha256=sha256) if sha256 else q)
-    except (A.Rechecked, A.Revised):
-        raise
-    except A.ExternalError as e:                             # it waits again
-        raise MailError(str(e)) from None
-    return {"status": {"unconfirmed": "unclear"}.get(got.delivery, got.delivery), "note": str(got), "refused": got.refused}
-
-
 def state(mail, item_id):
     return mail.external.box.state_of(item_id)
 
 
 def attempts(mail, item_id):
     return mail.external.box._db.execute("SELECT attempts FROM request WHERE id = ?", (item_id,)).fetchone()[0]
-
-
-def pending(mail):
-    return mail.external.box.pending()
 
 
 # -- the server takes it -------------------------------------------------------------------------------------------------------
@@ -399,12 +374,15 @@ def test_the_server_moves_held_mail_to_the_mail_types_once(tmp_path, monkeypatch
     s = Settings.from_env()
     old = Outbox(str(tmp_path), 3600, 20)
     a = old.add(b"From: me@icloud.com\r\nTo: jana@example.org\r\nSubject: Lunch\r\nMessage-ID: <a1@icloud.com>\r\n\r\nNoon?\r\n", ["jana@example.org"])
-    rows = Store(str(tmp_path), "mail", 3600, 20, tombstones=True, type_of=mail_type_of, report_type=False)
-    built = MailService(s, outbox=rows)
+    rows = Store(str(tmp_path), "mail", 3600, 20, tombstones=True, type_of=mail_type_of, report_type=False)   # as 6a kept them
     big = bytes(range(256)) * (5 * 1024 * 1024 // 256)
-    f = built.send(to=["tom@example.net"], subject="Scan", body="Attached.",
-                   attachments=[{"filename": "scan.pdf", "content_base64": base64.b64encode(big).decode()}])["outbox_id"]
-    long_ = built.send(to=["jana@example.org"], subject="Minutes", body="Line of the minutes.\n" * 15000)["outbox_id"]
+
+    def held_6a(**kw):
+        msg = mail_mod.build_message(sender=(ME, ME), max_attachment_bytes=len(big) + 1, **kw)
+        return rows.add(msg.as_bytes(policy=policy.SMTP), [kw["to"][0][1]]).id
+    f = held_6a(to=[("", "tom@example.net")], subject="Scan", text="Attached.",
+                attachments=[{"filename": "scan.pdf", "content_base64": base64.b64encode(big).decode()}])
+    long_ = held_6a(to=[("", "jana@example.org")], subject="Minutes", text="Line of the minutes.\n" * 15000)
     fwd = rows.add(b"From: me@icloud.com\r\nTo: tom@example.net\r\nSubject: Fwd: Plan\r\n\r\nFYI\r\n", ["tom@example.net"],
                    {"folder": "INBOX", "uid": 9, "flag": "$Forwarded", "uidvalidity": 3})
     fwd2 = rows.replace(fwd.id, fwd.sha256, fwd.raw.replace(b"FYI", b"FYI, see the plan"))

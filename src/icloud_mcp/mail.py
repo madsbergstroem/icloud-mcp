@@ -51,7 +51,7 @@ from .safety import HIDDEN_NOTICE, HIDDEN_TEXT_WARNING, compact, confirm_problem
 from .safety import confirm_token as make_confirm_token
 from .mailbulk import bulk_view, uid_chunks, uid_set
 from . import mailparts
-from .outbox import Outbox, OutboxFull, QueuedMessage
+from .outbox import QueuedMessage
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -847,11 +847,9 @@ _retrying = callctx.retry_once_if_safe(_mail_transport)
 
 
 class MailService:
-    def __init__(self, settings: Settings, outbox: Any = None):
-        """outbox: where mail waits for the owner; the server passes the approval store (package 6a), else the JSON queue."""
+    def __init__(self, settings: Settings):
         self.s = settings
         self._folder_cache: dict[str, str] = {}
-        self.outbox = outbox if outbox is not None else Outbox(settings.data_dir, settings.outbox_ttl, settings.outbox_max)
         self._people_lock = threading.Lock()
         self._people_cache: dict[bool, tuple[float, dict[str, dict[str, Any]], dict[str, int]]] = {}
         self._pool_lock = threading.Lock()
@@ -868,7 +866,7 @@ class MailService:
         self._smtp: tuple[smtplib.SMTP, float] | None = None                     # (logged-in connection, last used)
         self._contexts_lock = threading.Lock()
         self._contexts: dict[tuple[str, str, Any], dict[str, Any]] = {}  # (id, sha256, uidvalidity) -> a queued item's original, memory only
-        # package 6b: when set (the server's external source), mail waits as actions of the mail types there, not in `outbox`
+        # package 6b: the server's external source, where mail that waits for the owner is an action of one of the mail types
         self.external: Any = None
 
     # -- connections ---------------------------------------------------------
@@ -1938,30 +1936,17 @@ class MailService:
         }
 
     def _queue_checked(self, msg: EmailMessage, followup: dict[str, Any] | None = None, key: str | None = None) -> dict[str, Any]:
-        """Queue a message for the owner's approval, after the same gates as a send (ALLOW_SEND, recipient cap, allowlist).
-        key: what the message was built from (a saved draft), so a repeat returns the entry already waiting, and, in the approval
-        store, the mail it became once that ended: nothing is queued again (D6-3).
+        """Queue a message for the owner's approval, after the same gates as a send (ALLOW_SEND, recipient cap, allowlist), as an
+        action of its mail type on the external source (package 6b). key: what the message was built from (a saved draft), so a
+        repeat returns the mail already waiting, and, once that ended, its outcome: nothing is queued again (D6-3).
         Takes no IMAP connection: nothing here reads or writes the mailbox."""
-        from .gate.store import AlreadyDecided, StoreUnavailable
         if not self.s.allow_send:
             raise MailError("Sending is disabled on this server (ALLOW_SEND=false). Use draft=true to save a draft instead.")
-        recipients = self._check_recipients(msg)
-        asked = time.time()
-        if self.external is not None:                             # package 6b: an action of a mail type on the external source
-            return self._queue_action(msg, followup, key, asked)
-        try:
-            q = self.outbox.add(msg.as_bytes(policy=policy.SMTP), recipients, followup, key=key)
-        except OutboxFull as e:
-            raise MailError(str(e)) from e
-        except StoreUnavailable as e:
-            raise MailError(str(e)) from e
-        except AlreadyDecided as e:              # this draft became a mail that was decided: its outcome, and nothing queued
-            status = "waiting" if e.state == "executing" else e.state
-            return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
-                    "notice": "Nothing was queued: this draft was already queued once and that mail was decided. Do not send it again; "
-                              "approval_status with the outbox_id says more, and the owner can send the draft from Mail."}
-        again = q.created_at < asked             # the entry already waiting: describe what the owner will actually see
-        return self._queued(q, again, email.message_from_bytes(q.raw, policy=policy.default) if again else msg)
+        self._check_recipients(msg)
+        if self.external is None:
+            raise MailError("Nothing can wait for the owner's approval on this server: it has no approval page. Use draft=true to save "
+                            "a draft the owner sends from Mail.")
+        return self._queue_action(msg, followup, key, time.time())
 
     def _queued(self, q: Any, again: bool, queued: EmailMessage) -> dict[str, Any]:
         """What a tool answers for a mail that waits (queued, or the one already waiting when `again`)."""
@@ -2224,24 +2209,6 @@ class MailService:
                 pass
         return result
 
-    def describe_queued(self, q: QueuedMessage, context: dict[str, Any] | None = None) -> dict[str, Any]:
-        """What the owner reviews before approving: exactly the stored message, envelope included. context: this item's entry
-        from approval_contexts when the caller already has it (the page reads every item's at once)."""
-        msg = email.message_from_bytes(q.raw, policy=policy.default)
-        text, htm = extract_bodies(msg)
-        body = text if text is not None else (html_to_text(htm) if htm else "")
-        return {
-            "id": q.id, "created_at": q.created_at, "expires_at": q.expires_at,
-            "from": str(msg["From"]), "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""), "bcc": str(msg["Bcc"] or ""),
-            "envelope_recipients": q.recipients, "subject": str(msg["Subject"] or ""), "body": body,
-            "attachments": [x for x in list_attachments(msg) if x["index"] not in {w["index"] for w in pending_files(msg)}],
-            "pending_files": pending_files(msg), "added_files": added_files(msg), "is_reply": bool(msg["In-Reply-To"]),
-            **(context if context is not None else self._approval_context(q)),
-        }
-
-    def _approval_context(self, q: QueuedMessage) -> dict[str, Any]:
-        return self.approval_contexts([q])[q.id]
-
     def approval_contexts(self, qs: list[QueuedMessage], *, prune: bool = False) -> dict[str, dict[str, Any]]:
         """What the owner needs to judge an injected message, per queued item id: the message it answers or forwards (its
         sender, subject, whether it is bulk mail and the warnings its text carried) and any recipient whose address an agent
@@ -2355,136 +2322,6 @@ class MailService:
         if uploads and result.get("files_to_add"):
             result["files_to_add"] = [{"filename": u["filename"], "upload_url": f"{self.s.public_url}/files/{u['token']}"} for u in uploads]
         return result
-
-    def add_file(self, data: bytes, *, filename: str | None = None, content_type: str | None = None, item_id: str | None = None,
-                 index: int | None = None, token: str | None = None) -> tuple[QueuedMessage, dict[str, Any]]:
-        """Put a file into the placeholder waiting for it: the owner's (item_id and attachment index, from the dashboard) or an
-        agent's upload (token). The owner can also replace a file added before. The message is rebuilt with the file and gets
-        a new hash; nothing is sent."""
-        if not data:
-            raise MailError("The file is empty.")
-        if len(data) > self.s.max_attachment_bytes:
-            raise MailError(f"The file is {len(data)} bytes; the limit is {self.s.max_attachment_bytes} (MAX_ATTACHMENT_BYTES).")
-        want = hashlib.sha256(token.encode()).hexdigest() if token else None
-        for q in self.outbox.pending():
-            if item_id is not None and q.id != item_id:
-                continue
-            msg = email.message_from_bytes(q.raw, policy=policy.default)
-            for i, part in enumerate(iter_attachment_parts(msg)):
-                held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
-                held = str(held).strip() if held else None            # Python 3.11 keeps the folded header's leading space
-                if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
-                    continue
-                asked = str(added) if added else part.get_filename() or "attachment"
-                name = safe_filename(filename) or asked
-                ctype = (content_type or "").split(";")[0].strip().lower()
-                if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", ctype) or ctype in ("application/octet-stream", "application/x-www-form-urlencoded"):
-                    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
-                maintype, _, subtype = ctype.partition("/")
-                part.clear_content()
-                del part[PENDING_HEADER], part[ADDED_HEADER]
-                part.set_content(data, maintype=maintype, subtype=subtype, disposition="attachment", filename=name)
-                part[ADDED_HEADER] = asked
-                new = self._store_rebuilt(q, msg)
-                return new, {"index": i, "filename": name, "size": len(data), "content_type": ctype, "asked": asked,
-                             "waiting": pending_files(msg)}
-        raise MailError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
-
-    def remove_file(self, item_id: str, index: int) -> tuple[QueuedMessage, dict[str, Any]]:
-        """Take a file the owner or an upload added back out: its place waits for a file again. The new placeholder gets a
-        fresh token nobody holds, so an agent's old upload link stays used up and only the owner adds the next file."""
-        for q in self.outbox.pending():
-            if q.id != item_id:
-                continue
-            msg = email.message_from_bytes(q.raw, policy=policy.default)
-            parts = iter_attachment_parts(msg)
-            if not 0 <= index < len(parts) or not parts[index].get(ADDED_HEADER):
-                break
-            part = parts[index]
-            asked = str(part[ADDED_HEADER])
-            part.clear_content()
-            del part[ADDED_HEADER]
-            part.set_content(_placeholder_text(asked), maintype="application", subtype="x-icloud-mcp-pending",
-                             disposition="attachment", filename=asked)
-            part[PENDING_HEADER] = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
-            new = self._store_rebuilt(q, msg)
-            return new, {"index": index, "asked": asked, "waiting": pending_files(msg)}
-        raise MailError("There is no added file here to remove: the message was sent, discarded or has expired.")
-
-    def _store_rebuilt(self, q: QueuedMessage, msg: EmailMessage) -> QueuedMessage:
-        new = self.outbox.replace(q.id, q.sha256, msg.as_bytes(policy=policy.SMTP))
-        if new is None:
-            raise MailError("The message changed while the file was added. Reload the page and try again.")
-        with self._contexts_lock:
-            self._contexts.pop(self._context_key(q), None)
-        return new
-
-    def approve(self, item_id: str, sha256: str | None = None) -> dict[str, Any]:
-        """The owner approved a waiting mail: send exactly what was stored, at most once. Called only from the owner's approval
-        pages (the dashboard, /outbox), never from a tool. sha256: the version the owner looked at; another one is not sent.
-
-        How it ends (docs/SENDGATE.md, package 6a): a file still missing -> nothing is claimed; another version than the one the
-        owner looked at -> waits again; sending off, a recipient the lists no longer allow or too many -> discarded (not_allowed),
-        raised as Rechecked; the mailbox cannot be opened, or SMTP fails before the message is handed over or answers it with an
-        error code -> waits again (failed), raised as MailError; the connection drops or times out while the message is handed
-        over -> unclear, never sent again; the server takes it -> sent, also when it refused some recipients or the copy in Sent,
-        the flag on the original or the draft's move to Trash failed (the note says which). Returns the send's result with
-        `status` (sent or unclear) and `note`, the line for the owner."""
-        from .gate.actions import Rechecked
-        gone = "That message is no longer waiting (already released, discarded or expired)."
-        ahead = next((x for x in self.outbox.pending() if x.id == item_id), None)
-        if ahead is None:
-            raise MailError(gone)
-        if waiting := pending_files(email.message_from_bytes(ahead.raw, policy=policy.default)):   # nothing is claimed
-            raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
-        q = self.outbox.claim(item_id, "executing")
-        if q is None:
-            raise MailError(gone)
-        with self._contexts_lock:
-            self._contexts.pop(self._context_key(q), None)
-        msg = email.message_from_bytes(q.raw, policy=policy.default)
-        if (sha256 is not None and q.sha256 != sha256) or pending_files(msg):      # changed between the owner's look and the click
-            self.outbox.restore(q)
-            raise MailError("The message changed just now (a file was added or the text edited). Nothing was sent; look at it again.")
-        try:
-            if not self.s.allow_send:
-                raise MailError("Sending is disabled on this server (ALLOW_SEND=false).")
-            recipients = self._check_recipients(msg)  # the lists as they are now, the same check as when the agent asked
-        except MailError as e:
-            self.outbox.finish(q.id, "discarded", "not_allowed")
-            raise Rechecked("not_allowed", f"Not sent: {e}") from e
-        raw = q.raw
-        if added := [p for p in iter_attachment_parts(msg) if p.get(ADDED_HEADER)]:
-            for p in added:                           # what the owner approved, without the server's own bookkeeping
-                del p[ADDED_HEADER]
-            raw = msg.as_bytes(policy=policy.SMTP)
-        opened, sent = False, []
-        try:
-            with self.imap() as c:                    # the mailbox first: one that cannot be opened sends nothing
-                opened = True
-                result = self._send_and_file(c, msg, raw, recipients, q.followup, self._summary_of(msg), sent=sent)
-        except SmtpFailed as e:
-            if e.maybe_sent:
-                return self._unclear(q, recipients, e.__cause__ or e)
-            self.outbox.restore(q)
-            raise MailError(e.reason or str(e)) from e         # the pages say it was not sent and still waits
-        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the server took it
-            if sent:                                  # it went out; only the filing after it failed
-                self.outbox.finish(q.id, "sent")
-                return self._sent_note({"status": "sent", "recipients": recipients, "refused": {k: list(v) for k, v in sent[0].items()},
-                                        "warning": f"Sent, but filing it afterwards failed: {e}"})
-            if not opened:
-                self.outbox.restore(q)
-                raise MailError(f"The mailbox could not be opened: {e}") from e
-            return self._unclear(q, recipients, e)
-        self.outbox.finish(q.id, "sent")
-        return self._sent_note(result)
-
-    def _unclear(self, q: QueuedMessage, recipients: list[str], e: BaseException) -> dict[str, Any]:
-        self.outbox.finish(q.id, "unclear")
-        return {"status": "unclear", "recipients": recipients,
-                "note": f"The mail server did not confirm the mail ({type(e).__name__}), so it may or may not have gone out. It is not "
-                        "sent again; ask a recipient before sending it once more."}
 
     @staticmethod
     def _sent_note(result: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 """The owner-approval gate: agents can only queue mail; release needs the owner password in a browser."""
 import contextlib
+import json
 import dataclasses
 import re
 import time
@@ -13,6 +14,7 @@ from icloud_mcp.gate.actions import Rechecked
 from icloud_mcp.mail import ANSWERED, MailError, MailService, SmtpFailed
 from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
+from mail_held import approve, held, pending
 
 BASE = "https://mcp.example.com"
 PASSWORD = "correct-horse-battery"
@@ -63,54 +65,56 @@ def send(mail, **kw):
 
 
 # ------------------------------------------------------------------ MailService
+# Since package 6b a mail that waits is an action of a mail type on the external source (mail_held.held), and the owner's
+# approval goes through the source's release (mail_held.approve): its answer is the owner's line, not the send's dict.
 def test_send_only_queues(env):
     s, fake, sent = env
-    mail = MailService(s)
+    mail = held(MailService(s))
     r = send(mail, bcc=["carol@example.org"])
     assert r["status"] == "queued_for_owner_approval" and r["sent"] is False
     assert r["approve_at"] == f"{BASE}/outbox" and "NOT SENT" in r["notice"]
     assert sent == [] and fake.appended == []           # nothing left the server, nothing filed in Sent
-    assert len(mail.outbox.pending()) == 1
+    assert len(pending(mail)) == 1
     assert sorted(r["recipients"]) == ["bob@example.org", "carol@example.org"]
 
 
 def test_release_sends_stored_message_once(env):
     s, fake, sent = env
-    mail = MailService(s)
+    mail = held(MailService(s))
     qid = send(mail, subject="Quarterly numbers", body="See attached", bcc=["carol@example.org"])["outbox_id"]
-    res = mail.approve(qid)
-    assert res["status"] == "sent" and res["saved_to"] == "Sent Messages"
+    res = approve(mail, qid)
+    assert res["status"] == "sent" and res["note"] == "Sent to bob@example.org, carol@example.org."
     (msg, rcpts), = sent
     assert str(msg["Subject"]) == "Quarterly numbers" and "See attached" in msg.get_body(("plain",)).get_content()
     assert sorted(rcpts) == ["bob@example.org", "carol@example.org"]
     assert len(fake.appended) == 1 and fake.appended[0][0] == "Sent Messages"
     with pytest.raises(MailError):                        # second release of the same id must fail
-        mail.approve(qid)
+        approve(mail, qid)
     assert len(sent) == 1
 
 
 def test_failed_send_stays_queued_and_can_retry(env, monkeypatch):
     s, fake, sent = env
-    mail = MailService(s)
+    mail = held(MailService(s))
     qid = send(mail)["outbox_id"]
     # package 6a: only a failure that proves nothing went out puts it back (SmtpFailed with maybe_sent false)
     monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: (_ for _ in ()).throw(SmtpFailed("SMTP send failed", False)))
     with pytest.raises(MailError):
-        mail.approve(qid)
-    assert [q.id for q in mail.outbox.pending()] == [qid]
+        approve(mail, qid)
+    assert [q.id for q in pending(mail)] == [qid]
     monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: sent.append((m, r)) or {})
-    assert mail.approve(qid)["status"] == "sent"
+    assert approve(mail, qid)["status"] == "sent"
 
 
 def test_reply_flags_original_only_after_release(env, monkeypatch):
     s, fake, sent = env
     original = b"From: Alice <alice@example.org>\r\nTo: me@icloud.com\r\nSubject: Question\r\nMessage-ID: <1@example.org>\r\nDate: Tue, 1 Sep 2026 10:00:00 +0000\r\n\r\nCan you help?\r\n"
     monkeypatch.setattr(MailService, "_fetch_raw", lambda self, c, folder, uid, readonly=True, uidvalidity=None: (original, (), None, 7))
-    mail = MailService(s)
+    mail = held(MailService(s))
     r = mail.reply("INBOX", 7, "Yes, happy to.")
     assert r["status"] == "queued_for_owner_approval" and fake.flags == []
-    res = mail.approve(r["outbox_id"])
-    assert res["original_marked_answered"] is True and fake.flags == [([7], [ANSWERED])]
+    res = approve(mail, r["outbox_id"])
+    assert res["status"] == "sent" and "not marked" not in res["note"] and fake.flags == [([7], [ANSWERED])]
     assert str(sent[0][0]["In-Reply-To"]) == "<1@example.org>"
 
 
@@ -120,15 +124,14 @@ def test_release_skips_stale_original_flags(env, monkeypatch, operation, current
     s, fake, sent = env
     original = b"From: Alice <alice@example.org>\r\nTo: me@icloud.com\r\nSubject: Question\r\nMessage-ID: <1@example.org>\r\n\r\nCan you help?\r\n"
     monkeypatch.setattr(MailService, "_fetch_raw", lambda self, c, folder, uid, readonly=True, uidvalidity=None: (original, (), None, 7))
-    mail = MailService(s)
+    mail = held(MailService(s))
     queued = (mail.reply("INBOX", 7, "Yes") if operation == "reply"
               else mail.forward("INBOX", 7, ["bob@example.org"], note="FYI"))
-    assert mail.outbox.pending()[0].followup["uidvalidity"] == 7
+    assert json.loads(pending(mail)[0].raw)["params"]["followup"]["uidvalidity"] == 7
     fake.uidvalidity = current
-    result = mail.approve(queued["outbox_id"])
+    result = approve(mail, queued["outbox_id"])
     assert result["status"] == "sent" and len(sent) == 1
-    assert "out of date" in result["original_flag_skipped"]
-    assert "original_marked_answered" not in result and "original_flagged" not in result
+    assert "The original was not marked" in result["note"] and "out of date" in result["note"]
     assert fake.flags == []
 
 
@@ -153,7 +156,7 @@ def test_queue_survives_restart_and_tampering_is_ignored(tmp_path):
 
 def test_queue_is_capped(env):
     s, *_ = env
-    mail = MailService(dataclasses.replace(s, outbox_max=2))
+    mail = held(MailService(dataclasses.replace(s, outbox_max=2)))
     send(mail, subject="1"); send(mail, subject="2")
     with pytest.raises(MailError, match="OUTBOX_MAX"):
         send(mail, subject="3")
@@ -161,14 +164,14 @@ def test_queue_is_capped(env):
 
 def test_allowlist_checked_when_queued_and_again_on_release(env):
     s, fake, sent = env
-    mail = MailService(dataclasses.replace(s, send_allowlist=("@example.org",)))
+    mail = held(MailService(dataclasses.replace(s, send_allowlist=("@example.org",))))
     with pytest.raises(MailError, match="SEND_ALLOWLIST"):
         send(mail, to=["eve@evil.test"])
     qid = send(mail)["outbox_id"]
-    tightened = MailService(dataclasses.replace(s, send_allowlist=("someone@else.test",)))
+    mail.s = dataclasses.replace(s, send_allowlist=("someone@else.test",))
     with pytest.raises(Rechecked, match="SEND_ALLOWLIST"):     # package 6a: it ends (not_allowed) instead of waiting again
-        tightened.approve(qid)
-    assert sent == [] and tightened.outbox.pending() == []
+        approve(mail, qid)
+    assert sent == [] and pending(mail) == []
 
 
 def test_send_disabled_and_approval_off_modes(env):
