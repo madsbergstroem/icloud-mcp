@@ -97,6 +97,8 @@ class Server:
             if hit is None:
                 return HTTPReply(404, reason="Not Found")
             return HTTPReply(200, hit[0].encode(), {"Content-Type": "text/calendar", "ETag": hit[1]})
+        if obj and method in ("PUT", "DELETE") and (refused := self._precondition(obj, headers)):
+            return refused
         if obj and method == "PUT":
             self.etags += 1
             self.events[obj.group(1)][obj.group(2)] = (body, f'"e{self.etags}"')
@@ -105,6 +107,16 @@ class Server:
             self.events[obj.group(1)].pop(obj.group(2), None)
             return HTTPReply(204, reason="No Content")
         return HTTPReply(405, reason="Method Not Allowed")
+
+    def _precondition(self, obj, headers):
+        """If-None-Match: * and If-Match as iCloud honours them: 412 when the object is there, or not in that version."""
+        h = {k.lower(): v for k, v in headers.items()}
+        hit = self.events[obj.group(1)].get(obj.group(2))
+        if h.get("if-none-match") == "*" and hit is not None:
+            return HTTPReply(412, reason="Precondition Failed")
+        if "if-match" in h and (hit is None or hit[1] != h["if-match"]):
+            return HTTPReply(412, reason="Precondition Failed")
+        return None
 
     def _propfind(self, path, depth):
         if path in ("", "/"):

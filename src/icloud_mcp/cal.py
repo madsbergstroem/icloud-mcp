@@ -50,6 +50,40 @@ def _no_http3(client: Any) -> None:
         log.debug("could not disable HTTP/3 on the CalDAV session", exc_info=True)
 
 
+# The action type of each held operation (docs/SENDGATE.md, package 5): written with the request, so it outlasts the content.
+CALENDAR_TYPES = {"create": "calendar.invite", "update": "calendar.update", "delete": "calendar.delete", "cancel": "calendar.cancel",
+                  "reply": "calendar.reply"}
+
+
+def calendar_type_of(q: Any) -> str | None:
+    """The type of a held change read in from calendar-outbox.json, from its operation."""
+    return CALENDAR_TYPES.get(str((q.followup or {}).get("op") or ""))
+
+
+def _bare_etag(v: Any) -> str:
+    """An ETag without the weak prefix and the quotes, so the header and the value caldav kept compare equal."""
+    return str(v).strip().removeprefix("W/").strip('"')
+
+
+def _never_sent(e: BaseException) -> bool:
+    """Whether a transport error proves the request never left this server: a connect timeout, or a connection that could not be
+    opened (refused, name lookup). Anything else (a read timeout, a reset after the request went out) may have reached iCloud."""
+    import niquests.exceptions as NE
+    from urllib3.exceptions import NewConnectionError
+    if isinstance(e, NE.ConnectTimeout):
+        return True
+    seen, todo = set(), [e]
+    while todo:
+        x = todo.pop()
+        if x is None or id(x) in seen:
+            continue
+        seen.add(id(x))
+        if isinstance(x, NewConnectionError):                     # NameResolutionError is one too
+            return True
+        todo += [x.__cause__, x.__context__, getattr(x, "reason", None)] + [a for a in getattr(x, "args", ()) if isinstance(a, BaseException)]
+    return False
+
+
 class CalendarError(Exception):
     """User-facing calendar failure."""
 
@@ -1697,7 +1731,8 @@ class CalendarService:
         raw = ics.encode() if isinstance(ics, str) else bytes(ics)
         try:
             q = self.outbox.add(raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta,
-                                approval_page="the dashboard's Approvals page")   # calendar approvals exist only there
+                                approval_page="the dashboard's Approvals page",   # calendar approvals exist only there
+                                action_type=CALENDAR_TYPES.get(op))
         except OutboxFull as e:
             raise CalendarError(str(e)) from e
         who = meta["organizer"] if op == "reply" else ", ".join(guests) or "the attendees"
@@ -1706,6 +1741,94 @@ class CalendarService:
                 "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
                           "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call: approval_status with the outbox_id "
                           "says what became of it."}
+
+    def approve(self, outbox: Any, item_id: str, sha256: str | None = None) -> dict[str, Any]:
+        """The owner approved a held change: write exactly what was stored, conditional on the version it was based on. Called only
+        from the owner's approval page, never from a tool. sha256: the version the owner looked at; another one is not written.
+
+        How it ends (docs/SENDGATE.md, package 5a): a guest (for a reply the organizer) the lists no longer allow -> discarded
+        (not_allowed); the event changed or is gone when read just before the write -> discarded (target_changed); the read fails,
+        or iCloud could not be reached before the write went out -> waits again; iCloud answers 412 or 404 to the write itself ->
+        waits again, and the next approval ends it at the read (D5-6); another 4xx -> waits again (nothing was written); a 5xx,
+        a read timeout or a connection lost after the write went out -> unclear, never written again (D5-2); 2xx -> sent."""
+        from .gate.actions import Rechecked
+        q = outbox.claim(item_id, "executing")
+        if q is None:
+            raise CalendarError("That change is no longer waiting (already approved, discarded or expired).")
+        if sha256 is not None and q.sha256 != sha256:             # edited between the owner's look and the click
+            outbox.restore(q)
+            raise CalendarError("The change was edited just now. Nothing was written; look at it again.")
+        m = q.followup or {}
+        try:
+            self._check_guests(list(q.recipients))                # the lists as they are now, the same check as when the agent asked
+        except CalendarError as e:
+            outbox.finish(q.id, "discarded", "not_allowed")
+            raise Rechecked("not_allowed", f"Not written: {e}") from e
+        body = q.raw.decode()
+        url = (f"{m['calendar_url'].rstrip('/')}/{quote(m['uid'], safe='@')}.ics" if m.get("op") == "create" else m.get("href"))
+        written = False
+        try:
+            with self._principal() as p:
+                client = p.client
+                self._tl.mutated = True
+                got = client.request(url, "GET")                  # the event as it is now; also proves the connection works
+                gone = int(getattr(got, "status", 0) or 0) == 404
+                if m.get("op") == "create" and not gone and 200 <= int(got.status) < 300:
+                    outbox.finish(q.id, "discarded", "target_changed")
+                    raise Rechecked("target_changed", "Not written: an event with the same id is already in the calendar.")
+                if m.get("op") != "create":
+                    etag = (getattr(got, "headers", None) or {}).get("ETag")
+                    if gone or (etag and m.get("etag") and _bare_etag(etag) != _bare_etag(m["etag"])):
+                        outbox.finish(q.id, "discarded", "target_changed")
+                        raise Rechecked("target_changed", "Not written: the event is no longer in the calendar." if gone else
+                                        "Not written: the event changed in the calendar after the agent asked. Ask again if it is still wanted.")
+                if not gone and not 200 <= int(got.status) < 300:
+                    raise CalendarError(f"The calendar server did not show the event (HTTP {got.status}).")
+                written = True                                    # from here on the write may reach iCloud
+                if m["op"] == "create":
+                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"})
+                elif m["op"] == "delete":
+                    resp = client.request(url, "DELETE", "", {"If-Match": m["etag"]})
+                else:
+                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-Match": m["etag"]})
+                self._uid_cache.pop(m["uid"], None)
+        except Rechecked:
+            raise
+        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the write may have reached iCloud
+            if not written or self._not_reached(e):
+                outbox.restore(q)
+                raise CalendarError(f"Nothing was written, it still waits: {self._reason(e)}") from e
+            outbox.finish(q.id, "unclear")
+            return {"status": "unclear", "note": f"iCloud did not answer clearly ({type(e).__name__}), so the change may or may not "
+                                                 "have been saved. It is not written again; look in your calendar first."}
+        status = int(getattr(resp, "status", 0) or 0)
+        if 200 <= status < 300:
+            outbox.finish(q.id, "sent")
+            verb = {"create": "Added", "update": "Updated", "delete": "Deleted", "cancel": "Cancelled one occurrence of",
+                    "reply": "Answered"}.get(m["op"], "Changed")
+            tail = f" iCloud was asked to email {', '.join(q.recipients)}." if q.recipients else ""
+            return {"status": "sent", "note": f"{verb} “{m.get('summary') or 'the event'}”.{tail}"}
+        if status >= 500:
+            outbox.finish(q.id, "unclear")
+            return {"status": "unclear", "note": f"The calendar server answered HTTP {status}, so the change may or may not have been "
+                                                 "saved. It is not written again; look in your calendar first."}
+        outbox.restore(q)                                         # a 4xx: nothing was written
+        if status in (404, 412):
+            raise CalendarError("Nothing was written: the event changed in the calendar a moment ago. It still waits; approving it "
+                                "again checks the event and ends the request.")
+        raise CalendarError(f"Nothing was written: the calendar server refused the change (HTTP {status}). It still waits.")
+
+    @staticmethod
+    def _not_reached(e: BaseException) -> bool:
+        """An error during the write that proves nothing reached iCloud: a refused sign-in, a connection never opened. caldav reports
+        a 429 and a 503 with Retry-After as one RateLimitError, which cannot tell them apart, so that one counts as unclear."""
+        if isinstance(e, caldav.error.AuthorizationError) or (isinstance(e, CalendarError) and "authentication" in str(e)):
+            return True
+        return _never_sent(e)
+
+    @staticmethod
+    def _reason(e: BaseException) -> str:
+        return str(e) if isinstance(e, CalendarError) else f"the calendar server could not be reached ({type(e).__name__})."
 
     def release(self, q: Any) -> str:
         """The owner approved a held change: write exactly what was stored, conditional on the version it was based on."""
