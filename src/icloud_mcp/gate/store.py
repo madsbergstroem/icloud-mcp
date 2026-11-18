@@ -509,33 +509,40 @@ class Store:
         with self._lock:
             return self._db.execute("SELECT 1 FROM request WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
 
-    def adopt(self, other: str, convert: Any, action_type: str) -> list[tuple[str, str, str]]:
+    def adopt(self, other: str, convert: Any, action_type: str | None = None) -> list[tuple[str, str, str]]:
         """Take every row of source `other` into this store, once and in one transaction (package 4b: iMessage becomes an action
         type). Ids, states, times, keys and versions stay; `convert(raw) -> raw` gives each stored version its new bytes, so a
         waiting request gets a new hash (D4-1). A version whose bytes cannot be converted keeps its old ones, and its request
         stops being approvable rather than vanishing. Ended requests have no bytes and only change source and type. Returns
-        (id, old hash, new hash) for every request that was waiting, for the log."""
+        (id, old hash, new hash) for every request that was waiting, for the log.
+        Without `action_type` (package 5b: a calendar change is its object plus its metadata, of one of five types) every row keeps
+        the type its action_type column holds, `convert(raw, row) -> raw` sees the whole row (followup, recipients, action_type),
+        and the metadata, now part of the new bytes, is dropped from the row."""
         moved: list[tuple[str, str, str]] = []
         with self._lock, self._tx():
             rows = self._db.execute("SELECT * FROM request WHERE source = ?", (other,)).fetchall()
             for r in rows:
+                whole = {"followup": json.loads(r["followup"]) if r["followup"] else None, "recipients": json.loads(r["recipients"] or "[]"),
+                         "action_type": r["action_type"]}
+                conv = convert if action_type is not None else (lambda raw, whole=whole: convert(raw, whole))
                 old_sha, new_sha, new_raw = r["sha256"], r["sha256"], r["raw"]
                 if r["raw"] is not None:
                     try:
-                        new_raw = convert(bytes(r["raw"]))
+                        new_raw = conv(bytes(r["raw"]))
                         new_sha = hashlib.sha256(new_raw).hexdigest()
                     except Exception:  # noqa: BLE001
                         log.warning("approval store: request %s of %s could not be converted; it keeps its old form", r["id"], other)
                         new_raw = r["raw"]
                 for v in self._db.execute("SELECT * FROM version WHERE request_id = ? AND raw IS NOT NULL", (r["id"],)).fetchall():
                     try:
-                        vraw = new_raw if v["sha256"] == old_sha else convert(bytes(v["raw"]))
+                        vraw = new_raw if v["sha256"] == old_sha else conv(bytes(v["raw"]))
                     except Exception:  # noqa: BLE001
                         continue
                     self._db.execute("UPDATE version SET raw = ?, sha256 = ? WHERE request_id = ? AND n = ?",
                                      (vraw, hashlib.sha256(vraw).hexdigest(), r["id"], v["n"]))
-                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ? WHERE id = ?",
-                                 (self.source, action_type, new_raw, new_sha, r["id"]))
+                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ?, followup = ? WHERE id = ?",
+                                 (self.source, action_type or r["action_type"], new_raw, new_sha,
+                                  r["followup"] if action_type is not None or new_raw == r["raw"] else None, r["id"]))
                 if r["state"] == "waiting":
                     moved.append((r["id"], old_sha, new_sha))
         if rows:
@@ -562,12 +569,15 @@ class Store:
                 "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
         return [q for q in rows if (only is None or q.action_type in only) and q.action_type not in skip]
 
-    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False) -> dict[str, int]:
+    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False, as_object: Any = None) -> dict[str, int]:
         """Write the waiting requests back to the JSON queue file, for a rollback to a version without the store, and end them
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
         file in again and never revives a request the old version already sent. Refused while a request is being carried out.
         only/skip pick action types; as_params writes an action's parameters as its bytes, the form a source had before it became
-        an action type (package 4b: iMessage back to 4a), with the hash of those bytes.
+        an action type (package 4b: iMessage back to 4a), with the hash of those bytes; as_object(type, params) -> (bytes,
+        metadata) writes the bytes and metadata a source kept before (package 5b: a calendar change back to 5a). A request
+        written in another source's form is removed here instead of ended: the previous version reads it in under its own source
+        with the same id, which a row left here would hold.
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
         path = self.dir / legacy
         with self._lock:
@@ -576,6 +586,9 @@ class Store:
             if as_params:
                 waiting = [dc_replace(q, raw=(b := json.dumps(json.loads(q.raw.decode())["params"], ensure_ascii=False).encode()),
                                       sha256=hashlib.sha256(b).hexdigest(), action_type=None) for q in waiting]
+            elif as_object is not None:
+                waiting = [dc_replace(q, raw=raw, followup=meta, sha256=hashlib.sha256(raw).hexdigest())
+                           for q in waiting for raw, meta in [as_object(q.action_type, json.loads(q.raw.decode())["params"])]]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]
             unclear = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'unclear'", (self.source,)).fetchone()[0]
             tmp = path.with_suffix(".tmp")
@@ -584,6 +597,10 @@ class Store:
                 json.dump({"items": [q.to_json() for q in waiting]}, f)
             with self._tx():
                 for q in waiting:
+                    if as_params or as_object is not None:                 # read in again under the source it came from
+                        self._db.execute("DELETE FROM request WHERE id = ?", (q.id,))
+                        self._db.execute("DELETE FROM version WHERE request_id = ?", (q.id,))
+                        continue
                     self._end(q.id, "discarded", "exported")
                     self._db.execute("UPDATE request SET key = NULL WHERE id = ?", (q.id,))
             os.replace(tmp, path)

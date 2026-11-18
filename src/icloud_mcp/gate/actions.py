@@ -137,12 +137,25 @@ class ActionType:
     text_style: str = "plain"
     confirm_twice: Callable[[Mapping[str, Any]], "str | None"] | None = None
     note: str = ""
+    # package 5b, all optional: a short label per request (the event's name) for the line under the title and the list, in front
+    # of "to …" and never the title; only a type the server registers itself may have one (ActionRegistry.register), because its
+    # text is the agent's. The caption under the text in place of the general one. And for a text that lives inside the
+    # parameter text_field rather than being it (the calendar's description inside its iCalendar object): how to read it, how
+    # to write it back (the parameters with the new text; ValueError for one that does not fit) and why the text of one request
+    # cannot be edited ("" when it can)
+    subject: Callable[[Mapping[str, Any]], str] | None = None
+    text_caption: str = ""
+    text_of: Callable[[Mapping[str, Any]], str] | None = None
+    with_text: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
+    text_locked: Callable[[Mapping[str, Any]], str] | None = None
 
     def __post_init__(self) -> None:
         if not ID_PATTERN.match(self.id or ""):
-            raise ValueError(f"Action type id {self.id!r} must be lower-case words joined by dots, such as 'test.echo'.")
+            raise ValueError(f"Action type {self.id!r} must be lower-case words joined by dots, such as 'test.echo'.")
         if self.text_style not in TEXT_STYLES:
             raise ValueError(f"Action type {self.id}: text_style must be one of {', '.join(TEXT_STYLES)}.")
+        if (self.text_of is None) != (self.with_text is None) or (self.text_of is not None and self.text_field is None):
+            raise ValueError(f"Action type {self.id}: text_of and with_text come together, with the text_field they read.")
         for field in ("title", "badge", "approve_label"):
             if not str(getattr(self, field)).strip():
                 raise ValueError(f"Action type {self.id}: {field} is empty.")
@@ -257,8 +270,8 @@ class Registration:
     # whether approving is off right now (blocked) or needs a note, read every time; called with approving=True just before a
     # release, so a type may check again then (the gateway connector probes when its last look is old)
     hold: Callable[[bool], Hold | None] | None = None
-    # registered by the server itself (iMessage), not from a connector file or a plugin: its recipients come from the service,
-    # not from an agent's parameters, so the log may name them (D4-2)
+    # registered by the server itself (iMessage, calendar changes), not from a connector file or a plugin: its recipients come
+    # from the service, not from an agent's parameters, so the log may name them (D4-2)
     builtin: bool = False
 
     def hold_now(self, approving: bool = False) -> Hold | None:
@@ -296,7 +309,9 @@ class ActionRegistry:
             raise TypeError("An executor has an execute(request) method.")
         if read_only_fields(action_type) and prepare is None:
             raise ValueError(f"Action type {action_type.id} has readOnly fields but no prepare to fill them in.")
-        allowed = allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
+        if action_type.subject is not None and not builtin:      # the agent's words next to the title: the server's own types only
+            raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have a subject.")
+        allowed =allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
         self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold, builtin)
 
     def copy(self) -> "ActionRegistry":

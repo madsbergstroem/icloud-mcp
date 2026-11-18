@@ -31,7 +31,6 @@ from starlette.responses import Response
 
 log = logging.getLogger(__name__)
 
-CALENDAR_MAX_CHARS = 10000
 _NOTHING = "Nothing was changed."
 
 
@@ -62,42 +61,6 @@ def clean(text: Any, *, allow_empty: bool, limit: int, strip: bool = False) -> s
 def same(a: str, b: str) -> bool:
     """Two texts count as the same when only line-break style or the blank space at the end differs."""
     return a.replace("\r\n", "\n").rstrip() == b.replace("\r\n", "\n").rstrip()
-
-
-# -- calendar: the description of the one event in the stored iCalendar object -----------------------------------------------
-def _single_event(raw: bytes) -> tuple[Any, Any]:
-    from icalendar import Calendar
-    cal = Calendar.from_ical(raw)
-    events = list(cal.walk("VEVENT"))
-    if len(events) != 1:
-        raise TextLocked("This change does not hold exactly one event, so its description cannot be edited here.")
-    return cal, events[0]
-
-
-def calendar_block(raw: bytes, followup: dict[str, Any] | None) -> str:
-    if (followup or {}).get("op") not in ("create", "update"):
-        return "Only a new or changed event has a description to edit. A cancellation or a reply has none."
-    try:
-        _single_event(raw)
-    except TextLocked as e:
-        return str(e)
-    except Exception:  # noqa: BLE001  -- an event that cannot be read is not edited
-        return "This event could not be read, so its description cannot be edited here."
-    return ""
-
-
-def calendar_text(raw: bytes) -> str:
-    _, ev = _single_event(raw)
-    return str(ev.get("description") or "")
-
-
-def calendar_with_text(raw: bytes, text: str) -> bytes:
-    cal, ev = _single_event(raw)
-    if "description" in ev:
-        del ev["description"]
-    if text:
-        ev.add("description", text)
-    return cal.to_ical()
 
 
 # -- mail: the plain-text part of the stored MIME message, when there is no HTML part ----------------------------------------

@@ -4,7 +4,7 @@ import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, sectio
 import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
-const KINDS = { mail: "Mail", calendar: "Calendar" };
+const KINDS = { mail: "Mail" };
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
@@ -22,11 +22,13 @@ function finding(waiting) {
 // A request that reaches a whole group: an iMessage group chat, or any action type that tags it so (package 4b)
 const isGroup = (w) => !!(w.group || (w.tags || []).includes("Group"));
 
+// What a request of a type the server registers itself is about and whom it reaches: "Autumn fair · to jana@example.org" (5b)
+const about = (w) => [w.subject ? esc(w.subject) : "", w.to ? `to ${esc(w.to)}` : ""].filter(Boolean).join(" · ");
+
 // The line under a request in the list: its kind, its tags, who it goes to
 function itemSub(w) {
   const to = w.to ? `to ${esc(w.to)}` : "";
-  const text = w.kind === "mail" || (w.kind === "external" && w.to_shown) ? to
-    : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
+  const text = w.kind === "mail" ? to : w.kind === "external" && w.to_shown ? about(w) : "";
   const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !isGroup(w) ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
   const tags = [...(w.group ? ["Group"] : []), ...(w.tags || [])].filter((t, i, all) => all.indexOf(t) === i);
@@ -202,8 +204,9 @@ class Item extends HTMLElement {
   subline() {
     const it = this.it;
     const who = it.by ? `by ${esc(it.by)}` : "by your assistant";
-    // a type whose list line names who it reaches says it here too ("to Weekend hike · asked by …"), in place of the badge
-    let p = `${it.kind === "external" && it.to_shown && it.to ? `to ${esc(it.to)}` : esc(it.badge)} · asked ${who} ${esc(ago(it.created_at))}`;
+    // a type whose list line names what it is about and who it reaches says it here too ("Autumn fair · to jana@example.org ·
+    // asked by …"), in place of the badge
+    let p = `${it.kind === "external" && it.to_shown && (it.to || it.subject) ? about(it) : esc(it.badge)} · asked ${who} ${esc(ago(it.created_at))}`;
     if (it.edit && it.edit.edited) p += ` · ${tag("Edited by you", "end")}`;
     if (it.missing.length) return `${p}. ${it.missing.length === 1 ? "One file is" : `${it.missing.length} files are`} missing before it can go out.`;
     return p;
@@ -233,17 +236,19 @@ class Item extends HTMLElement {
     // a value the service changed since the owner looked is marked (package 2c)
     const fresh = new Set([...(it.changed || []).map((c) => c.label), ...(it.edited_rows || [])]);
     const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
-    const rows = ext ? it.rows.slice(0, 1).map(dd).join("") : this.rowsHtml();
-    const more = ext ? it.rows.slice(1).map(dd).join("") : "";
-    const text = chat ? (own ? `<div class="bubble" data-text>${esc(own)}</div>` : "")
-      : (own || it.kind !== "calendar" ? `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>` : "");
-    const caption = it.kind === "calendar" ? "The description exactly as it will be saved." : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
+    // a type that names who it reaches under the title (to_shown) has no recipient row: all its rows come before the text
+    const rows = ext ? (it.to_shown ? it.rows : it.rows.slice(0, 1)).map(dd).join("") : this.rowsHtml();
+    const more = ext && !it.to_shown ? it.rows.slice(1).map(dd).join("") : "";
+    // an empty text has no block, for every kind (package 5b); where the type names a caption and the text may be edited, a line
+    // says there is none and keeps the edit button; a type whose empty text cannot be edited shows nothing about it
+    const text = !own ? "" : chat ? `<div class="bubble" data-text>${esc(own)}</div>` : `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>`;
+    const caption = it.text_caption ? esc(it.text_caption) : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
     const edit = it.edit || { allowed: false, reason: "" };
     const form = !!(edit.fields && edit.fields.length);          // package 2d: the fields the owner may change, edited as one form
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
       ${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
       ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}
-      ${ext && !own && !form ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>${form ? "Edit" : "Edit text"}</ion-button></div>`}
+      ${ext && !own && !form && (!it.text_caption || !edit.allowed) ? "" : `<div class="capr"><span>${!own && it.text_caption ? "No description." : caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>${form ? "Edit" : "Edit text"}</ion-button></div>`}
       ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
       ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
   }
@@ -291,7 +296,8 @@ class Item extends HTMLElement {
     const r = this.result, it = this.it;
     if (!r) return "";
     const to = it.kind === "external" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
-    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div><b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.
+    // a type's own note says where to look (a calendar change: the calendar), so the line does not name the type as a place
+    if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div>${r.note ? "<b>Not sure it went through.</b> Nothing will be sent again." : `<b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.`}
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
     if (r.state === "failed" && it.kind === "external") return `<div class="notice bad"><div><b>Did not go out:</b> ${esc(r.note)}
       <div class="btns"><ion-button size="small" data-retry>Try again</ion-button><ion-button size="small" class="neutral" data-discard>Discard</ion-button></div></div></div>`;

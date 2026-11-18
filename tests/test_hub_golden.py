@@ -42,14 +42,14 @@ async def _tool(mcp, name, **args):
 def _expire(box, item_id):
     if hasattr(box, "_items"):                       # the JSON queue (mail)
         box._items[item_id] = dataclasses.replace(box._items[item_id], expires_at=time.time() - 30)
-    else:                                            # the approval store (iMessage since 4a, calendar since 5a)
+    else:                                            # the approval store (iMessage since 4a, calendar since 5a; both actions since 4b and 5b)
         box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, item_id))
 
 
 async def _scenario(web, monkeypatch) -> dict:
     app, mcp, _p, sent = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE_ENV)
     dash = mcp._icloud_dashboard
-    mail_src, msg_src, cal_src = dash.sources["mail"], dash.sources["external"], dash.sources["calendar"]     # iMessage: package 4b
+    mail_src, msg_src, cal_src = dash.sources["mail"], dash.sources["external"], dash.sources["external"]     # iMessage 4b, calendar 5b
     ids: dict[str, str] = {}
     rec: dict = {}
 
@@ -68,16 +68,17 @@ async def _scenario(web, monkeypatch) -> dict:
 
     monkeypatch.setattr(MailService, "_smtp_send", smtp_send)
     answer_with(msg_src, monkeypatch, imessage)
-    def approve(self, outbox, item_id, sha256=None):                  # package 5a: approve() ends the request in the store
-        outbox.claim(item_id, "executing")
-        outbox.finish(item_id, "sent")
-        return {"status": "sent", "note": "Added “Autumn fair”. iCloud now emails jana@example.org."}
-    monkeypatch.setattr(type(cal_src.cal), "approve", approve)
+    from icloud_mcp.cal import CalendarExecutor
+    from icloud_mcp.gate import actions as A
+    for r in cal_src.registry.registrations():                      # package 5b: the event as the owner saw it, and written
+        if r.action_type.id.startswith("calendar."):
+            monkeypatch.setitem(cal_src.registry._items, r.action_type.id, dataclasses.replace(r, recheck=None))
+    monkeypatch.setattr(CalendarExecutor, "execute", lambda self, r: A.Result("sent", "Added “Autumn fair”. iCloud now emails jana@example.org."))
 
     mail_id = name("mail-1", queue(mcp, subject="Lunch", body="See you at noon"))
     msg_id = name("imessage-1", queue_imessage(mcp)[1].id)
     cal_id = name("calendar-1", queue_calendar(mcp)[1].id)
-    keys = {"mail": f"mail:{mail_id}", "imessage": f"external:{msg_id}", "calendar": f"calendar:{cal_id}"}
+    keys = {"mail": f"mail:{mail_id}", "imessage": f"external:{msg_id}", "calendar": f"external:{cal_id}"}
 
     async with client(app) as c:
         token = await signed_in(c)
@@ -133,7 +134,7 @@ async def _scenario(web, monkeypatch) -> dict:
                      "calendar": name("calendar-2", queue_calendar(mcp)[1].id)}
         rec["discard"] = {}
         for k, item_id in discarded.items():
-            src = "external" if k == "imessage" else k
+            src = "mail" if k == "mail" else "external"
             sha = (await get(f"/dashboard/api/items/{src}:{item_id}"))["body"]["sha"]
             rec["discard"][k] = await send("POST", f"/dashboard/api/items/{src}:{item_id}/discard", {"sha": sha})
         rec["status_discarded"] = {k: await _tool(mcp, "approval_status", id=item_id) for k, item_id in discarded.items()}
@@ -145,7 +146,7 @@ async def _scenario(web, monkeypatch) -> dict:
         lapsing = {"mail": name("mail-4", queue(mcp, subject="Too late", body="z")),
                    "imessage": name("imessage-5", queue_imessage(mcp, "Too late")[1].id),
                    "calendar": name("calendar-4", queue_calendar(mcp)[1].id)}
-        for k, box in (("mail", mail_src.mail.outbox), ("imessage", msg_src.box), ("calendar", cal_src.cal.outbox)):
+        for k, box in (("mail", mail_src.mail.outbox), ("imessage", msg_src.box), ("calendar", cal_src.box)):
             _expire(box, lapsing[k])
         rec["status_expired"] = {k: await _tool(mcp, "approval_status", id=item_id) for k, item_id in lapsing.items()}
         rec["status_unknown"] = await _tool(mcp, "approval_status", id="never-queued")

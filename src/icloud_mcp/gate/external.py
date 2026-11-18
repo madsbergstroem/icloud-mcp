@@ -86,12 +86,37 @@ class ExternalApprovals(ApprovalSource):
         hold = reg.hold_now()
         notes = [at.note or "Approving carries this out. If it is not certain that it went through, it is never repeated."]
         confirm = self._confirm(at, params)
+        subject = self._subject(reg, params)
         return {"title": at.title, "badge": at.badge, "rows": rows, "label": ", ".join(str(p) for p in people if p),
-                "text": str(params.get(at.text_field) or "") if at.text_field else "",
+                "text": self._text(at, params),
                 "notes": ([hold.text] if hold and hold.level == "note" else []) + notes,
                 "tags": self._call(at.tags, params, ""), "text_style": at.text_style, "log_to": reg.builtin,
+                **({"subject": subject} if subject else {}), **({"text_caption": at.text_caption} if at.text_caption else {}),
                 "warnings": warnings, "needs_override": bool(confirm), **({"confirm": confirm} if confirm else {}),
                 **({"held": hold.text} if hold and hold.level == "blocked" else {})}
+
+    @staticmethod
+    def _text(at: A.ActionType, params: Mapping[str, Any]) -> str:
+        """The request's text as the card shows it: the text_field, or what the type reads from it (package 5b). One that cannot
+        be read shows no text rather than breaking the dashboard."""
+        if not at.text_field:
+            return ""
+        if at.text_of is None:
+            return str(params.get(at.text_field) or "")
+        try:
+            return str(at.text_of(params) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _subject(reg: A.Registration, params: Mapping[str, Any]) -> str:
+        """The type's short label for this request (package 5b), one line; "" when it has none or it cannot be worked out."""
+        if reg.action_type.subject is None or not reg.builtin:
+            return ""
+        try:
+            return _line(reg.action_type.subject(params) or "")
+        except Exception:  # noqa: BLE001
+            return ""
 
     @staticmethod
     def _confirm(at: A.ActionType, params: Mapping[str, Any]) -> str:
@@ -137,12 +162,21 @@ class ExternalApprovals(ApprovalSource):
             return str(e)
         if reg is None:
             return "This kind of action is not available on this server any more."
-        return "" if reg.action_type.text_field else "This kind of request has no text to edit."
+        if not reg.action_type.text_field:
+            return "This kind of request has no text to edit."
+        if reg.action_type.text_locked is not None:              # the type may lock the text of one request (package 5b)
+            try:
+                return str(reg.action_type.text_locked(self._entry(q)[2]) or "")
+            except Exception:  # noqa: BLE001  -- a lock that cannot be worked out keeps the text as it is
+                return "The text of this request could not be read, so it cannot be edited here."
+        return ""
 
     def text_of(self, q):
         reg, _, params = self._entry(q)
         if reg is None or not reg.action_type.text_field:
             raise T.TextLocked(self.text_block(q))
+        if reg.action_type.text_of is not None:
+            return str(reg.action_type.text_of(params) or "")
         return str(params.get(reg.action_type.text_field) or "")
 
     def clean_text(self, text):
@@ -152,9 +186,17 @@ class ExternalApprovals(ApprovalSource):
         reg, type_id, params = self._entry(q)
         if reg is None or not reg.action_type.text_field:
             raise T.TextLocked(self.text_block(q))
-        if not text.strip() and reg.action_type.text_field in (reg.action_type.params_schema.get("required") or []):
+        if reason := self.text_block(q):
+            raise T.TextLocked(reason)
+        if reg.action_type.with_text is not None:                # the text lives inside text_field: the type writes it back
+            try:
+                changed = dict(reg.action_type.with_text(params, text))
+            except ValueError as e:
+                raise T.TextInvalid(str(e)) from None
+        elif not text.strip() and reg.action_type.text_field in (reg.action_type.params_schema.get("required") or []):
             raise T.TextInvalid("The text is empty.")
-        changed = {**params, reg.action_type.text_field: text}
+        else:
+            changed = {**params, reg.action_type.text_field: text}
         try:
             A.check_params(reg.action_type, changed)
         except A.ExternalError as e:

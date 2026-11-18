@@ -768,6 +768,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     pools: dict[str, Any] = {}                  # area -> zero-argument view of its kept connections, for the health check
     mcp._icloud_warmups = warm
     approval = {"mail": None, "imessage": None}   # what the owner's approval pages serve, if anything
+    invites: CalendarService | None = None       # the calendar whose changes that email people wait for the owner (package 5b)
     hub = Hub()                                  # the owner's chats on every channel: backends and senders are added where each one is set up
 
     # ------------------------------------------------------------------ mail
@@ -1371,11 +1372,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     if s.enable_calendar:
         cal = CalendarService(s)
         if s.invites_require_approval and s.writable("calendar") and provider is not None and s.dashboard:
-            from .cal import calendar_type_of
-            from .gate.store import Store             # package 5a: the approval store; the JSON file is read in once
-            cal.outbox = Store(s.data_dir, "calendar", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
-                               legacy="calendar-outbox.json", type_of=calendar_type_of)
-            approval["calendar"] = cal
+            invites = cal                             # package 5b: actions of the calendar types, queued once the source is built
         health["calendar"] = lambda: {"calendars": len(cal.list_calendars())}
         warm["calendar"] = cal.prewarm                           # the calendar list, plus spare connections for parallel reads
         pools["calendar"] = lambda: {"warm": bool(cal._pool), "caldav_kept": len(cal._pool), "caldav_pool_size": s.caldav_pool_size,
@@ -2961,7 +2958,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
-                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage", "calendar"))) if x)) else {}),
+                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
@@ -3049,6 +3046,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         if approval["imessage"] is not None:       # iMessage is an action type of the server's own (package 4b)
             from .imessage import register_type as register_imessage
             register_imessage(registry, approval["imessage"])
+        if invites is not None:                    # so are the calendar changes that email people (package 5b)
+            from .cal import register_types as register_calendar
+            register_calendar(registry, invites)
         for m in senders:                          # the core calls the executor once, after approval; list and policy at queue and approval
             registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s), channel_tool="messages_send_request")
         for p in plugins:                          # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
@@ -3067,10 +3067,12 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             external = ExternalApprovals(Store(s.data_dir, "external", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
                                               legacy="external-outbox.json"), registry)
             _adopt_imessages(s, external.box, _audit)
+            if invites is not None:
+                _adopt_calendar(s, external.box, _audit, invites)
+                invites.external = external
             if approval["imessage"] is not None:
                 hub.add_sender(IMessageSender(approval["imessage"], None, s.public_url, external=external))
     mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
-                            "calendar": approval["calendar"].outbox if approval.get("calendar") is not None else None,
                             **({"external": external.box} if external is not None else {})}                       # counts for the admin API
     global _audit_outboxes
     _audit_outboxes = mcp._icloud_outboxes          # tool.queued names the hash of what it queued (_audit_call)
@@ -3122,9 +3124,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         register_outbox_routes(mcp, provider, s, approval["mail"], external=external, audit=_audit)
     if s.dashboard and provider is not None and _audit is not None:
         from .dashboard import MailApprovals, register_dashboard
-        from .dashboard import CalendarApprovals
         sources = ([MailApprovals(approval["mail"])] if approval["mail"] is not None else []) + \
-                  ([CalendarApprovals(approval["calendar"])] if approval.get("calendar") is not None else []) + \
                   ([external] if external is not None else [])
         mcp._icloud_dashboard = register_dashboard(mcp, provider, s, _audit, sources)
         if s.dashboard_settings != "off":
@@ -3143,6 +3143,23 @@ def _adopt_imessages(s: Settings, box: Any, audit: Any) -> None:
     for item_id, old, new in box.adopt("imessage", convert, ACTION_ID):
         audit.record("approval.migrated", actor="server", summary="A waiting iMessage became a request of type imessage.send",
                      kind="external", outbox_id=item_id, action_type=ACTION_ID, sha256=new, old_sha256=old)
+
+
+def _adopt_calendar(s: Settings, box: Any, audit: Any, cal: Any) -> None:
+    """Package 5b: calendar changes held before it (source calendar in approvals.db, or the older calendar-outbox.json) become
+    requests of the calendar types, once, with their ids; each takes its type from the row (5a wrote it), and each waiting one gets
+    a new hash and one log line naming both (D4-1). Runs on every start and finds nothing after the first."""
+    from .cal import calendar_type_of
+    from .gate.store import Store
+    if not (Path(s.data_dir) / "calendar-outbox.json").exists() and not box.has_source("calendar"):
+        return
+    Store(s.data_dir, "calendar", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days, legacy="calendar-outbox.json",
+          type_of=calendar_type_of)
+    moved = box.adopt("calendar", cal.convert)
+    types = {q.id: q.action_type for q in box.pending()}
+    for item_id, old, new in moved:
+        audit.record("approval.migrated", actor="server", summary=f"A waiting calendar change became a request of type {types.get(item_id)}",
+                     kind="external", outbox_id=item_id, action_type=types.get(item_id), sha256=new, old_sha256=old)
 
 
 def build_app(s: Settings, mcp: MCPServer):

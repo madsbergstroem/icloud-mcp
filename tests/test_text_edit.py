@@ -67,11 +67,21 @@ def ics(summary="Autumn fair", description="Bring ideas", events=1) -> bytes:
 
 
 def queue_calendar(mcp, op="create", events=1, description="Bring ideas"):
-    src = mcp._icloud_dashboard.sources["calendar"]
+    """A held calendar change as the calendar tools queue it since package 5b: an action of the calendar type of its operation."""
+    from icloud_mcp.cal import CALENDAR_TYPES
+    src = mcp._icloud_dashboard.sources["external"]
+    svc = src.registry.get(CALENDAR_TYPES[op]).executor.svc
     meta = {"op": op, "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u0@example.org",
             "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": None, "location": "",
             "description": description, "organizer": None, "href": None, "etag": None}
-    return src, src.cal.outbox.add(ics(description=description, events=events), ["jana@example.org"], meta)
+    return src, src.queue_external(CALENDAR_TYPES[op], svc.params_of(op, ics(description=description, events=events),
+                                                                      ["jana@example.org"], meta), None)
+
+
+def stored_ics(q) -> bytes:
+    """The iCalendar object a held calendar change writes: its `ics` parameter (package 5b)."""
+    from icloud_mcp.gate.actions import read
+    return read(q.raw)[1]["ics"].encode()
 
 
 # -- mail ----------------------------------------------------------------------------------------------------------------------
@@ -277,21 +287,21 @@ async def test_a_calendar_edit_changes_the_description_in_the_stored_event(web):
     src, q = queue_calendar(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/calendar:{q.id}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
         assert it["edit"]["allowed"] is True and it["edit"]["text"] == "Bring ideas"
-        r = await c.put(url(f"calendar:{q.id}"), json={"sha": it["sha"], "text": "Bring ideas and chairs"}, headers=api(token))
+        r = await c.put(url(f"external:{q.id}"), json={"sha": it["sha"], "text": "Bring ideas and chairs"}, headers=api(token))
         assert r.status_code == 200
         new = src.pending()[0]
-        ev = event(new.raw)
+        ev = event(stored_ics(new))
         assert str(ev["description"]) == "Bring ideas and chairs" and str(ev["summary"]) == "Autumn fair" and str(ev["uid"]) == "u0@example.org"
-        assert new.followup["description"] == "Bring ideas and chairs" and new.followup["op"] == "create"
+        assert new.action_type == "calendar.invite"                   # 5b: the description lives only in the object, not in metadata
         assert new.recipients == ["jana@example.org"] and new.expires_at == q.expires_at
-        again = (await c.get(f"/dashboard/api/items/calendar:{q.id}")).json()
+        again = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
         assert again["text"] == "Bring ideas and chairs" and again["edit"]["original"] == "Bring ideas"
-        r = await c.put(url(f"calendar:{q.id}"), json={"sha": new.sha256, "restore": True}, headers=api(token))
-        assert r.status_code == 200 and str(event(src.pending()[0].raw)["description"]) == "Bring ideas"
-        r = await c.put(url(f"calendar:{q.id}"), json={"sha": src.pending()[0].sha256, "text": ""}, headers=api(token))
-        assert r.status_code == 200 and "description" not in event(src.pending()[0].raw)   # may be cleared
+        r = await c.put(url(f"external:{q.id}"), json={"sha": new.sha256, "restore": True}, headers=api(token))
+        assert r.status_code == 200 and str(event(stored_ics(src.pending()[0]))["description"]) == "Bring ideas"
+        r = await c.put(url(f"external:{q.id}"), json={"sha": src.pending()[0].sha256, "text": ""}, headers=api(token))
+        assert r.status_code == 200 and "description" not in event(stored_ics(src.pending()[0]))   # may be cleared
 
 
 async def test_calendar_changes_without_a_description_to_edit_are_locked(web):
@@ -300,9 +310,9 @@ async def test_calendar_changes_without_a_description_to_edit_are_locked(web):
         token = await signed_in(c)
         for op, events, why in (("delete", 1, "cancellation"), ("reply", 1, "cancellation"), ("update", 2, "exactly one event")):
             src, q = queue_calendar(mcp, op=op, events=events, description=f"d-{op}")
-            it = (await c.get(f"/dashboard/api/items/calendar:{q.id}")).json()
+            it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
             assert it["edit"]["allowed"] is False and why in it["edit"]["reason"], op
-            r = await c.put(url(f"calendar:{q.id}"), json={"sha": q.sha256, "text": "x"}, headers=api(token))
+            r = await c.put(url(f"external:{q.id}"), json={"sha": q.sha256, "text": "x"}, headers=api(token))
             assert r.status_code == 422 and why in r.json()["error"] and next(x for x in src.pending() if x.id == q.id).raw == q.raw
 
 

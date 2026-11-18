@@ -299,22 +299,24 @@ async def test_dashboard_can_be_turned_off(web):
 
 
 async def test_a_failed_calendar_release_points_the_owner_to_the_check(web, monkeypatch):
-    from icloud_mcp.cal import CalendarError, CalendarService
-
-    def fail(self, outbox, item_id, sha256=None):                  # package 5a: approve() leaves it waiting when nothing was written
-        raise CalendarError("CalDAV authentication failed. Check ICLOUD_USERNAME and the app-specific password. "
-                            "Run icloud_check_health to see which service is failing.")
-    monkeypatch.setattr(CalendarService, "approve", fail)
+    from icloud_mcp.gate import actions as A
     app, mcp, _, _ = web(ALLOW_CALENDAR_INVITES="approve")
-    src = mcp._icloud_dashboard.sources["calendar"]
-    src.cal.outbox.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"],
-                       {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1",
-                        "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": None, "location": "",
-                        "description": "", "organizer": None, "href": None, "etag": None})
+    src = mcp._icloud_dashboard.sources["external"]
+    svc = src.registry.get("calendar.invite").executor.svc
+
+    def fail(op, p):                                              # package 5b: the recheck leaves it waiting when nothing was written
+        raise A.ExternalError("Nothing was written, it still waits: CalDAV authentication failed. Check ICLOUD_USERNAME and the "
+                              "app-specific password. Run icloud_check_health to see which service is failing.")
+    for r in src.registry.registrations():
+        monkeypatch.setitem(src.registry._items, r.action_type.id, __import__("dataclasses").replace(r, recheck=lambda p: fail("create", p)))
+    meta = {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1",
+            "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": None, "location": "",
+            "description": "", "organizer": None, "href": None, "etag": None}
+    src.queue_external("calendar.invite", svc.params_of("create", b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"], meta), None)
     async with client(app) as c:
         token = await signed_in(c)
         q = src.pending()[0]
-        r = await c.post(f"/dashboard/api/items/calendar:{q.id}/approve", json={"sha": q.sha256}, headers=api(token))
+        r = await c.post(f"/dashboard/api/items/external:{q.id}/approve", json={"sha": q.sha256}, headers=api(token))
         err = r.json()["error"]
         assert r.status_code == 502 and err.startswith("Not sent (still waiting)")
         assert "Check now under Settings › Server shows which service is failing." in err and "icloud_check_health" not in err
@@ -369,7 +371,7 @@ async def test_confirming_issues_a_new_session_token_and_needs_the_csrf_token(we
 
 
 def test_event_times_read_like_a_calendar():
-    from icloud_mcp.dashboard import event_when
+    from icloud_mcp.cal import event_when                          # package 5b: the calendar's own rows read it
     assert event_when("2026-11-20T18:00:00+00:00", "2026-11-20T20:00:00+00:00", "Europe/Berlin") == "Fri 20 Nov 2026, 19:00–21:00"
     assert event_when("2026-11-20T23:00:00+01:00", "2026-11-21T01:00:00+01:00", "Europe/Berlin") == \
         "Fri 20 Nov 2026, 23:00 – Sat 21 Nov 2026, 01:00"
@@ -380,32 +382,44 @@ def test_event_times_read_like_a_calendar():
 
 
 async def test_held_calendar_changes_show_up_and_are_released(web, monkeypatch):
-    from icloud_mcp.cal import CalendarService
+    """protects=package 5b's screen table in variant C, against the JSON the app reads: title the type's own ("Invitation"), the
+    event's name as the subject before "to …" in the list and under the title, the rows When, Calendar and Where (the guests
+    are in the line under the title), the type's fixed note with its second sentence, the description with its caption, the
+    main button, and approving runs the type's executor once; fails_when=the summary is the title again, the guests stay a
+    row, the note counts people, or the release is not the executor's; no_claim=how the page draws it (the QA run)."""
+    from icloud_mcp.cal import CalendarExecutor
+    from icloud_mcp.gate import actions as A
     released = []
-    def approve(self, outbox, item_id, sha256=None):                # package 5a: approve() ends the request in the store
-        q = outbox.claim(item_id, "executing")
-        outbox.finish(item_id, "sent")
-        released.append(q.followup["op"])
-        return {"status": "sent", "note": "Added “Autumn fair”."}
-    monkeypatch.setattr(CalendarService, "approve", approve)
+
+    def execute(self, request):                                    # package 5b: the type's executor writes; no iCloud here
+        released.append(request.action_type)
+        return A.Result("sent", "Added “Autumn fair”.")
+    monkeypatch.setattr(CalendarExecutor, "execute", execute)
     app, mcp, _, _ = web(ALLOW_CALENDAR_INVITES="approve")
-    src = mcp._icloud_dashboard.sources["calendar"]
-    src.cal.outbox.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org", "tom@example.net"],
-                       {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1",
-                        "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": "2026-10-22T19:30:00+02:00",
-                        "location": "", "description": "Bring ideas", "organizer": None, "href": None, "etag": None})
+    src = mcp._icloud_dashboard.sources["external"]
+    svc = src.registry.get("calendar.invite").executor.svc
+    for r in src.registry.registrations():                          # the event as the owner saw it
+        monkeypatch.setitem(src.registry._items, r.action_type.id, __import__("dataclasses").replace(r, recheck=lambda p: None))
+    meta = {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1",
+            "summary": "Autumn fair", "start": "2026-10-22T18:00:00+02:00", "end": "2026-10-22T19:30:00+02:00",
+            "location": "", "description": "Bring ideas", "organizer": None, "href": None, "etag": None}
+    from test_text_edit import ics
+    src.queue_external("calendar.invite", svc.params_of("create", ics(description="Bring ideas"), ["jana@example.org", "tom@example.net"], meta), None)
     async with client(app) as c:
         token = await signed_in(c)
         q = src.pending()[0]
         waiting = (await c.get("/dashboard/api/today")).json()["waiting"]
-        assert [(w["title"], w["badge"], w["to"], w["key"]) for w in waiting] == \
-            [("Autumn fair", "Invitation", "jana@example.org, tom@example.net", f"calendar:{q.id}")]
-        it = (await c.get(f"/dashboard/api/items/calendar:{q.id}")).json()
-        assert it["approve_label"] == "Add and invite" and "Nothing is in your calendar yet." in it["notes"]
-        assert ["When", "Thu 22 Oct 2026, 18:00–19:30"] in it["rows"]              # the owner's clock, not ISO
+        assert [(w["title"], w["badge"], w["kind_label"], w["subject"], w["to"], w["to_shown"], w["key"]) for w in waiting] == \
+            [("Invitation", "Invitation", "Invitation", "Autumn fair", "jana@example.org, tom@example.net", True, f"external:{q.id}")]
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
+        assert (it["title"], it["subject"], it["approve_label"], it["text_caption"]) == \
+               ("Invitation", "Autumn fair", "Add and invite", "The description exactly as it will be saved.")
+        assert it["notes"] == ["Approving adds the event to your calendar, and iCloud emails an invitation to the guests. "
+                               "Nothing is in your calendar yet."]
+        assert it["rows"] == [["When", "Thu 22 Oct 2026, 18:00–19:30"], ["Calendar", "Club"]]     # the owner's clock, not ISO; no Guests row
         assert it["text"] == "Bring ideas"
-        r = await c.post(f"/dashboard/api/items/calendar:{q.id}/approve", json={"sha": q.sha256}, headers=api(token))
-        assert r.json() == {"ok": True, "note": "Added “Autumn fair”."} and released == ["create"] and src.pending() == []
+        r = await c.post(f"/dashboard/api/items/external:{q.id}/approve", json={"sha": q.sha256}, headers=api(token))
+        assert r.json() == {"ok": True, "note": "Added “Autumn fair”."} and released == ["calendar.invite"] and src.pending() == []
 
 
 async def test_the_app_files_are_served_to_anyone_and_the_shell_links_them(web):

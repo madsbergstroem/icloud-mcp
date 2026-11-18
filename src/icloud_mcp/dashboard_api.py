@@ -276,7 +276,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         """A request the assistant took back, as a row: what Activity shows for it (title, kind, first recipient, reason), no text."""
         det = e.get("details") or {}
         m = re.match(r"Withdrew (.+?) “(.*)”$", str(e.get("summary") or ""))
-        badge = (m.group(1) if m else "") or {"mail": "email", "calendar": "invitation"}.get(str(det.get("kind")), "request")
+        badge = (m.group(1) if m else "") or {"mail": "email"}.get(str(det.get("kind")), "request")
         why = REASON_WORDS.get(str(det.get("reason")), "")
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else "A queued request",
                 "what": badge[:1].upper() + badge[1:], "to": short_names(", ".join(map(str, (det.get("recipients") or [])[:1]))),
@@ -289,10 +289,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         return next((val for k, val in v["rows"] if k in ("To", "Will be delivered to", "Guests", "Conversation")), "")
 
     def summary(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
-        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or (to_of(v) if src.kind == "calendar" else short_names(to_of(v))),
+        return {"key": f"{src.kind}:{q.id}", "kind": src.kind, **({"kind_label": src.kind_label(q)} if hasattr(src, "kind_label") else {}), "badge": v["badge"], "title": v["title"], "to": v.get("label") or short_names(to_of(v)),
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
                 **({"tags": v["tags"]} if v.get("tags") else {}), **({"to_shown": True} if v.get("log_to") else {}),
+                **({"subject": v["subject"]} if v.get("subject") else {}),
                 **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
@@ -394,6 +395,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
                **({"text_style": v["text_style"]} if v.get("text_style") else {}), **({"confirm": v["confirm"]} if v.get("confirm") else {}),
+               **({"text_caption": v["text_caption"]} if v.get("text_caption") else {}),
                "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
                **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),

@@ -35,11 +35,11 @@
        "details": [
         [
          "Request",
-         "<id:imessage-5>"
+         "<id:calendar-4>"
         ],
         [
          "Action",
-         "imessage.send"
+         "calendar.invite"
         ],
         [
          "Hash",
@@ -65,7 +65,11 @@
        "details": [
         [
          "Request",
-         "<id:calendar-4>"
+         "<id:imessage-5>"
+        ],
+        [
+         "Action",
+         "imessage.send"
         ],
         [
          "Hash",
@@ -78,10 +82,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "A queued calendar message expired without an answer",
+       "target": "A queued request expired without an answer",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "a queued calendar message expired without an answer",
+       "what": "a queued request expired without an answer",
        "when": "<volatile>",
        "who": "server"
       },
@@ -120,6 +124,10 @@
          "<id:calendar-3>"
         ],
         [
+         "Action",
+         "calendar.invite"
+        ],
+        [
          "Sent to",
          "jana@example.org"
         ],
@@ -138,10 +146,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
-       "target": "Invitation “Autumn fair”",
+       "target": "Invitation “Invitation”",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "withdrew invitation “Autumn fair”",
+       "what": "withdrew invitation “Invitation”",
        "when": "<volatile>",
        "who": "Your assistant"
       },
@@ -226,6 +234,10 @@
          "<id:calendar-2>"
         ],
         [
+         "Action",
+         "calendar.invite"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -240,10 +252,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "Invitation “Autumn fair”",
+       "target": "Invitation “Invitation”",
        "time": "<volatile>",
        "tone": "",
-       "what": "discarded invitation “Autumn fair”",
+       "what": "discarded invitation “Invitation”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -362,8 +374,16 @@
          "<id:calendar-1>"
         ],
         [
+         "Action",
+         "calendar.invite"
+        ],
+        [
          "Sent to",
          "jana@example.org"
+        ],
+        [
+         "Result",
+         "Sent"
         ],
         [
          "Hash",
@@ -380,10 +400,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "Invitation “Autumn fair”",
+       "target": "Invitation “Invitation”",
        "time": "<volatile>",
        "tone": "",
-       "what": "approved invitation “Autumn fair”",
+       "what": "approved invitation “Invitation”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -532,6 +552,10 @@
          "<id:calendar-1>"
         ],
         [
+         "Action",
+         "calendar.invite"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -546,10 +570,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
-       "target": "Invitation “Autumn fair”",
+       "target": "Invitation “Invitation”",
        "time": "<volatile>",
        "tone": "",
-       "what": "edited invitation “Autumn fair” before sending",
+       "what": "edited invitation “Invitation” before sending",
        "when": "<volatile>",
        "who": "You"
       },
@@ -746,12 +770,13 @@
    "action": "approval.edited",
    "actor": "owner",
    "details": {
-    "kind": "calendar",
+    "action_type": "calendar.invite",
+    "kind": "external",
     "outbox_id": "<id:calendar-1>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Edited invitation “Autumn fair” before sending",
+   "summary": "Edited invitation “Invitation” before sending",
    "t": "<volatile>",
    "via": "password"
   },
@@ -820,7 +845,9 @@
    "action": "approval.sent",
    "actor": "owner",
    "details": {
-    "kind": "calendar",
+    "action_type": "calendar.invite",
+    "delivery": "sent",
+    "kind": "external",
     "outbox_id": "<id:calendar-1>",
     "recipients": [
      "jana@example.org"
@@ -828,7 +855,7 @@
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Approved invitation “Autumn fair”",
+   "summary": "Approved invitation “Invitation”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -881,12 +908,13 @@
    "action": "approval.discarded",
    "actor": "owner",
    "details": {
-    "kind": "calendar",
+    "action_type": "calendar.invite",
+    "kind": "external",
     "outbox_id": "<id:calendar-2>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Discarded invitation “Autumn fair”",
+   "summary": "Discarded invitation “Invitation”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -927,7 +955,8 @@
    "action": "approval.withdrawn",
    "actor": "assistant",
    "details": {
-    "kind": "calendar",
+    "action_type": "calendar.invite",
+    "kind": "external",
     "outbox_id": "<id:calendar-3>",
     "reason": "mistake",
     "recipients": [
@@ -936,7 +965,7 @@
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Withdrew invitation “Autumn fair”",
+   "summary": "Withdrew invitation “Invitation”",
    "t": "<volatile>"
   },
   {
@@ -956,23 +985,24 @@
    "action": "approval.expired",
    "actor": "server",
    "details": {
+    "action_type": "imessage.send",
     "expired_at": "<volatile>",
-    "kind": "calendar",
-    "outbox_id": "<id:calendar-4>",
+    "kind": "external",
+    "outbox_id": "<id:imessage-5>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "A queued calendar message expired without an answer",
+   "summary": "A queued request expired without an answer",
    "t": "<volatile>"
   },
   {
    "action": "approval.expired",
    "actor": "server",
    "details": {
-    "action_type": "imessage.send",
+    "action_type": "calendar.invite",
     "expired_at": "<volatile>",
     "kind": "external",
-    "outbox_id": "<id:imessage-5>",
+    "outbox_id": "<id:calendar-4>",
     "sha256": "<sha>"
    },
    "ok": true,
@@ -1050,6 +1080,7 @@
   "calendar": {
    "body": {
     "account": "",
+    "action_type": "calendar.invite",
     "approve_label": "Add and invite",
     "badge": "Invitation",
     "blocked": false,
@@ -1066,13 +1097,13 @@
     "expires_at": "<volatile>",
     "files": [],
     "group": false,
-    "key": "calendar:<id:calendar-1>",
-    "kind": "calendar",
+    "key": "external:<id:calendar-1>",
+    "kind": "external",
+    "kind_label": "Invitation",
     "missing": [],
     "needs_override": false,
     "notes": [
-     "Approving adds the event to your calendar, and iCloud emails an invitation to 1 people.",
-     "Nothing is in your calendar yet."
+     "Approving adds the event to your calendar, and iCloud emails an invitation to the guests. Nothing is in your calendar yet."
     ],
     "ok": true,
     "original": null,
@@ -1084,16 +1115,16 @@
      [
       "Calendar",
       "Club"
-     ],
-     [
-      "Guests",
-      "jana@example.org"
      ]
     ],
     "sha": "<sha>",
+    "subject": "Autumn fair",
     "text": "Bring ideas",
-    "title": "Autumn fair",
+    "text_caption": "The description exactly as it will be saved.",
+    "text_style": "plain",
+    "title": "Invitation",
     "to": "jana@example.org",
+    "to_shown": true,
     "warning": false,
     "warnings": []
    },
@@ -1211,6 +1242,7 @@
   "calendar": {
    "body": {
     "account": "",
+    "action_type": "calendar.invite",
     "approve_label": "Add and invite",
     "badge": "Invitation",
     "blocked": false,
@@ -1224,16 +1256,17 @@
      "reason": "",
      "text": "calendar edited, ÜBER-café"
     },
+    "edited_rows": [],
     "expires_at": "<volatile>",
     "files": [],
     "group": false,
-    "key": "calendar:<id:calendar-1>",
-    "kind": "calendar",
+    "key": "external:<id:calendar-1>",
+    "kind": "external",
+    "kind_label": "Invitation",
     "missing": [],
     "needs_override": false,
     "notes": [
-     "Approving adds the event to your calendar, and iCloud emails an invitation to 1 people.",
-     "Nothing is in your calendar yet."
+     "Approving adds the event to your calendar, and iCloud emails an invitation to the guests. Nothing is in your calendar yet."
     ],
     "ok": true,
     "original": null,
@@ -1245,16 +1278,58 @@
      [
       "Calendar",
       "Club"
-     ],
-     [
-      "Guests",
-      "jana@example.org"
      ]
     ],
     "sha": "<sha>",
+    "subject": "Autumn fair",
     "text": "calendar edited, ÜBER-café",
-    "title": "Autumn fair",
+    "text_caption": "The description exactly as it will be saved.",
+    "text_style": "plain",
+    "title": "Invitation",
     "to": "jana@example.org",
+    "to_shown": true,
+    "versions": [
+     {
+      "at": "<volatile>",
+      "by": "assistant",
+      "changes": [],
+      "n": 1,
+      "rows": [
+       [
+        "When",
+        "Thu 22 Oct 2026, 18:00"
+       ],
+       [
+        "Calendar",
+        "Club"
+       ]
+      ],
+      "text": "Bring ideas"
+     },
+     {
+      "at": "<volatile>",
+      "by": "owner",
+      "changes": [
+       {
+        "label": "Text",
+        "new": "calendar edited, ÜBER-café",
+        "old": "Bring ideas"
+       }
+      ],
+      "n": 2,
+      "rows": [
+       [
+        "When",
+        "Thu 22 Oct 2026, 18:00"
+       ],
+       [
+        "Calendar",
+        "Club"
+       ]
+      ],
+      "text": "calendar edited, ÜBER-café"
+     }
+    ],
     "warning": false,
     "warnings": []
    },
@@ -1412,10 +1487,6 @@
   }
  },
  "push_texts": {
-  "calendar": [
-   "Approval needed",
-   "A calendar change is waiting for your approval."
-  ],
   "imessage": [
    "Approval needed",
    "An iMessage is waiting for your approval."
@@ -1459,10 +1530,11 @@
     "status": "unclear"
    },
    {
+    "action_type": "calendar.invite",
     "at": "<volatile>",
     "edited": true,
     "id": "<id:calendar-1>",
-    "kind": "calendar",
+    "kind": "external",
     "status": "sent"
    },
    {
@@ -1489,10 +1561,11 @@
     "status": "discarded"
    },
    {
+    "action_type": "calendar.invite",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:calendar-2>",
-    "kind": "calendar",
+    "kind": "external",
     "status": "discarded"
    },
    {
@@ -1511,10 +1584,11 @@
     "status": "withdrawn"
    },
    {
+    "action_type": "calendar.invite",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:calendar-3>",
-    "kind": "calendar",
+    "kind": "external",
     "status": "withdrawn"
    },
    {
@@ -1525,17 +1599,18 @@
     "status": "expired"
    },
    {
-    "at": "<volatile>",
-    "edited": false,
-    "id": "<id:calendar-4>",
-    "kind": "calendar",
-    "status": "expired"
-   },
-   {
     "action_type": "imessage.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:imessage-5>",
+    "kind": "external",
+    "status": "expired"
+   },
+   {
+    "action_type": "calendar.invite",
+    "at": "<volatile>",
+    "edited": false,
+    "id": "<id:calendar-4>",
     "kind": "external",
     "status": "expired"
    }
@@ -1545,7 +1620,10 @@
  "state": {
   "body": {
    "kinds": {
-    "calendar": 1,
+    "external:Cancellation": 0,
+    "external:Event update": 0,
+    "external:Invitation": 1,
+    "external:Reply": 0,
     "external:iMessage": 1,
     "mail": 1
    },
@@ -1560,7 +1638,10 @@
  "state_end": {
   "body": {
    "kinds": {
-    "calendar": 0,
+    "external:Cancellation": 0,
+    "external:Event update": 0,
+    "external:Invitation": 0,
+    "external:Reply": 0,
     "external:iMessage": 0,
     "mail": 0
    },
@@ -1581,10 +1662,11 @@
  },
  "status_discarded": {
   "calendar": {
+   "action_type": "calendar.invite",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:calendar-2>",
-   "kind": "calendar",
+   "kind": "external",
    "status": "discarded"
   },
   "imessage": {
@@ -1605,10 +1687,11 @@
  },
  "status_edited": {
   "calendar": {
+   "action_type": "calendar.invite",
    "at": "<volatile>",
    "edited": true,
    "id": "<id:calendar-1>",
-   "kind": "calendar",
+   "kind": "external",
    "status": "waiting"
   },
   "imessage": {
@@ -1629,10 +1712,11 @@
  },
  "status_ended": {
   "calendar": {
+   "action_type": "calendar.invite",
    "at": "<volatile>",
    "edited": true,
    "id": "<id:calendar-1>",
-   "kind": "calendar",
+   "kind": "external",
    "status": "sent"
   },
   "imessage": {
@@ -1653,10 +1737,11 @@
  },
  "status_expired": {
   "calendar": {
+   "action_type": "calendar.invite",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:calendar-4>",
-   "kind": "calendar",
+   "kind": "external",
    "status": "expired"
   },
   "imessage": {
@@ -1723,16 +1808,20 @@
      "warning": true
     },
     {
+     "action_type": "calendar.invite",
      "badge": "Invitation",
      "blocked": false,
      "by": "",
      "created_at": "<volatile>",
      "expires_at": "<volatile>",
      "group": false,
-     "key": "calendar:<id:calendar-1>",
-     "kind": "calendar",
-     "title": "Autumn fair",
+     "key": "external:<id:calendar-1>",
+     "kind": "external",
+     "kind_label": "Invitation",
+     "subject": "Autumn fair",
+     "title": "Invitation",
      "to": "jana@example.org",
+     "to_shown": true,
      "warning": false
     }
    ],
@@ -1757,7 +1846,7 @@
     {
      "t": "<volatile>",
      "time": "<volatile>",
-     "title": "Autumn fair",
+     "title": "Invitation",
      "to": "jana@example.org",
      "unclear": false,
      "what": "Invitation"

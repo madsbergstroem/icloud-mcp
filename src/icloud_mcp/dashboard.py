@@ -32,7 +32,7 @@ import secrets
 import tempfile
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -43,7 +43,6 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from . import passkeys as P
 from .gate.source import ApprovalSource
-from .gate.status import Released
 from .approvals import flagged
 from .audit import AuditLog
 from . import textedit as T
@@ -216,97 +215,6 @@ _AGENT_HINT = "Run icloud_check_health to see which service is failing."
 def for_owner(message: str) -> str:
     """Service errors are written for agents. On the dashboard the owner has a button for the same check."""
     return message.replace(_AGENT_HINT, "Check now under Settings › Server shows which service is failing.")
-
-
-def event_when(start: str | None, end: str | None, tz_name: str) -> str:
-    """'Fri 20 Nov 2026, 19:00–21:00' in the server's time zone, from the ISO times stored with a held change. All-day events
-    show the date only; anything unparsable is shown as stored."""
-    def parse(v: str | None) -> datetime | None:
-        try:
-            return datetime.fromisoformat(v) if v else None
-        except ValueError:
-            return None
-    a, b = parse(start), parse(end)
-    if a is None:
-        return " – ".join(x for x in (start, end) if x)
-    if len(start or "") == 10:                                   # an all-day event: a date, no time
-        last = b - timedelta(days=1) if b and len(end or "") == 10 else None   # DTEND of an all-day event is exclusive
-        day = a.strftime("%a %d %b %Y")
-        return day if last is None or last <= a else f"{day} – {last.strftime('%a %d %b %Y')}"
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:  # noqa: BLE001
-        tz = None
-    if tz is not None and a.tzinfo is not None:
-        a, b = a.astimezone(tz), (b.astimezone(tz) if b and b.tzinfo else b)
-    out = a.strftime("%a %d %b %Y, %H:%M")
-    if b is None:
-        return out
-    return out + ("–" + b.strftime("%H:%M") if b.date() == a.date() else " – " + b.strftime("%a %d %b %Y, %H:%M"))
-
-
-class CalendarApprovals(ApprovalSource):
-    """Calendar changes that make iCloud email other people (ALLOW_CALENDAR_INVITES=approve)."""
-    kind, badge = "calendar", "Calendar"
-    _LABELS = {"create": ("Invitation", "Add and invite"), "update": ("Event update", "Save and notify"),
-               "delete": ("Cancellation", "Delete and notify"), "cancel": ("Cancellation", "Cancel and notify"),
-               "reply": ("Reply", "Send answer")}
-
-    def __init__(self, cal: Any):
-        self.cal = cal
-
-    def pending(self):
-        return self.cal.outbox.pending()
-
-    def describe(self, q, context=None):
-        m = q.followup or {}
-        badge, _ = self._LABELS.get(m.get("op"), ("Calendar", "Approve"))
-        when = event_when(m.get("start"), m.get("end"), self.cal.s.default_timezone)
-        rows = [("When", when), ("Calendar", m.get("calendar") or ""), ("Where", m.get("location") or "")]
-        if m.get("op") == "reply":
-            rows.append(("To", m.get("organizer") or ""))
-        else:
-            rows.append(("Guests", ", ".join(q.recipients)))
-        effect = {"create": "Approving adds the event to your calendar, and iCloud emails an invitation to",
-                  "update": "Approving saves the change, and iCloud emails an update to",
-                  "delete": "Approving deletes the event, and iCloud emails a cancellation to",
-                  "cancel": "Approving cancels this occurrence, and iCloud emails a cancellation to",
-                  "reply": "Approving sends your answer to"}.get(m.get("op"), "Approving emails")
-        who = m.get("organizer") if m.get("op") == "reply" else f"{len(q.recipients)} people"
-        notes = [f"{effect} {who}.",
-                 "Nothing is in your calendar yet." if m.get("op") == "create" else
-                 "If the event changes in your calendar before you approve, nothing is written."]
-        try:
-            text = T.calendar_text(q.raw)                         # the description in full; the metadata keeps 4000 characters
-        except Exception:  # noqa: BLE001  -- an object with more than one event: the copy in the metadata
-            text = m.get("description") or ""
-        return {"title": m.get("summary") or "(no title)", "badge": badge, "rows": [(k, v) for k, v in rows if v],
-                "text": text, "notes": notes, "warnings": [], "needs_override": False}
-
-    def approve_label_for(self, q) -> str:
-        return self._LABELS.get((q.followup or {}).get("op"), ("", "Approve"))[1]
-
-    def release(self, q):
-        """Every ending is a state of the store (package 5a): cal.approve ends it, puts it back, or raises Rechecked."""
-        r = self.cal.approve(self.cal.outbox, q.id, q.sha256)
-        return Released(r["note"], "unconfirmed" if r["status"] == "unclear" else None)     # a sent change logs as before
-
-    def discard(self, q):
-        self.cal.outbox.claim(q.id, "discarded")
-
-    text_limit = T.CALENDAR_MAX_CHARS
-
-    def text_block(self, q):
-        return T.calendar_block(q.raw, q.followup)
-
-    def text_of(self, q):
-        return T.calendar_text(q.raw)
-
-    def clean_text(self, text):
-        return T.clean(text, allow_empty=True, limit=self.text_limit)      # an empty description is allowed
-
-    def with_text(self, q, text):
-        return T.calendar_with_text(q.raw, text), {**(q.followup or {}), "description": text[:4000]}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
