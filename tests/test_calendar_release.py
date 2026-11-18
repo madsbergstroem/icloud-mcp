@@ -307,22 +307,49 @@ def test_a_calendar_change_cut_off_while_written_ends_unclear_at_the_next_start(
     assert len(lines) == 1 and lines[0]["details"]["kind"] == "calendar" and lines[0]["details"]["delivery"] == "unconfirmed"
 
 
-def test_the_server_reads_the_calendar_queue_file_in_once_with_ids_hashes_and_types(tmp_path, monkeypatch):
-    """protects=package 5a criterion 3 through the real wiring: the first start keeps every waiting change and names its type,
-    the dashboard shows it, and a second start changes nothing; fails_when=a change is lost, renumbered, rehashed or untyped;
-    no_claim=none beyond protects."""
+CAL_META = {"calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1@example.org", "summary": "Autumn fair",
+            "start": "2026-12-05T10:00:00+00:00", "end": "2026-12-05T12:00:00+00:00", "location": "Example Street 1",
+            "description": "Bring a cake", "organizer": None, "href": None, "etag": None}
+OBJ = EVENT.format(uid="u1@example.org", org=ME).encode()
+
+
+def test_the_server_moves_held_calendar_changes_to_the_calendar_types_once(tmp_path, monkeypatch):
+    """protects=package 5b criterion 3, and 5a criterion 3 through the real wiring: changes held before 5b (the JSON file of before
+    5a, and rows of source calendar, waiting and ended, one with two versions) wait on under external with their ids, states
+    and versions, each with its type from the row and a new hash, and one approval.migrated line per waiting one naming both
+    hashes; a second start moves nothing; fails_when=a change is lost, doubled, keeps its old hash or source, takes another
+    type, or the log line is missing or repeated; no_claim=the Docker volume (same DATA_DIR rules)."""
+    import hashlib
+    import json
     from icloud_mcp.outbox import Outbox
     from icloud_mcp.server import create_server
     for k, v in dict(ICLOUD_USERNAME=ME, ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", DATA_DIR=str(tmp_path),
                      MCP_PUBLIC_URL="https://mcp.example.com", MCP_OWNER_PASSWORD="x" * 16, ALLOW_CALENDAR_INVITES="approve").items():
         monkeypatch.setenv(k, v)
     old = Outbox(str(tmp_path), 3600, 20, filename="calendar-outbox.json")
-    a = old.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"], {"op": "delete", "summary": "Autumn fair"})
+    a = old.add(OBJ, ["jana@example.org"], {**CAL_META, "op": "create"})
+    rows = Store(str(tmp_path), "calendar", 3600, 20)
+    upd = {**CAL_META, "op": "update", "href": "https://caldav.example.com/cal/u1.ics", "etag": '"e900"'}
+    b = rows.add(OBJ, ["jana@example.org"], upd, action_type="calendar.update")
+    b2 = rows.replace(b.id, b.sha256, OBJ.replace(b"Book club", b"Book club, new room"), followup=upd)
+    gone = rows.add(OBJ, ["tom@example.net"], {**upd, "op": "delete"}, action_type="calendar.delete")
+    rows.claim(gone.id, "discarded")
     mcp, _ = create_server(Settings.from_env())
-    box = mcp._icloud_dashboard.sources["calendar"].cal.outbox
-    assert [(q.id, q.sha256) for q in box.pending()] == [(a.id, a.sha256)]
-    assert box._db.execute("SELECT action_type FROM request WHERE id = ?", (a.id,)).fetchone()[0] == "calendar.delete"
+    box = mcp._icloud_outboxes["external"]
+    svc = mcp._icloud_dashboard.sources["external"].registry.get("calendar.invite").executor.svc
+    want_a = svc.convert(OBJ, {"followup": {**CAL_META, "op": "create"}, "recipients": ["jana@example.org"], "action_type": "calendar.invite"})
+    want_b = svc.convert(b2.raw, {"followup": upd, "recipients": ["jana@example.org"], "action_type": "calendar.update"})
+    got = {q.id: (q.sha256, q.action_type) for q in box.pending()}
+    assert got == {a.id: (hashlib.sha256(want_a).hexdigest(), "calendar.invite"), b.id: (hashlib.sha256(want_b).hexdigest(), "calendar.update")}
+    assert [v["author"] for v in box.versions(b.id)] == ["assistant", "owner"] and box.versions(b.id)[-1]["raw"] == want_b
+    assert box.state_of(gone.id) == ("discarded", None) and not box.has_source("calendar") and "calendar" not in mcp._icloud_outboxes
+    assert box._db.execute("SELECT action_type FROM request WHERE id = ?", (gone.id,)).fetchone()[0] == "calendar.delete"
     assert (tmp_path / "calendar-outbox.json.migrated").exists() and not (tmp_path / "calendar-outbox.json").exists()
+    lines = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]
+    assert sorted((e["details"]["outbox_id"], e["details"]["old_sha256"], e["details"]["sha256"], e["details"]["action_type"]) for e in lines) == \
+           sorted([(a.id, a.sha256, got[a.id][0], "calendar.invite"), (b.id, b2.sha256, got[b.id][0], "calendar.update")])
+    create_server(Settings.from_env())
+    assert len([x for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]) == 2
 
 
 def test_the_five_calendar_types_are_the_servers_own_with_the_badge_button_and_tool_of_each(env):

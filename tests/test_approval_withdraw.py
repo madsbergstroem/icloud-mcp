@@ -41,11 +41,14 @@ def queue_imessage(mcp, text="Running late, start without me"):
 
 
 def queue_calendar(mcp, summary="Autumn fair", description="Bring ideas"):
-    return mcp._icloud_outboxes["calendar"].add(
-        b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"],
-        {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1", "summary": summary,
-         "start": "2026-10-22T18:00:00+02:00", "end": "2026-10-22T19:30:00+02:00", "location": "", "description": description,
-         "organizer": None, "href": None, "etag": None}).id
+    """A held invitation as the calendar tools queue it since package 5b: type calendar.invite on the external source."""
+    src = mcp._icloud_dashboard.sources["external"]
+    svc = src.registry.get("calendar.invite").executor.svc
+    ics = f"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:{summary}\r\nDESCRIPTION:{description}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    meta = {"op": "create", "calendar_url": "https://caldav.example.com/cal/", "calendar": "Club", "uid": "u1", "summary": summary,
+            "start": "2026-10-22T18:00:00+02:00", "end": "2026-10-22T19:30:00+02:00", "location": "", "description": description,
+            "organizer": None, "href": None, "etag": None}
+    return src.queue_external("calendar.invite", svc.params_of("create", ics.encode(), ["jana@example.org"], meta), None).id
 
 
 async def withdraw(mcp, item_id, reason=None):
@@ -68,11 +71,12 @@ def waiting(mcp, kind):
 # ------------------------------------------------------------------------------------------------ taking back, every kind
 async def test_a_waiting_request_of_every_kind_can_be_taken_back(web):
     app, mcp, _, sent = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE)
-    ids = {"mail": queue(mcp, subject="Invoice 2291", body="Thanks"), "external": queue_imessage(mcp), "calendar": queue_calendar(mcp)}
-    for kind, item_id in ids.items():
+    # an iMessage (package 4b) and a calendar change (5b) are actions of the external source
+    ids = [("mail", queue(mcp, subject="Invoice 2291", body="Thanks")), ("external", queue_imessage(mcp)), ("external", queue_calendar(mcp))]
+    for kind, item_id in ids:
         got = await withdraw(mcp, item_id, "mistake")
         assert got == {"id": item_id, "withdrawn": True, "status": "withdrawn"}
-        assert waiting(mcp, kind) == []
+        assert item_id not in waiting(mcp, kind)
         seen = await status(mcp, item_id)
         assert (seen["status"], seen["kind"], seen["edited"]) == ("withdrawn", kind, False) and seen["at"].endswith("Z")
     assert sent == []                                                          # taking back sends nothing
@@ -304,20 +308,23 @@ def test_the_label_survives_a_restart_an_edit_and_old_files_without_it(tmp_path)
 async def test_the_log_line_is_by_the_assistant_and_holds_no_text(web):
     app, mcp, *_ = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE)
     secrets = {"mail": ("Hidden mail body", "Invoice 2291"), "external": ("Hidden iMessage text", None), "calendar": ("Hidden event notes", "Autumn fair")}
-    ids = {"mail": queue(mcp, subject="Invoice 2291", body=secrets["mail"][0]), "external": queue_imessage(mcp, secrets["external"][0]),
-           "calendar": queue_calendar(mcp, description=secrets["calendar"][0])}
-    for kind, item_id in ids.items():
+    # an iMessage (package 4b) and a calendar change (5b) are actions of the external source
+    ids = [("mail", queue(mcp, subject="Invoice 2291", body=secrets["mail"][0])), ("external", queue_imessage(mcp, secrets["external"][0])),
+           ("external", queue_calendar(mcp, description=secrets["calendar"][0]))]
+    for kind, item_id in ids:
         await withdraw(mcp, item_id, "duplicate")
     entries = list(reversed(log(mcp, "approval.withdrawn")))
     assert [(e["actor"], e["details"]["kind"], e["details"]["outbox_id"], e["details"]["reason"]) for e in entries] == [
-        ("assistant", kind, ids[kind], "duplicate") for kind in ids]
+        ("assistant", kind, item_id, "duplicate") for kind, item_id in ids]
+    # the title of a type of the server's own is the type's, never the event's name (5b, as the iMessage in 4b)
     assert [e["summary"] for e in entries] == ["Withdrew email “Invoice 2291”", "Withdrew imessage “iMessage”",
-                                               "Withdrew invitation “Autumn fair”"]
+                                               "Withdrew invitation “Invitation”"]
     # a mail and an invitation keep their first recipient, as approval.sent does, so Home can say whom it was for
     # and the hash of exactly what waited (docs/SENDGATE.md, review obligation E-3), never its text
     assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients", "sha256"}),
                                                                (True, {"kind", "outbox_id", "reason", "recipients", "sha256", "action_type"}),
-                                                               (True, {"kind", "outbox_id", "reason", "recipients", "sha256"})]
+                                                               (True, {"kind", "outbox_id", "reason", "recipients", "sha256", "action_type"})]
+    assert entries[2]["details"]["recipients"] == ["jana@example.org"] and entries[2]["details"]["action_type"] == "calendar.invite"
     assert entries[0]["details"]["recipients"] == ["bob@example.org"]
     raw_log = mcp._icloud_dashboard.audit.path.read_text()
     for hidden in ("Hidden mail body", "Hidden iMessage text", "Hidden event notes"):

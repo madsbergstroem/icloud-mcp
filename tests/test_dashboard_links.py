@@ -137,8 +137,8 @@ def test_a_full_calendar_queue_names_only_the_dashboard(settings):
     from icloud_mcp.cal import CalendarError
     s = settings(ALLOW_CALENDAR_INVITES="approve")
     mcp, _ = create_server(s)
-    svc = mcp._icloud_dashboard.sources["calendar"].cal
-    svc.outbox.max_items = 0
+    svc = mcp._icloud_dashboard.sources["external"].registry.get("calendar.invite").executor.svc     # package 5b
+    svc.external.box.max_items = 0
     ev = icalendar.Event()
     ev.add("uid", "u1")
     ev.add("summary", "Autumn fair")
@@ -154,12 +154,12 @@ def test_a_queued_calendar_change_points_to_the_dashboard(settings):
 
     s = settings(ALLOW_CALENDAR_INVITES="approve")
     mcp, _ = create_server(s)
-    svc = mcp._icloud_dashboard.sources["calendar"].cal
+    svc = mcp._icloud_dashboard.sources["external"].registry.get("calendar.invite").executor.svc     # package 5b
     ev = icalendar.Event()
     ev.add("uid", "u1")
     ev.add("summary", "Autumn fair")
     ev.add("attendee", "mailto:jana@example.org")
     cal = type("Cal", (), {"url": "https://caldav.example.com/cal/", "name": "Club"})()
     r = svc._queue("create", cal=cal, ics=b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", uid="u1", ev=ev)
-    assert r["approve_at"] == f"{BASE}/dashboard#/item/calendar:{r['outbox_id']}" and r["notice"].count("dashboard") == 0
+    assert r["approve_at"] == f"{BASE}/dashboard#/item/external:{r['outbox_id']}" and r["notice"].count("dashboard") == 0
     assert "approve_at" in r["notice"] and "/outbox" not in r["notice"]
