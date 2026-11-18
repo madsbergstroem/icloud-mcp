@@ -6,9 +6,10 @@ keeps it). Nothing here reaches a real account.
                                                    [--owner yes|no]
 
 Open http://localhost:8765/dashboard and sign in with the owner password printed at start. Words in a message steer the fake Mac:
-[unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". Mail goes through the real approve() against a
-made-up SMTP server: [unclear] in a mail makes the server take it and then never answer (unclear), [offline] finds no server (it
-waits again), and old.address@example.net is refused while the others are taken. --arrive queues one more request after that many
+[unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". Mail waits as actions of the three mail types (a
+reply with a file, a forward, one that waits for a file) and goes through their real recheck and executor against a made-up SMTP
+server: [unclear] in a mail makes the server take it and then never answer (unclear), [offline] finds no server (it waits again),
+and old.address@example.net is refused while the others are taken. --arrive queues one more request after that many
 seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
 password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
@@ -55,7 +56,7 @@ os.environ.update(
     ICLOUD_USERNAME="alex.morgan@example.org", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL=f"http://localhost:{PORT}",
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
     DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*",
-    BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400",
+    BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400", OUTBOX_MAX="40",   # one store for every kind since 6b
     OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1")   # no request comes from that proxy: see --owner
 # Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
 # gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
@@ -113,8 +114,8 @@ from icloud_mcp.server import build_app, create_server  # noqa: E402
 from test_outbox import FakeIMAP  # noqa: E402
 
 # -- mail: a made-up SMTP server, steered by a word in the mail ---------------------------------------------------------------------
-# The real approve() and the stepwise send run (package 6a; every ending is a state of the approval store); only the SMTP server is
-# made up (tests/smtp_fakes.py). [unclear]: it takes the message and never answers, so the read times out after DATA. [offline]:
+# The real recheck and executor of the mail types and the stepwise send run (packages 6a and 6b; every ending is a state of the
+# approval store); only the SMTP server is made up (tests/smtp_fakes.py). [unclear]: it takes the message and never answers, so the read times out after DATA. [offline]:
 # no server answers at all, so the mail waits again. old.address@example.net is refused at RCPT while the others are taken.
 import smtp_fakes  # noqa: E402
 
@@ -221,8 +222,8 @@ D.discover = _discover
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
-mail = d.sources["mail"].mail
 ext = d.sources["external"]
+mail = ext.registry.get("mail.send").executor.svc               # the server's own MailService (package 6b: three action types)
 cal = ext.registry.get("calendar.invite").executor.svc         # the server's own CalendarService (package 5b: five action types)
 from icloud_mcp.imessage import ACTION_ID as IMESSAGE, params_of  # noqa: E402
 im_service = ext.registry.get(IMESSAGE).recheck.__self__        # the server's own IMessageService (package 4b: an action type)
@@ -299,13 +300,22 @@ A.save(DATA, {"accounts": [
     "calendars_visible": []})
 
 # -- waiting requests, all made up ------------------------------------------------------------------------------------------------
-mail.send(to=["accounts@example.org"], subject="Re: Invoice 2291",
-          body="Hello,\n\nthank you for the invoice. Please confirm that the amount of 1,240.00 EUR covers both deliveries. If so, we release the payment on Friday.\n\nBest regards,\nAlex")
+# The mail a reply answers and a forward passes on: read from the fake mailbox, as the card does when it is shown ("In reply to")
+fake.original = (b"From: Accounts <accounts@example.org>\r\nTo: alex.morgan@example.org\r\nSubject: Invoice 2291\r\n"
+                 b"Message-ID: <inv2291@example.org>\r\nDate: Mon, 16 Nov 2026 09:00:00 +0100\r\n\r\nPlease confirm the invoice for both deliveries.\r\n")
+MailService._fetch_readable = lambda self, c, folder, uid, readonly=True, uidvalidity=None: (fake.original, (), None, 7, None)
+MailService._fetch_raw = lambda self, c, folder, uid, readonly=True, uidvalidity=None: (fake.original, (), None, 7)
+_pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n"
+mail.reply("INBOX", 7, "Hello,\n\nthank you for the invoice. The amount of 1,240.00 EUR covers both deliveries, so we release the payment "
+                       "on Friday. The delivery note follows.\n\nBest regards,\nAlex", cc=["jana@example.org"],
+           attachments=[{"filename": "invoice-2291.pdf", "content_base64": __import__("base64").b64encode(_pdf).decode()},
+                        {"filename": "delivery-note.jpg", "content_base64": None}])         # one file present, one missing
+mail.forward("INBOX", 7, ["sam@example.org"], note="Sam, for your records.")                 # a forward (mail.forward)
 html = EmailMessage()
 html["From"], html["To"], html["Subject"] = "alex.morgan@example.org", "newsletter@example.net", "Welcome aboard"
 html.set_content("Welcome aboard! Here is what happens next.")
 html.add_alternative("<p>Welcome aboard! Here is what happens next.</p>", subtype="html")
-mail.outbox.add(html.as_bytes(), ["newsletter@example.net"])
+ext.queue_external("mail.send", mail.params_of(html, None), None)                           # a text that cannot be edited (HTML)
 mail.send(to=["jana@example.org", "old.address@example.net"], subject="Book club minutes",
           body="Hi both,\n\nthe minutes of Thursday are below. Next meeting on the 4th.\n\nSam")
 mail.send(to=["tom@example.net"], subject="Quarterly figures [unclear]", body="Hi Tom,\n\nthe figures for the quarter are attached as a table below.\n\nSam")
@@ -372,7 +382,7 @@ taken_back = mail.send(to=["jordan.lee@example.org"], subject="Offer for the del
 asyncio.run(mcp.call_tool("approval_withdraw", {"id": taken_back, "reason": "mistake"}))
 if args.nothing_waits:                                       # Home with nothing waiting: the queues emptied, one mail sent today
     for src in d.sources.values():
-        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(src, "box", None)
+        box = getattr(src, "box", None)
         for q in src.pending():
             box.claim(q.id)
     d.audit.record("approval.sent", actor="owner", via="password", summary="Approved email “Re: Invoice for October”",
