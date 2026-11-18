@@ -831,7 +831,8 @@ it later, once they can name one person for a one-to-one chat and refuse groups;
 cannot opt in, because it has no way to say who a chat id is. `gate.trust` itself never opts in.
 
 The calendar becomes an action type in 5b and mail in 6, so the order is 5b, 6, then 10. Mail keeps the rules it has today on top
-(`SEND_ALLOWLIST`, `MAX_RECIPIENTS`, no HTML part or attachment from someone else without a look): a rule only skips the wait.
+(`SEND_ALLOWLIST`, `MAX_RECIPIENTS`): a rule only skips the wait. Whether a mail with an attachment may go without a look is
+a question for the mock of package 6.
 
 ### Out of scope for package 10
 
