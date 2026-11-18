@@ -164,10 +164,12 @@ class Store:
     keeps_keys = True                        # a key stays bound after its request ended (external.py asks for the fingerprint)
 
     def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None,
-                 type_of: Any = None, tombstones: bool = False):
+                 type_of: Any = None, tombstones: bool = False, report_type: bool = True):
         """source: which kind of request this store holds (external, imessage, calendar, mail). legacy: the JSON queue file to read
-        in once. type_of(q): the action type of a request read in from that file without one (package 5a: the calendar's
-        operation), so it outlasts the request's content. tombstones: keep bound keys after their rows are dropped (package 6a)."""
+        in once. type_of(q): the action type of a request read in from that file or queued without one (package 5a: the
+        calendar's operation; 6a: mail's kind), so it outlasts the request's content. tombstones: keep bound keys after their rows
+        are dropped (package 6a). report_type=False keeps the type in the row only: the requests read back carry none, so what
+        the log, approval_status and the pages say stays as before (mail in 6a; 6b reports it)."""
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source, self.ttl, self.max_items, self.keep_days = source, ttl, max_items, max(1, keep_days)
@@ -180,6 +182,7 @@ class Store:
         self._purged_at = 0.0
         self.type_of = type_of
         self.tombstones = tombstones
+        self.report_type = report_type
         first = _hold_lock(self.dir)
         self._db = self._open()
         if first:
@@ -217,12 +220,11 @@ class Store:
         return _Tx(self._db)
 
     # -- rows ------------------------------------------------------------------------------------------------------------
-    @staticmethod
-    def _q(r: sqlite3.Row) -> QueuedMessage:
+    def _q(self, r: sqlite3.Row) -> QueuedMessage:
         raw = r["raw"] if r["raw"] is not None else b""
         return QueuedMessage(r["id"], r["created_at"], r["expires_at"], bytes(raw), json.loads(r["recipients"] or "[]"),
                              json.loads(r["followup"]) if r["followup"] else None, r["sha256"], r["key"], r["edited_from"],
-                             r["requested_by"], r["action_type"], attempts=r["attempts"])
+                             r["requested_by"], r["action_type"] if self.report_type else None, attempts=r["attempts"])
 
     def _row(self, item_id: str) -> sqlite3.Row | None:
         return self._db.execute("SELECT * FROM request WHERE id = ? AND source = ?", (item_id, self.source)).fetchone()
@@ -358,9 +360,12 @@ class Store:
                 label = (requested_by if requested_by is not None else callctx.client()) or None
                 q = QueuedMessage(secrets.token_urlsafe(12), now, now + self.ttl, raw, recipients, followup, sha, key, requested_by=label,
                                   action_type=action_type)
+                kind = action_type or self._type_of(q)
+                if self.report_type:
+                    q = dc_replace(q, action_type=kind)
                 self._db.execute("INSERT INTO request (id, source, action_type, state, created_at, expires_at, sha256, key, key_fingerprint, "
                                  "requested_by, raw, recipients, followup) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                                 (q.id, self.source, action_type, "waiting", q.created_at, q.expires_at, sha, key, key_fingerprint,
+                                 (q.id, self.source, kind, "waiting", q.created_at, q.expires_at, sha, key, key_fingerprint,
                                   label, raw, json.dumps(recipients), json.dumps(followup) if followup is not None else None))
                 self._version(q.id, sha, raw, "assistant")
         except sqlite3.OperationalError as e:
@@ -518,7 +523,8 @@ class Store:
                        + ", ".join(dropped_keys))
 
     def _type_of(self, q: QueuedMessage) -> str | None:
-        """The type `type_of` gives a request read in from the file; none when it cannot tell (the request still reads in)."""
+        """The type `type_of` gives a request read in from the file or queued without one; none when it cannot tell (the request
+        still reads in or queues)."""
         if self.type_of is None:
             return None
         try:

@@ -703,3 +703,20 @@ def test_the_export_writes_waiting_mail_back_for_the_previous_version(tmp_path):
     empty = tmp_path / "empty"
     run = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(empty)], capture_output=True, text=True, env=env, timeout=60)
     assert run.returncode == 0 and not (empty / "outbox.json").exists()
+
+
+def test_a_type_kept_in_the_row_only_is_written_for_new_and_read_in_requests_and_never_reported(tmp_path):
+    """protects=package 6a writes each mail's type into the row (6b reads it; it outlasts the content), while the log,
+    approval_status and the pages answer as before; fails_when=a row has no type, a request read back carries one, or a type
+    function that raises stops the queueing; no_claim=mail's own mapping (tests/test_mail_release.py)."""
+    old = Outbox(str(tmp_path), 3600, 20)
+    a = old.add(MAIL, ["jana@example.org"], {"folder": "INBOX", "uid": 7, "flag": "$Forwarded"})
+    kinds = {"$Forwarded": "mail.forward"}
+    st = S.Store(str(tmp_path), "mail", 3600, 20, legacy="outbox.json", tombstones=True, report_type=False,
+                 type_of=lambda q: kinds.get((q.followup or {}).get("flag"), "mail.send") if q.followup is not None else 1 / 0)
+    b = st.add(MAIL + b"b", ["tom@example.net"], {"folder": "Drafts", "uid": 4, "action": "trash"})
+    c = st.add(MAIL + b"c", ["tom@example.net"])                          # the type function raises: queued without a type
+    assert b.action_type is None and [x.action_type for x in st.pending()] == [None, None, None]
+    st.claim(b.id, "discarded")
+    types = dict(st._db.execute("SELECT id, action_type FROM request").fetchall())
+    assert types == {a.id: "mail.forward", b.id: "mail.send", c.id: None}
