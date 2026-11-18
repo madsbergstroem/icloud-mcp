@@ -5,6 +5,16 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **A calendar change is an action like the others (fork).** A held calendar change is now an action of one of five types
+  (`calendar.invite`, `.update`, `.delete`, `.cancel`, `.reply`) on the same queue as the connector's actions. The list and the
+  card read „Invitation“ with „Autumn fair · to jana@example.org“ underneath, like an iMessage; When, Calendar and Where stay as
+  rows, and the note is the type's own („… emails an invitation to the guests“). An empty description shows no empty box. Each
+  type has its own line under „Waiting by kind“. Editing the description makes a version, as for other actions. Held changes move
+  over once at the first start with their ids and a new hash, logged as `approval.migrated`; older links to `#/item/calendar:…`
+  still open them. `python -m icloud_mcp.gate.export_queue` writes waiting calendar changes back to `calendar-outbox.json` in the
+  form the previous version reads, for a rollback; a rollback of iMessages now starts too. The calendar tools answer as before,
+  with `approve_at` naming the new link.
+
 - **Calendar approvals keep their state (fork).** A calendar change that would email people now waits in the approval store
   (`approvals.db`); `calendar-outbox.json` is read in once at the first start, with ids and hashes unchanged. Approving checks
   `INVITE_ALLOWLIST` and `MAX_ATTENDEES` again and reads the event once more before writing. An event that changed or is gone ends
