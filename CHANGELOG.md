@@ -5,6 +5,17 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **A mail is an action like the others (fork).** A mail waiting for your approval is now an action of one of three types
+  (`mail.send`, `mail.reply`, `mail.forward`) on the same queue as the other actions. The list and the card read "Email reply" with
+  "Re: Invoice 2291 · to accounts@example.org" underneath; a forward and a sent draft no longer show as replies. The card keeps
+  From with the account, To, Cc, Bcc, the folded quote, the files with their preview and "Choose file" for a missing one, and
+  says which mail a reply answers. Edit now changes the subject, To, Cc and Bcc as well as the text; someone you type in who is not
+  on your list may get that mail only, and the recipient limit always holds. Files are kept apart from the request, so a large
+  file or a long mail fits. Held mail moves over once at the first start with its ids and a new hash, logged as
+  `approval.migrated`; links to `#/item/mail:…` still open it. The mail tools, `approval_status` (still kind "mail", now with the
+  type) and `approval_withdraw` answer as before. One queue now holds every kind, so `OUTBOX_MAX` counts mail and the other
+  actions together. `python -m icloud_mcp.gate.export_queue` writes waiting mail back to `outbox.json` for a rollback.
+
 - **Mail approvals keep their state (fork).** A mail waiting for your approval now waits in the approval store (`approvals.db`);
   `outbox.json` is read in once at the first start, with ids, hashes and everything else unchanged. Approving sends exactly the
   version you looked at: if a file was added or the text changed in between, nothing is sent and it waits for another look.
