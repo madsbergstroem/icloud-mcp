@@ -10,8 +10,8 @@ Update the Mac helper before the server whenever its version changes.
   version you looked at: if a file was added or the text changed in between, nothing is sent and it waits for another look.
   `SEND_ALLOWLIST`, `MAX_RECIPIENTS` and `ALLOW_SEND` are checked again, and a mail they no longer allow ends there. If the mail
   server could not be reached, refused the sign-in, the sender or every recipient, or refused the message, it waits again. If the
-  connection dropped or timed out while the message was being handed over, it reads „unclear“ and is never sent again (before,
-  any error put it back to be approved again, so it could go out twice). A recipient the server refused while it took the others
+  connection dropped or timed out while the message was being handed over, it reads "unclear" and is never sent again. Before,
+  any error put it back to be approved again, so it could go out twice. A recipient the server refused while it took the others
   is named in the note instead of being listed as sent to. A saved draft whose mail was already decided is not queued a second
   time, also months later. Editing a mail's text makes a version, as for other requests. `python -m icloud_mcp.gate.export_queue`
   writes waiting mail back to `outbox.json` for a rollback.
