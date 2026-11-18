@@ -509,33 +509,40 @@ class Store:
         with self._lock:
             return self._db.execute("SELECT 1 FROM request WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
 
-    def adopt(self, other: str, convert: Any, action_type: str) -> list[tuple[str, str, str]]:
+    def adopt(self, other: str, convert: Any, action_type: str | None = None) -> list[tuple[str, str, str]]:
         """Take every row of source `other` into this store, once and in one transaction (package 4b: iMessage becomes an action
         type). Ids, states, times, keys and versions stay; `convert(raw) -> raw` gives each stored version its new bytes, so a
         waiting request gets a new hash (D4-1). A version whose bytes cannot be converted keeps its old ones, and its request
         stops being approvable rather than vanishing. Ended requests have no bytes and only change source and type. Returns
-        (id, old hash, new hash) for every request that was waiting, for the log."""
+        (id, old hash, new hash) for every request that was waiting, for the log.
+        Without `action_type` (package 5b: a calendar change is its object plus its metadata, of one of five types) every row keeps
+        the type its action_type column holds, `convert(raw, row) -> raw` sees the whole row (followup, recipients, action_type),
+        and the metadata, now part of the new bytes, is dropped from the row."""
         moved: list[tuple[str, str, str]] = []
         with self._lock, self._tx():
             rows = self._db.execute("SELECT * FROM request WHERE source = ?", (other,)).fetchall()
             for r in rows:
+                whole = {"followup": json.loads(r["followup"]) if r["followup"] else None, "recipients": json.loads(r["recipients"] or "[]"),
+                         "action_type": r["action_type"]}
+                conv = convert if action_type is not None else (lambda raw, whole=whole: convert(raw, whole))
                 old_sha, new_sha, new_raw = r["sha256"], r["sha256"], r["raw"]
                 if r["raw"] is not None:
                     try:
-                        new_raw = convert(bytes(r["raw"]))
+                        new_raw = conv(bytes(r["raw"]))
                         new_sha = hashlib.sha256(new_raw).hexdigest()
                     except Exception:  # noqa: BLE001
                         log.warning("approval store: request %s of %s could not be converted; it keeps its old form", r["id"], other)
                         new_raw = r["raw"]
                 for v in self._db.execute("SELECT * FROM version WHERE request_id = ? AND raw IS NOT NULL", (r["id"],)).fetchall():
                     try:
-                        vraw = new_raw if v["sha256"] == old_sha else convert(bytes(v["raw"]))
+                        vraw = new_raw if v["sha256"] == old_sha else conv(bytes(v["raw"]))
                     except Exception:  # noqa: BLE001
                         continue
                     self._db.execute("UPDATE version SET raw = ?, sha256 = ? WHERE request_id = ? AND n = ?",
                                      (vraw, hashlib.sha256(vraw).hexdigest(), r["id"], v["n"]))
-                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ? WHERE id = ?",
-                                 (self.source, action_type, new_raw, new_sha, r["id"]))
+                self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ?, followup = ? WHERE id = ?",
+                                 (self.source, action_type or r["action_type"], new_raw, new_sha,
+                                  r["followup"] if action_type is not None or new_raw == r["raw"] else None, r["id"]))
                 if r["state"] == "waiting":
                     moved.append((r["id"], old_sha, new_sha))
         if rows:

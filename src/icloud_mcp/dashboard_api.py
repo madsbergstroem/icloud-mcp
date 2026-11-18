@@ -293,6 +293,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                 "by": getattr(q, "requested_by", None) or "", "created_at": q.created_at, "expires_at": q.expires_at,
                 "warning": bool(v["warnings"] or v["needs_override"]), "blocked": bool(v.get("blocked")), "group": bool(v.get("group")),
                 **({"tags": v["tags"]} if v.get("tags") else {}), **({"to_shown": True} if v.get("log_to") else {}),
+                **({"subject": v["subject"]} if v.get("subject") else {}),
                 **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
@@ -394,6 +395,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         out = {**summary(src, q, v), "rows": [[k, val] for k, val in v["rows"]], "text": v["text"], "notes": v["notes"],
                "warnings": v["warnings"], "needs_override": v["needs_override"], "sha": q.sha256,
                **({"text_style": v["text_style"]} if v.get("text_style") else {}), **({"confirm": v["confirm"]} if v.get("confirm") else {}),
+               **({"text_caption": v["text_caption"]} if v.get("text_caption") else {}),
                "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
                **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
