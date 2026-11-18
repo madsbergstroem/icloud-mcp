@@ -229,7 +229,7 @@ async def test_the_list_and_the_card_come_from_the_type(web, hub, monkeypatch):
         assert it["rows"] == [["Reaches", "anna@example.org"], ["Times", "2"]] and it["text"] == "Please send the money"
         assert it["approve_label"] == "Send echo" and it["warnings"] == ["The message mentions money."] and it["needs_override"] is False
         assert it["edit"] == {"allowed": True, "reason": "", "text": "Please send the money", "limit": 200, "edited": False, "original": None}
-        assert it["account"] == "" and it["files"] == [] and it["missing"] == [] and it["action_type"] == "test.echo"
+        assert "account" not in it and it["files"] == [] and it["missing"] == [] and it["action_type"] == "test.echo"   # 6b: row_tags instead
 
 
 async def test_a_card_whose_own_functions_fail_still_opens(web, hub):

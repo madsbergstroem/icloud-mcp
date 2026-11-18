@@ -508,7 +508,8 @@ def test_a_withdrawal_by_the_unit_claims_once_and_writes_one_line(tmp_path):
     got = Withdrawals(ledger).withdraw(q.id, "mistake", "agent-a")
     assert got == {"id": q.id, "withdrawn": True, "status": "withdrawn"} and box.pending() == []
     (entry,) = audit.entries(5)
-    assert entry["action"] == "approval.withdrawn" and entry["actor"] == "assistant" and entry["summary"] == "Withdrew email “Hello”"
+    # since package 6b the gate reads no mail: a queue of kind mail (the JSON file of before 6a) is named by its kind only
+    assert entry["action"] == "approval.withdrawn" and entry["actor"] == "assistant" and entry["summary"] == "Withdrew a queued mail request"
     assert Withdrawals(ledger).withdraw(q.id, "mistake", "agent-a")["withdrawn"] is False
     assert len(audit.entries(5)) == 1
 

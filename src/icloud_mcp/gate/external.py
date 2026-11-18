@@ -23,7 +23,7 @@ import logging
 from typing import Any, Mapping
 
 from . import actions as A
-from .. import textedit as T
+from . import text as T
 from .status import Released
 from .source import ApprovalSource
 from . import store as S

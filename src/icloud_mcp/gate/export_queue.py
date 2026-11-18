@@ -2,14 +2,14 @@
 approval store (docs/SENDGATE.md, package 3, "Rollback"): external requests to external-outbox.json, and waiting iMessages to
 imessage-outbox.json in the form 4a reads (packages 4a and 4b; that file is written only when an iMessage waits), and waiting
 calendar changes to calendar-outbox.json in the form 5a reads (packages 5a and 5b; written only when one waits), and waiting
-mail to outbox.json (package 6a; written only when a mail waits). It ships in the package, so it runs in the Docker image:
+mail to outbox.json in the form 6a reads (packages 6a and 6b; written only when a mail waits). It ships in the package, so it runs in the Docker image:
 
     docker run --rm -v <your data volume>:/data <this image> python -m icloud_mcp.gate.export_queue /data
     PYTHONPATH=src python -m icloud_mcp.gate.export_queue DATA_DIR          (from a checkout)
 
 Stop the server first: one process holds DATA_DIR at a time. The exported requests end in the store (reason exported) in the same
-step, so the JSON file is their only copy; an iMessage or a calendar change leaves the store, since the previous version reads it in
-again under the same id. The command prints how many it wrote and what the rollback loses: requests that already
+step, so the JSON file is their only copy; an iMessage, a calendar change or a mail leaves the store, since the previous version reads
+it in again under the same id. The command prints how many it wrote and what the rollback loses: requests that already
 ended, among them unclear ones, and their keys, so a request_id used again after the rollback queues a new request.
 Exit codes: 0 written, 1 refused (the server still runs, a request is being carried out, the file exists), 2 wrong arguments.
 """
@@ -33,7 +33,7 @@ def main(argv: list[str]) -> int:
                 if name == "external-outbox.json" or opened[src].waiting_of(kw.get("only"), kw.get("skip", ()))]
         names = [name for _, name, _ in plan]
         if len(names) != len(set(names)):
-            raise RuntimeError("iMessages or calendar changes wait in two forms. Start this version once, so it moves them to one, "
+            raise RuntimeError("iMessages, calendar changes or mail wait in two forms. Start this version once, so it moves them to one, "
                                "then export again.")
         for store, name, _ in plan:                   # refuse before anything is written, so no file is half done
             store.check_export(name)
@@ -102,13 +102,14 @@ def mail_object(type_id: str, p: dict[str, Any], blob: Any = None) -> tuple[byte
 
 # (source, file, which rows). Since package 4b an iMessage is an action of type imessage.send: it goes back to the file 4a reads,
 # as the parameters it had, and stays out of the external file, where 4a would show it as an unknown action. The same for the
-# calendar types since 5b.
+# calendar types since 5b, and for the mail types since 6b (back to outbox.json, as the message and its followup).
 IMESSAGE = "imessage.send"
-PLAN = (("external", "external-outbox.json", {"skip": (IMESSAGE, *CALENDAR)}),
+PLAN = (("external", "external-outbox.json", {"skip": (IMESSAGE, *CALENDAR, *MAIL)}),
         ("external", "imessage-outbox.json", {"only": (IMESSAGE,), "as_params": True}),
         ("imessage", "imessage-outbox.json", {}),
         ("external", "calendar-outbox.json", {"only": tuple(CALENDAR), "as_object": calendar_object}),
         ("calendar", "calendar-outbox.json", {}),
+        ("external", "outbox.json", {"only": MAIL, "as_object": mail_object}),
         ("mail", "outbox.json", {}))
 
 

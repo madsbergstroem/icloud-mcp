@@ -3,7 +3,7 @@
 import { put } from "./api.js";
 import { esc, toast, fail, ask, titleBlock } from "./ui.js";
 
-const STAYS = { mail: "The recipients and the subject stay the same.", bubble: "The conversation stays the same." };
+const STAYS = { bubble: "The conversation stays the same." };
 
 // The edit view of one request. `rows` is the message card's own rows (already HTML), `sub` the line under the title.
 export function editView(it, rows, sub) {

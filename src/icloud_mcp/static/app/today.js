@@ -4,7 +4,6 @@ import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, sectio
 import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
-const KINDS = { mail: "Mail" };
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
@@ -27,12 +26,11 @@ const about = (w) => [w.subject ? esc(w.subject) : "", w.to ? `to ${esc(w.to)}` 
 
 // The line under a request in the list: its kind, its tags, who it goes to
 function itemSub(w) {
-  const to = w.to ? `to ${esc(w.to)}` : "";
-  const text = w.kind === "mail" ? to : w.kind === "external" && w.to_shown ? about(w) : "";
+  const text = w.kind === "external" && w.to_shown ? about(w) : "";
   const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !isGroup(w) ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
   const tags = [...(w.group ? ["Group"] : []), ...(w.tags || [])].filter((t, i, all) => all.indexOf(t) === i);
-  return tag(w.kind === "external" ? w.kind_label || "Other" : KINDS[w.kind] || w.kind) + tags.map((t) => tag(t, "warn")).join("")
+  return tag(w.kind === "external" ? w.kind_label || "Other" : w.kind) + tags.map((t) => tag(t, "warn")).join("")
     + [text, by, extra].filter(Boolean).join(" · ");
 }
 
@@ -212,20 +210,17 @@ class Item extends HTMLElement {
     return p;
   }
 
-  // The rows of the message card, as <dt><dd> pairs. A mail shows which account it goes out from.
+  // The rows of the message card, as <dt><dd> pairs, each with the tag its type gives it (a mail's account on From, package 6b)
   rowsHtml() {
     const it = this.it;
-    const addrs = (s) => (String(s).match(/[^\s<>,]+@[^\s<>,]+/g) || []).map((a) => a.toLowerCase()).sort().join(",");
-    const visible = addrs(it.rows.filter(([k]) => k === "To" || k === "Cc").map(([, v]) => v).join(","));
-    const rows = it.rows.filter(([k, v]) => !(k === "Will be delivered to" && addrs(v) === visible));      // the same people twice
-    return rows.map(([k, v]) => `<dt>${esc(k === "Will be delivered to" ? "Sent to" : k)}</dt><dd>${esc(v)}${k === "From" && it.account ? ` ${tag(it.account)}` : ""}</dd>`).join("");
+    return it.rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}${it.row_tags && it.row_tags[k] ? ` ${tag(it.row_tags[k])}` : ""}</dd>`).join("");
   }
 
   // The message exactly as it goes out, with the edit button under it
   card() {
     const it = this.it;
     // the quoted mail it answers is folded away, so the new text and the buttons are what you see first
-    const m = it.kind === "mail" || it.text_style === "mail" ? /^(On .+ wrote:|Am .+ schrieb .+:|-{2,} ?Original Message ?-{2,}|>)/m.exec(it.text || "") : null;
+    const m = it.text_style === "mail" ? /^(On .+ wrote:|Am .+ schrieb .+:|-{2,} ?Original Message ?-{2,}|>)/m.exec(it.text || "") : null;
     const own = m ? it.text.slice(0, m.index).trimEnd() : (it.text || "");
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;

@@ -23,7 +23,7 @@ DIRS = ("src", "mac-helper", "menubar", "dev")
 
 # What the gate must not import: the services, the chat model, the Mac bridge, the server, its settings and pages, a plugin.
 FORBIDDEN = ("mail", "cal", "contacts", "imessage", "messages", "beeper", "bridge", "server", "config", "settings", "dashboard",
-             "dashboard_api", "approvals", "plugins", "gate_connectors")
+             "dashboard_api", "approvals", "plugins", "gate_connectors", "textedit")       # textedit since package 6b (its mail parts)
 
 MOVED = {"actions": "actions", "external": "external", "outbox": "outbox", "approval_status": "status",
          "approval_withdraw": "withdraw", "audit": "audit", "push": "push"}
@@ -97,7 +97,7 @@ def _imports(path: Path, text: str | None = None) -> list[str]:
 def test_the_gate_imports_no_service():
     """protects: the gate can be lifted out of this server, or offered upstream as a package, without taking a service along.
     fails_when: a module under icloud_mcp/gate imports one of FORBIDDEN, at the top or inside a function.
-    no_claim: that the gate works without the server; textedit, callctx and the rest it imports still live outside gate/."""
+    no_claim: that the gate works without the server; callctx and the rest it imports still live outside gate/."""
     bad = []
     for path in sorted(GATE.rglob("*.py")):
         for mod in _imports(path):
@@ -134,3 +134,22 @@ def test_an_old_module_path_is_the_new_module(old, new):
     fails_when: the old path gives a copy instead of the module itself.
     no_claim: that every name the old module had is still there; the rest of the suite imports those."""
     assert importlib.import_module(f"icloud_mcp.{old}") is importlib.import_module(f"icloud_mcp.gate.{new}")
+
+
+def test_no_kind_of_request_named_mail_is_left_outside_mail_and_its_move():
+    """protects=package 6b criterion 5: mail is an action like the others, so nothing in src/ branches on a kind "mail" or opens a
+    source "mail" except mail.py and the start-up move of held mail (server.py, _adopt_mail); the export names the 6a queue file
+    only in its plan. fails_when=a mail branch is added back to the gate, the dashboard, /outbox or the app.
+    no_claim=that every way of writing such a branch is caught; it looks for the forms this code used."""
+    import re
+    pattern = re.compile(r'kind\s*===?\s*"mail"|sources(\.get\(|\[)"mail"|Store\([^)]*"mail"|kind == "mail"')
+    hits = []
+    for path in sorted((ROOT / "src" / "icloud_mcp").rglob("*")):
+        if path.suffix not in (".py", ".js") or path.name == "mail.py":
+            continue
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line):
+                hits.append(f"{path.relative_to(ROOT)}:{n}")
+    assert hits == ["src/icloud_mcp/server.py:" + str(next(n for n, line in enumerate((ROOT / "src/icloud_mcp/server.py").read_text().splitlines(), 1)
+                                                        if 'Store(s.data_dir, "mail"' in line))]
+    assert 'def _adopt_mail' in (ROOT / "src/icloud_mcp/server.py").read_text()

@@ -678,3 +678,71 @@ def test_a_mail_text_keeps_its_own_limit_and_what_is_kept_of_an_original_goes_wi
     src.box.claim(q.id, "discarded")
     src.contexts([waiting(mail, queue(mail))])
     assert mail._contexts == {}
+
+
+MAIL_ROLLBACK = """
+import contextlib, json, sys
+sys.path[:0] = [{src!r}]
+from icloud_mcp.config import Settings
+from icloud_mcp.gate.store import Store
+from icloud_mcp.mail import MailService, mail_type_of
+
+class FakeIMAP:
+    def append(self, folder, raw, flags=(), msg_time=None):
+        pass
+    def add_flags(self, uids, flags):
+        pass
+
+sent = []
+MailService.imap = contextlib.contextmanager(lambda self, fresh=False: (yield FakeIMAP()))
+MailService.resolve_folder = lambda self, c, name: name
+MailService._select = staticmethod(lambda c, folder, readonly=True, expect=None: expect)
+MailService._smtp_send = lambda self, msg, rcpts: sent.append((str(msg["Message-ID"]), [p.get_filename() for p in msg.iter_attachments()])) or {{}}
+mail = MailService(Settings.from_env(), outbox=Store({data!r}, "mail", 3600, 20, legacy="outbox.json", type_of=mail_type_of,
+                                                     tombstones=True, report_type=False))
+types = dict(mail.outbox._db.execute("SELECT id, action_type FROM request").fetchall())     # 6a keeps the type in the row only
+waiting = [(q.id, types[q.id], q.followup) for q in mail.outbox.pending()]
+r = mail.approve({item!r})
+print(json.dumps({{"waiting": waiting, "status": r["status"], "sent": sent}}))
+"""
+
+
+def test_the_export_then_6a_shows_the_same_waiting_mail_and_sends_one_with_its_message_id(env, tmp_path):
+    """protects=package 6b criterion 6: after the export, the version before 6b (package 6a, commit 05727aa, run from git in its own
+    process) reads every waiting mail in from outbox.json with its id and followup, and approving one sends it with the same
+    Message-ID and its file; the external file keeps only other actions; fails_when=a mail is lost, lands in the external file,
+    cannot be read in (an id still held by a row of the store), or goes out with another Message-ID or without its file;
+    no_claim=6a's other endings (its own tests at that commit), or the hash: it changes again, as the spec says."""
+    import base64
+    import os
+    import subprocess
+    import sys
+
+    from icloud_mcp.gate import export_queue as E
+    from icloud_mcp.gate import store as S
+    mail, _, _, _ = env
+    r = mail.send(to=["jana@example.org"], subject="Quote", body="Attached.",
+                  attachments=[{"filename": "Quote.pdf", "content_base64": base64.b64encode(b"%PDF-1.4 made up").decode()}])
+    other = mail.send(to=["tom@example.net"], subject="Rota", body="Here.")["outbox_id"]
+    ping = mail.external.box.add(A.canonical("test.ping", {}), [], action_type="test.ping")
+    mail._smtp_drop(quit=False)
+    os.close(S._locks.pop(str(tmp_path.resolve())))                    # as if the server stopped: the command opens DATA_DIR again
+    assert E.main(["export_queue", str(tmp_path)]) == 0
+    back = json.loads((tmp_path / "outbox.json").read_text())["items"]
+    assert sorted(x["id"] for x in back) == sorted([r["outbox_id"], other])
+    assert [x["id"] for x in json.loads((tmp_path / "external-outbox.json").read_text())["items"]] == [ping.id]
+    root = Path(__file__).resolve().parents[1]
+    old = tmp_path / "v6a"
+    old.mkdir()
+    try:
+        tar = subprocess.run(["git", "-C", str(root), "archive", "05727aa", "src"], capture_output=True, check=True, timeout=60).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("not a git checkout with the 6a commit")
+    subprocess.run(["tar", "-x", "-C", str(old)], input=tar, check=True, timeout=60)
+    os.close(S._locks.pop(str(tmp_path.resolve()), os.open(os.devnull, os.O_RDONLY)))   # the export's own hold on DATA_DIR
+    code = MAIL_ROLLBACK.format(src=str(old / "src"), data=str(tmp_path), item=r["outbox_id"])
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, cwd=str(old), env=os.environ.copy())
+    assert run.returncode == 0, run.stderr[-2000:]
+    got = json.loads(run.stdout.strip().splitlines()[-1])
+    assert sorted((i, t) for i, t, _ in got["waiting"]) == sorted([(r["outbox_id"], "mail.send"), (other, "mail.send")])
+    assert got["status"] == "sent" and got["sent"] == [[r["message_id"], ["Quote.pdf"]]]
