@@ -117,7 +117,7 @@ Rules every package keeps:
 | 3 | SQLite store with states, lasting keys and the hash in the log | gate | 0 | yes |
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | yes |
 | 5 | Calendar invitations on the same | connector | 1, 3 | yes (5a, 5b) |
-| 6 | Mail on the same | connector | 1, 3 | later |
+| 6 | Mail on the same | connector | 1, 3 | yes (6a, 6b) |
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
 | 8 | Signed checkpoints of the log, export | gate | 3 | later |
 | 9 | Webhook as a way in and as a notice of status changes | gate | 3 | later |
@@ -776,6 +776,250 @@ above: the 412 or 404 at the write (D5-6), the calendar's own list rules, the fu
 
 Effort, estimated and not measured: 5a about 240 min of work and 30 min of review; 5b about 300 min of work after the mock,
 plus 45 min of review.
+
+## Package 6: mail on ActionType and Executor
+
+Mail waiting for the owner moves from `outbox.json` to the store, and later onto the external source as action types. Mail is the
+oldest path and has the most users, upstream too, so it moves last and changes as little as an agent can see. This was read
+against `mail.py:1762-1871`, `mail.py:1900-1954`, `mail.py:2046-2159`, `dashboard.py:156-209`, `approvals.py:152-291` and
+`dashboard_api.py:386-502` on 2026-11-18, and not run. The split follows packages 4 and 5 (D6-1): 6a moves the queue and fixes
+what goes wrong after approval, and the owner sees nothing new; 6b folds mail into the external source and changes the card, so
+it needs a mock first.
+
+What mail does today, and where that breaks a rule of the gate:
+
+| # | Today | Rule it breaks | Evidence |
+|---|-------|----------------|----------|
+| M1 | Any error after the claim puts the mail back (`restore`), including a timeout or a dropped connection after the message went out. The error text itself says "the message may have gone out", and the page says "Not sent (still waiting)" | `failed` only when the other side provably never got it | `mail.py:2157-2159`, `:1836-1838`, `dashboard_api.py:494-498`, `approvals.py:281` |
+| M2 | A crash between the claim and SMTP's answer loses the mail | Gap 7 | `gate/outbox.py:166-174` |
+| M3 | The approval checks the hash of the version the owner saw, but `release` claims by id only, so a file added between the look and the click is sent unseen | An approval of an old version is refused | `dashboard_api.py:464`, `dashboard.py:192`, `mail.py:2138`; compare `gate/external.py:405-407` |
+| M4 | A recipient the server refused at RCPT while others were accepted is in the tool's `refused`, but the owner's note says "Sent to" every address | The log says what happened | `mail.py:1907-1908`, `dashboard.py:192`, `approvals.py:291` |
+| M5 | A key matches waiting entries only, so `mail_send_draft` on a draft whose mail ended `unclear` (the draft stays in Drafts) queues it again | Gap 8 | `gate/outbox.py:141`, `mail.py:2400-2402`, `:1917-1925` |
+| M6 | An edited text overwrites once (`edited_from`) | Versions (2c) | `textedit.py:95-104`, `gate/outbox.py:39` |
+
+What already holds and stays: the owner's lists are checked again at approval, not only at queue time. `release` calls
+`_check_recipients` on the stored message, which applies `MAX_RECIPIENTS` and `SEND_ALLOWLIST` as they are now
+(`mail.py:2154`, `:1762-1772`). A placeholder still waiting for its file stops the send (`mail.py:2147-2148`); the dashboard
+refuses before claiming (`dashboard_api.py:480-481`), `/outbox` claims and puts it back. Attachments other than placeholders are
+bytes inside the stored message (`mail.py:360-376`), so they cannot go missing between queue and approval. The `Message-ID` is
+made when the message is built and is part of the stored bytes (`mail.py:456`, `:2398-2399`), so a send repeated after `failed`
+carries the same id.
+
+### 6a: the store
+
+| Today | After 6a |
+|-------|----------|
+| `outbox.json`, rewritten on every change, no state for "being sent" | Rows of source `mail` in `approvals.db`. The file is read in once and renamed `.migrated`, keeping ids, bytes, hashes, keys, `followup`, `edited_from` and `requested_by` |
+| Any error puts the mail back | Each ending is a state (table below) |
+| A file added after the owner looked is sent | Nothing is sent; the mail waits and the owner looks again |
+| Edit overwrites once | Edit makes a version (2c), so the card gets "Earlier versions" |
+| A crash after approval loses the mail | It ends `unclear` at the next start and is logged once |
+| A key matches waiting mail only | The store's rule: a key stays bound while its mail waits, is being sent, was sent or is unclear (D6-3) |
+
+| What happens after the owner approved | The mail |
+|---------------------------------------|----------|
+| A recipient is no longer allowed by `SEND_ALLOWLIST`, there are more than `MAX_RECIPIENTS`, or sending is off (`ALLOW_SEND`) | ends `discarded`, reason `not_allowed`; nothing reaches SMTP |
+| A file is still missing | nothing is claimed; it waits, and the page says which file |
+| The stored version is not the one the owner approved | nothing is sent; it waits, and the page says to look again |
+| The mailbox (IMAP) cannot be opened, before SMTP is tried | waits again (`failed`) |
+| SMTP refuses before the message is handed over: the closed list below | waits again (`failed`); the owner sees why |
+| SMTP answers an error code to the message itself (`SMTPDataError`) | waits again (`failed`), D6-2 |
+| The connection drops, times out or anything else fails once the message is being handed over | ends `unclear`, never repeated |
+| SMTP accepts it for every recipient | ends `sent` |
+| SMTP accepts it for some recipients and refuses others | ends `sent`; the note and the log line name how many were refused, the note names them |
+| Sent, but the copy in Sent could not be saved, the original could not be flagged, or the draft could not be moved to Trash | ends `sent`; the note says what is missing, as `warning` does today (`mail.py:1915`) |
+
+Which errors count as "before the message is handed over" is a closed list, as in 5a. Today every SMTP error is wrapped in one
+`MailError` (`mail.py:1827-1838`), and `send_message` does MAIL FROM, RCPT and DATA in one call, so a timeout cannot be placed.
+6a sends with smtplib's own steps (`mail`, `rcpt`, `data`) and keeps which step raised:
+
+| Step | Error | Ending |
+|------|-------|--------|
+| Opening the connection (`_smtp_open`, `mail.py:1774-1790`) | anything: `ConnectionRefusedError`, `socket.gaierror` (name lookup), `TimeoutError` within `CONNECT_TIMEOUT`, `ssl.SSLError`, `SMTPConnectError`, `SMTPHeloError`, `SMTPNotSupportedError` (no STARTTLS), `SMTPAuthenticationError`, `SMTPServerDisconnected` | `failed`: no MAIL FROM was sent |
+| MAIL FROM | `SMTPSenderRefused`, `SMTPServerDisconnected`, `OSError` | `failed` |
+| RCPT | every recipient refused (`SMTPRecipientsRefused`), `SMTPServerDisconnected`, `OSError` | `failed` |
+| DATA | `SMTPDataError` (a code other than 354 to DATA, or other than 250 after the message) | `failed` (D6-2) |
+| DATA | `SMTPServerDisconnected`, `TimeoutError`, any other `OSError` or exception | `unclear` |
+
+A pooled connection that fails its NOOP is dropped before use, as today (`mail.py:1812-1820`). `sent` means iCloud's SMTP server
+accepted the message (a 250 after the data). Whether it reached the recipients is not known to this server; a bounce arrives
+later as mail. The note keeps "Sent to …" (D6-6).
+
+The lists are mail's own, as when the agent asks: an empty `SEND_ALLOWLIST` allows everyone and a domain entry allows the domain
+(`mail.recipient_allowed`, `mail.py:614-622`). The check at approval calls `_check_recipients`, the same function as at queue
+time, and has no copy of it.
+
+Unchanged: the stored bytes and their hash, the tools' answers, the card, `approve_at`, `/outbox`, the push note, the log lines
+except the new `refused` count. `SEND_REQUIRES_APPROVAL=false` still sends at once without the gate (`mail.py:1881`,
+`:2170`). `python -m icloud_mcp.gate.export_queue` writes `outbox.json` back as well.
+
+Acceptance criteria:
+
+1. The mail approval tests (`test_dashboard.py`, `test_dashboard_cards.py`, `test_text_edit.py`, `test_approval_withdraw.py`,
+   `test_dashboard_links.py` and every test that names `outbox.json`) pass with the store. A changed test is reported on its own
+   line with its reason (rule 3).
+2. Each row of both tables above has a test against a made-up SMTP server that can refuse or drop at each step. The test checks
+   the state, the reason, and how many times the message reached DATA: once at most per approval, never after `not_allowed`.
+3. A file added between the owner's look and the click sends nothing, and the mail waits with the new hash.
+4. Starting on a `DATA_DIR` with an `outbox.json` gives the same waiting ids and hashes and a `.migrated` file. The export writes a
+   file the previous version loads with the same ids and hashes.
+5. A row of source `mail` left `executing` ends `unclear` at start, also when another source's store opened first.
+6. `mail_send_draft` for a draft whose mail ended `unclear` queues nothing and answers with that mail's status.
+
+### 6b: one source
+
+Mail becomes actions on the external source, and the mail branches of gap 4 go: `gate/withdraw.py:50-52`, `:96`,
+`dashboard_api.py:279`, `:402`, `:409-421`, `:430-431`, `today.js:7`, `:31`, `:228`, `app.js:10`, `edit.js:6`, `dashboard.py`
+(`MailApprovals`, and the file routes at `dashboard.py:611-690`), `approvals.py:154`, `:175-185`, `:257-262`, and `server.py`
+(`approval["mail"]`). The mail parts of `textedit.py` (`mail_block`, `mail_text`, `mail_with_text`, `textedit.py:66-104`) move
+into `mail.py` as the type's `text_of`, `with_text` and `text_locked`, which removes the gate's import of `mail` through
+`textedit` that package 0 names.
+
+One type per thing the owner reads (D6-4), so the badge stays fixed per type:
+
+| Type | Badge | Main button | Made by |
+|------|-------|-------------|---------|
+| `mail.send` | Email | Send | `mail_send_message`, `mail_send_draft` |
+| `mail.reply` | Email reply | Send | `mail_reply_to_message` |
+| `mail.forward` | Forward | Send | `mail_forward_message` |
+
+Today the badge says "Email reply" whenever the card read an original (`dashboard.py:187`), and a forward and a saved draft have
+one too (`followup` names the forwarded message or the draft itself, `mail.py:2192-2212`, `:2401`, `:1985-1987`), so a forward
+and a draft are shown as replies, with "In reply to: …" naming the draft. The three types end that.
+
+Parameters (D6-5): `from`, `to`, `cc`, `bcc`, `subject` as strings, `message` (the rest of the message as it is sent: body
+parts, threading headers, `Message-ID`), `files` (name, type, size and sha256 of each attachment, or a placeholder) and
+`followup`. The executor writes `to`, `cc`, `bcc` and `subject` into the headers of `message` before the send, so the stored
+bytes still say exactly what goes out. Attachments do not fit the canonical JSON: a request may be 200,000 bytes
+(`gate/actions.py:36`) and one attachment 5 MiB (`config.py:334`). They are kept in a new table `blob` in `approvals.db`, keyed
+by sha256 and dropped when the request ends, like `raw`; the request's hash covers their hashes, so an approval binds to the file
+contents.
+
+Registration follows the calendar (`cal.py:2406-2413`): `allowed` is `["*"]`, because mail's list differs from the gate's
+(empty allows everyone, a domain entry the domain), and `recheck` calls `_check_recipients`, which gives the `not_allowed` ending.
+`builtin=True`, and `channel_tool` names the mail tools, so `approval_request` refuses the mail types. The executor gives the
+other endings of 6a.
+
+What the card would lose without new fields:
+
+| On the screen | Today | 6b without new fields |
+|---------------|-------|-----------------------|
+| Card and list title | the subject ("Invoice 2291") | the type's title ("Email"); `ActionType.title` is never taken from a parameter |
+| List, second line | Mail · to Jana Example | Email · to jana@example.org, … |
+| Rows | From with the account tag, To, Cc, Bcc, "Sent to" when it differs from To and Cc (`today.js:216-222`) | "To" and "Will be delivered to" are reserved labels (`gate/actions.py:35`), and the account tag is mail's only |
+| Text | the new text first, the quoted mail folded under "Show the quoted mail" (`today.js:228-230`, `:250`) | the whole text, quote included |
+| Attachments | a list with a preview for images, PDF and text (`dashboard_api.py:409-416`, `:422-448`) | none: the external card has no files |
+| A file still missing | "Missing" with "Choose file", approving off (`today.js:347-351`, `dashboard_api.py:480-481`) | none: a `hold` is per type, not per request (`gate/external.py:86`) |
+| The mail it answers | "In reply to" and a section with its subject and sender (`dashboard.py:177-180`, `today.js:344-345`) | none: the type sees only the parameters |
+| Warning and second confirmation | when the original looked like an attempt to steer the agent, or an agent added a recipient's address to a contact (`dashboard.py:172-176`, `approvals.py:81-89`) | only what the parameters say; the original is read from the mailbox, not stored |
+| Edit | text only, "The recipients and the subject stay the same." (`edit.js:6`) | the 2d form, once the fields are editable |
+| Note under the card | In reply to, Attachments, Waiting for (`dashboard.py:177-185`) | the type's fixed `note` |
+| Push note | "An email is waiting for your approval." (`gate/push.py:42`) | "An action is waiting for your approval." |
+| Activity | "Approved email “Invoice 2291”" (`dashboard_api.py:500`) | "Approved email “Email”" |
+
+What package 5b and 4b already added, and fits mail:
+
+| Field | For mail |
+|-------|----------|
+| `subject(params)` (5b, `builtin` only) | the mail's subject on the line under the title and in the list, as the event's summary in 5b |
+| `text_of`, `with_text`, `text_locked` (5b) | the plain-text part inside `message`; the locks of today stay: HTML part, signed or encrypted, no plain part (`textedit.py:77-86`) |
+| `text_caption` (5b) | a caption for the text, if the mock wants one |
+| `editable_fields`, `recipient_fields` (2d) | `subject`, `to`, `cc`, `bcc`, see below |
+| `tags(params)`, `confirm_twice(params)`, `note` (4b) | a tag per attachment count or for Bcc, and the second confirmation for a steering warning if D6-7 stores it |
+
+What the type still lacks: a block per request (a missing file), attachments on the card with their preview and upload, and a
+look at the original (the mail it answers, the steering warning, agent-added addresses). The mock decides how they look; 6b adds
+them as optional fields, for `builtin` types only.
+
+The 2d promise: subject, To, Cc and Bcc become editable fields of the 2d form. Editable fields are strings
+(`gate/actions.py:190`), so To, Cc and Bcc are each one string of addresses, read with `parse_recipients` (`mail.py:125`) when the
+owner saves; an address that does not parse refuses the save with nothing stored. A changed recipient goes through
+`_check_recipients` again, and someone the owner typed in who is not on `SEND_ALLOWLIST` is allowed for that mail only, as 2d
+does (`owner_allowed` in the version's bytes). `MAX_RECIPIENTS` is never waived. A changed subject keeps `In-Reply-To` and
+`References`, so a reply stays in its thread.
+
+Needs a mock with variants before it is built: A, the type's title with the subject on the line under it (as 4b and 5b); B, the
+subject as the title, through a field only `builtin` types may use (as 5b's variant B). Both show From, To, Cc and Bcc, the folded
+quote, the attachments and the 2d form. Package 10 asks the same mock whether a mail with an attachment may go without a look.
+
+Start-up moves every row of source `mail` to source `external` once, as in 4b and 5b: same id, state, versions and expiry, the
+parameters in the canonical form of the type, a new hash and one `approval.migrated` line per waiting row. The type comes from the
+stored message: `In-Reply-To` with a `followup` flag `\Answered` is `mail.reply`, `$Forwarded` is `mail.forward`, anything else
+`mail.send` (`mail.py:1930-1932`, `:2210`); 6a writes it into the row's `action_type` column, as 5a did. `#/item/mail:<id>` opens
+`external:<id>`. The export needs the inverse, from the parameters and the blobs back to one MIME message in the 6a form.
+
+Unchanged for the agent, byte for byte: the five mail tools answer as now (`status`, `sent`, `outbox_id`, `recipients`,
+`expires_in_seconds`, `approve_at`, `already_queued`, `notice`, `message_id`, `subject`, `to`, `cc`, and for a missing file
+`files_to_add` with `upload_url` and `owner_link`, `mail.py:1848-1871`, `:2068-2071`), refusals keep their `MailError` texts,
+`PUT /files/{token}` answers as now (`dashboard.py:665-690`), and `approval_status` keeps `kind: "mail"` for mail (D6-8).
+`approve_at` keeps the form `#/item/mail:<id>`. Upstream's `/outbox` (at `184ffa8`, `approvals.py:87-252`) shows a mail with
+its subject, From, To, Cc, Bcc, "Will be delivered to", the attachments, the original it answers and the override box. If upstream
+takes the gate, its `/outbox` becomes the external branch (`approvals.py:165-174`), and that card must show all of these before
+mail moves. If upstream declines, nothing of 6b reaches it. M1 (a timeout after DATA put back for a second send) is in upstream's
+`release` too, so the 6a fix is a `mergeable` candidate of its own.
+
+Package 10 then gets mail's `standing_identity`: the lower-case address of every recipient in `to`, `cc` and `bcc`, one rule
+needed for each.
+
+Acceptance criteria:
+
+1. Each row of the screen table, in the variant the owner chose, has a test against the JSON the dashboard reads. The QA run
+   (gstack `/qa`) checks each type on desktop and at 375 px, including a text edit, a recipient edit and a missing file.
+2. The 6a ending tests pass against the external source with the same states and DATA counts.
+3. Starting on a `DATA_DIR` with waiting and ended mail rows gives the same ids, states and versions under `external`, with one
+   `approval.migrated` line per waiting row; a second start changes nothing. A mail with a 5 MiB attachment moves and is sent
+   with the same attachment bytes.
+4. The five mail tools, `approval_status`, `approval_withdraw` and the upload give the same answers before and after 6b, compared
+   as JSON in a test.
+5. After 6b, a search of `src/` for `kind == "mail"` or `"mail"` as a source finds nothing outside `mail.py` and the migration,
+   and no module under `gate/` imports `mail` or `textedit`.
+6. Rollback: the export, then 6a, shows the same waiting mail, and approving one sends it with the same `Message-ID`.
+
+### Decisions for package 6
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D6-1 | One package or 6a and 6b? | 6a, then 6b | 6a fixes M1 to M6 without a visible change; only 6b needs a mock |
+| D6-2 | An SMTP error code to the message itself (`SMTPDataError`)? | `failed` | The server takes the message over only with a 250 after the data ([RFC 5321, 4.1.1.4](https://www.rfc-editor.org/rfc/rfc5321#section-4.1.1.4)), and the gate keeps its three answers. Open: whether iCloud ever answers 4xx or 5xx after the data and still delivers; not checked |
+| D6-3 | A key after the mail ended | bound, as the store does for every source (`gate/store.py:319-328`) | A draft whose mail is `unclear` or `sent` but still in Drafts must not go out twice. The draft's key names one uid, and `mail_update_draft` makes a new uid (`mail.py:2401-2402`), so a changed draft is a new request. This departs from package 3's "mail keeps today's rule" |
+| D6-4 | One type, or one per kind? | `mail.send`, `mail.reply`, `mail.forward` | Badge fixed per type, and a forward or a draft no longer reads as a reply |
+| D6-5 | The whole message in one parameter, or the editable headers apart? | apart: `to`, `cc`, `bcc`, `subject` as fields, the rest in `message`, attachments as blobs | 2d edits fields of the parameters, and the canonical JSON cannot hold 5 MiB. Open: whether the blob table belongs in the gate or in mail's own part of the store |
+| D6-6 | The success note | keep "Sent to …", add the refused addresses | For mail, "sent" means accepted by the SMTP server, as every mail program uses it; 5a changed the calendar's note because iCloud, not this server, sends the invitations |
+| D6-7 | The steering warning and agent-added addresses after 6b | open | Today they are read from the mailbox when the card is shown (`mail.py:1959-1983`). Storing them at queue time freezes them; reading them needs a context hook the type does not have. Needs the mock and one more look |
+| D6-8 | `approval_status` `kind` for mail after 6b | `mail`, with `action_type` | iMessage and calendar answer `external` since 4b and 5b (`gate/status.py:89-92`); mail has upstream's agents, which read `kind` |
+
+Open questions, not decided above:
+
+- A mail read in from `outbox.json` with `edited_from` gets version 1 by the author `assistant`, although its bytes are the
+  owner's edit (`gate/store.py:489-490`). 4a and 5a did the same; the history sheet then says "Your assistant asked" for the
+  owner's text.
+- With `ALLOW_SEND=false` the mail source is not registered at all (`server.py:782`), so mail that waited before a restart is
+  neither shown nor approvable and expires unseen. Whether that is intended was not checked.
+- `/outbox` approves a mail without the missing-file check the dashboard makes; it claims and puts it back (`approvals.py:264`,
+  `mail.py:2147-2158`). 6a's "nothing is claimed" row covers it; 6b's general card needs the same block.
+
+Reviewed on 2026-11-18 with gstack `/plan-eng-review` and a second opinion from Codex (gpt-6-astra). The claims about today were
+checked against the code (M1, M2, M4 and the "may have gone out" restore at `mail.py:1836-1838` and `:2157-2159`). Codex raised
+five points, taken in as requirements here; the decisions they touch stay open until the owner answers:
+
+- Bcc: the stored message keeps its Bcc header, and only `send_message` leaves it out on the wire (`mail.py:1824`,
+  `tests/test_mail_builders.py:131`). The stepwise send of 6a must build the bytes it sends without Bcc and keep the copy for Sent
+  apart. A test reads the DATA bytes the made-up SMTP server got and finds no Bcc.
+- Owner overrides in 6b: with `allowed` `["*"]` the gate records no `owner_allowed`, and `_check_recipients` has no way to hear of
+  an address the owner typed in (`gate/external.py:288`, `mail.py:1769`). 6b needs the approval context (the version's
+  `owner_allowed`) passed to the recheck, and the recheck turns a refused list into `not_allowed`, never into a `MailError` that
+  puts the request back.
+- D6-3: the store drops ended rows after `keep_days`, keys included (`gate/store.py:296`), so the guard against a second send of
+  an unchanged draft ends with the retention. A key of an ended mail is kept as a small tombstone (key, fingerprint, ending, time)
+  apart from the activity retention, and a test queues the same draft again after `keep_days`.
+- D6-5: blobs are referenced by every request and every kept version that names them, and a blob goes only when nothing names it
+  any more, in the same transaction. Tests: two mails sharing one file, and a file replaced between versions.
+- D6-5: attachments are not the only large part. A long body or a quoted thread can pass 200,000 bytes of canonical JSON
+  (`gate/external.py:357`), so the body goes to a blob too when it is large, and the migration test includes such a mail.
+
+Effort, estimated and not measured: 6a about 330 min of work (store and migration 90, the stepwise send and its endings 90, key
+tombstones 30, tests with the made-up SMTP server 120) and 45 min of review; 6b about 540 min of work after the mock (types and
+parameters 90, blobs with references 120, the card's new fields 120, migration and export 90, tests 120), plus 60 min of review.
 
 ## Package 10: standing approval for named people
 
