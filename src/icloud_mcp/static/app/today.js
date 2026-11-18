@@ -239,7 +239,8 @@ class Item extends HTMLElement {
     // a type that names who it reaches under the title (to_shown) has no recipient row: all its rows come before the text
     const rows = ext ? (it.to_shown ? it.rows : it.rows.slice(0, 1)).map(dd).join("") : this.rowsHtml();
     const more = ext && !it.to_shown ? it.rows.slice(1).map(dd).join("") : "";
-    // an empty text has no block, for every kind (package 5b); the caption and the edit button stay where the type names a caption
+    // an empty text has no block, for every kind (package 5b); where the type names a caption and the text may be edited, a line
+    // says there is none and keeps the edit button; a type whose empty text cannot be edited shows nothing about it
     const text = !own ? "" : chat ? `<div class="bubble" data-text>${esc(own)}</div>` : `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>`;
     const caption = it.text_caption ? esc(it.text_caption) : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
     const edit = it.edit || { allowed: false, reason: "" };
@@ -247,8 +248,8 @@ class Item extends HTMLElement {
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}
       ${long ? `<ion-button fill="clear" size="small" data-more>Show the whole message</ion-button>` : ""}
       ${quoted ? `<div class="body quoted" data-quoted hidden>${esc(quoted)}</div><ion-button fill="clear" size="small" data-quote>Show the quoted mail</ion-button>` : ""}
-      ${ext && !own && !form && !it.text_caption ? "" : `<div class="capr"><span>${caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>${form ? "Edit" : "Edit text"}</ion-button></div>`}
-      ${edit.allowed || (ext && !own && !it.text_caption) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
+      ${ext && !own && !form && (!it.text_caption || !edit.allowed) ? "" : `<div class="capr"><span>${!own && it.text_caption ? "No description." : caption}</span><ion-button fill="clear" size="small" data-edit ${edit.allowed ? "" : "disabled"}>${form ? "Edit" : "Edit text"}</ion-button></div>`}
+      ${edit.allowed || (ext && !own) ? "" : `<div class="why" data-why>Edit text is not available: ${esc(edit.reason)}</div>`}
       ${more ? `<div class="rows2"><dl>${more}</dl></div>` : ""}</div>`;
   }
 
