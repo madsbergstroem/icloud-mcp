@@ -1,6 +1,7 @@
 """Package 5a (docs/SENDGATE.md): every way an approved calendar change can end is a state of the approval store, and nothing
 is written to iCloud twice. Runs the real caldav client against the in-memory iCloud-shaped server of caldav_fakes, which
-honours If-Match and If-None-Match, so a count of PUT and DELETE requests is a count of writes."""
+honours If-Match and If-None-Match, so a count of PUT and DELETE requests is a count of writes. Since package 5b a held change is
+an action of one of the calendar types on the external source: the endings of 5a come from the type's recheck and executor."""
 import dataclasses
 
 import niquests
@@ -10,7 +11,9 @@ import caldav_fakes
 import icloud_mcp.cal as cal_mod
 from icloud_mcp.cal import CalendarError, CalendarService
 from icloud_mcp.config import Settings
+from icloud_mcp.gate import actions as A
 from icloud_mcp.gate.actions import Rechecked
+from icloud_mcp.gate.external import ExternalApprovals
 from icloud_mcp.gate.store import Store
 
 ME = "me@icloud.com"
@@ -40,8 +43,25 @@ def env(tmp_path, monkeypatch):
             self.session.request = lambda *a, **kw: server(*a, **kw)   # looked up per call, so a test can wrap the server
     monkeypatch.setattr(cal_mod.caldav, "DAVClient", Client)
     cal = CalendarService(dataclasses.replace(s, default_timezone="Europe/Berlin"))
-    cal.outbox = Store(str(tmp_path), "calendar", 3600, 20)
+    reg = A.ActionRegistry()
+    cal_mod.register_types(reg, cal)
+    cal.external = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)     # package 5b: the calendar types
     return cal, server
+
+
+def approve(cal, item_id, sha256=None):
+    """The owner's approval of a waiting change, as the dashboard does it; sha256: the version the owner looked at. Returns
+    {"status": sent | unclear, "note"}; raises Rechecked when it ended at the read, CalendarError when it waits again."""
+    q = next((x for x in cal.external.box.pending() if x.id == item_id), None)
+    if q is None:
+        raise CalendarError("That change is no longer waiting.")
+    try:
+        got = cal.external.release(dataclasses.replace(q, sha256=sha256) if sha256 else q)
+    except (A.Rechecked, A.Revised):
+        raise
+    except A.ExternalError as e:                             # it waits again: the words the owner reads
+        raise CalendarError(str(e)) from None
+    return {"status": {"unconfirmed": "unclear"}.get(got.delivery, got.delivery), "note": str(got)}
 
 
 def writes(server):
@@ -63,7 +83,7 @@ def seeded_update(cal, server, uid="bc1", org=ME):
 
 
 def state(cal, item_id):
-    return cal.outbox.state_of(item_id)
+    return cal.external.box.state_of(item_id)
 
 
 def test_an_approved_invitation_is_written_once_with_its_type_and_ends_sent(env):
@@ -71,12 +91,12 @@ def test_an_approved_invitation_is_written_once_with_its_type_and_ends_sent(env)
     or the line still claims iCloud emailed; no_claim=that iCloud delivers the email (the fake has no scheduling)."""
     cal, server = env
     item = invite(cal, description="x" * 5000)
-    r = cal.approve(cal.outbox, item)
+    r = approve(cal, item)
     assert r["status"] == "sent" and "was asked to email jana@example.org" in r["note"]
     assert state(cal, item) == ("sent", None) and len(writes(server)) == 1
     body = next(iter(server.events["home"].values()))[0]
     assert body.replace("\r\n ", "").count("x" * 5000) == 1       # the description in full, not the 4000 the metadata keeps
-    assert cal.outbox._db.execute("SELECT action_type FROM request WHERE id = ?", (item,)).fetchone()[0] == "calendar.invite"
+    assert cal.external.box._db.execute("SELECT action_type FROM request WHERE id = ?", (item,)).fetchone()[0] == "calendar.invite"
 
 
 def test_a_guest_the_lists_no_longer_allow_ends_not_allowed_and_nothing_is_written(env):
@@ -85,7 +105,7 @@ def test_a_guest_the_lists_no_longer_allow_ends_not_allowed_and_nothing_is_writt
     item = invite(cal)
     cal.s = dataclasses.replace(cal.s, invite_allowlist=("ben@example.org",))
     with pytest.raises(Rechecked) as e:
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert e.value.reason == "not_allowed" and state(cal, item) == ("discarded", "not_allowed") and writes(server) == []
 
 
@@ -96,7 +116,7 @@ def test_the_lists_at_approval_are_the_calendars_own(env, lists, guest):
     cal, server = env
     cal.s = dataclasses.replace(cal.s, invite_allowlist=lists)
     item = invite(cal, attendees=[guest])
-    assert cal.approve(cal.outbox, item)["status"] == "sent" and len(writes(server)) == 1
+    assert approve(cal, item)["status"] == "sent" and len(writes(server)) == 1
 
 
 def test_a_reply_checks_the_organizer(env):
@@ -109,7 +129,7 @@ def test_a_reply_checks_the_organizer(env):
     assert r["status"] == "queued_for_owner_approval"
     cal.s = dataclasses.replace(cal.s, invite_allowlist=("jana@example.org",))
     with pytest.raises(Rechecked):
-        cal.approve(cal.outbox, r["outbox_id"])
+        approve(cal, r["outbox_id"])
     assert state(cal, r["outbox_id"]) == ("discarded", "not_allowed") and writes(server) == []
 
 
@@ -124,7 +144,7 @@ def test_an_event_changed_or_gone_at_the_read_ends_target_changed(env, change):
     else:
         del server.events["home"]["bc1.ics"]
     with pytest.raises(Rechecked) as e:
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert e.value.reason == "target_changed" and state(cal, item) == ("discarded", "target_changed") and writes(server) == []
 
 
@@ -136,17 +156,17 @@ def test_deleting_an_event_that_is_already_gone_says_so(env):
     assert r["status"] == "queued_for_owner_approval"
     del server.events["home"]["bc1.ics"]
     with pytest.raises(Rechecked):
-        cal.approve(cal.outbox, r["outbox_id"])
+        approve(cal, r["outbox_id"])
     assert state(cal, r["outbox_id"]) == ("discarded", "target_changed")
 
 
 def test_an_invitation_whose_id_is_taken_by_now_ends_target_changed(env):
     cal, server = env
     item = invite(cal)
-    name = f"{cal.outbox.pending()[0].followup['uid']}.ics"
+    name = f"{A.read(cal.external.box.pending()[0].raw)[1]['uid']}.ics"
     server.events["home"][name] = ("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", '"e5"')
     with pytest.raises(Rechecked):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("discarded", "target_changed") and writes(server) == []
 
 
@@ -162,7 +182,7 @@ def test_a_failed_read_keeps_it_waiting(env):
         return real(method, url, **kw)
     server.__class__ = type("Down", (caldav_fakes.Server,), {"__call__": lambda self, m, u, **kw: down(m, u, **kw)})
     with pytest.raises(CalendarError, match="still waits"):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("waiting", None) and writes(server) == []
 
 
@@ -199,11 +219,11 @@ def test_a_write_that_never_left_keeps_it_waiting(env):
     err = niquests.exceptions.ConnectionError(NewConnectionError(None, "refused"))
     faulty(server, fault=err)
     with pytest.raises(CalendarError, match="still waits"):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("waiting", None)
     faulty(server, fault=niquests.exceptions.ConnectTimeout("connect"))
     with pytest.raises(CalendarError):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("waiting", None)
 
 
@@ -214,9 +234,9 @@ def test_a_write_that_may_have_reached_icloud_ends_unclear_and_is_never_repeated
     cal, server = env
     item = invite(cal)
     faulty(server, fault=fault)
-    r = cal.approve(cal.outbox, item)
+    r = approve(cal, item)
     assert r["status"] == "unclear" and state(cal, item) == ("unclear", None)
-    assert cal.outbox.pending() == [] and len(writes(server)) == 1
+    assert cal.external.box.pending() == [] and len(writes(server)) == 1
 
 
 def test_another_4xx_keeps_it_waiting(env):
@@ -224,7 +244,7 @@ def test_another_4xx_keeps_it_waiting(env):
     item = invite(cal)
     faulty(server, fault=409)
     with pytest.raises(CalendarError, match="HTTP 409"):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("waiting", None)
 
 
@@ -239,25 +259,25 @@ def test_a_change_between_the_read_and_the_write_waits_once_then_ends_target_cha
         srv.before = None
     faulty(server, before=other_writer)
     with pytest.raises(CalendarError, match="changed in the calendar a moment ago"):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("waiting", None) and "X-OTHER" in server.events["home"]["bc1.ics"][0]
     with pytest.raises(Rechecked):
-        cal.approve(cal.outbox, item)
+        approve(cal, item)
     assert state(cal, item) == ("discarded", "target_changed") and "X-OTHER" in server.events["home"]["bc1.ics"][0]
 
 
 def test_an_update_is_written_with_the_version_it_was_based_on(env):
     cal, server = env
     item = seeded_update(cal, server)
-    assert cal.approve(cal.outbox, item)["status"] == "sent"
+    assert approve(cal, item)["status"] == "sent"
     assert "new room" in server.events["home"]["bc1.ics"][0] and len(writes(server)) == 1
 
 
 def test_a_version_the_owner_did_not_look_at_is_not_written(env):
     cal, server = env
     item = invite(cal)
-    with pytest.raises(CalendarError, match="edited just now"):
-        cal.approve(cal.outbox, item, "0" * 64)
+    with pytest.raises(CalendarError, match="changed just now"):          # the gate's words since 5b, for every type
+        approve(cal, item, "0" * 64)
     assert state(cal, item) == ("waiting", None) and writes(server) == []
 
 
@@ -303,3 +323,21 @@ def test_the_server_reads_the_calendar_queue_file_in_once_with_ids_hashes_and_ty
     assert [(q.id, q.sha256) for q in box.pending()] == [(a.id, a.sha256)]
     assert box._db.execute("SELECT action_type FROM request WHERE id = ?", (a.id,)).fetchone()[0] == "calendar.delete"
     assert (tmp_path / "calendar-outbox.json.migrated").exists() and not (tmp_path / "calendar-outbox.json").exists()
+
+
+def test_the_five_calendar_types_are_the_servers_own_with_the_badge_button_and_tool_of_each(env):
+    """protects=package 5b, D5-4: one type per operation with its fixed badge and main button, the tool that asks for it (so
+    approval_request refuses it), the calendar's own lists (the gate's list lets everyone through) and a subject in place of a
+    title; fails_when=a type is missing, takes the event's name as its title, or can be asked for with approval_request;
+    no_claim=how the card looks (tests/test_dashboard_cards.py)."""
+    cal, _ = env
+    got = {r.action_type.id: (r.action_type.title, r.action_type.badge, r.action_type.approve_label, r.channel_tool, r.builtin,
+                              r.allowed_set()) for r in cal.external.registry.registrations()}
+    assert got == {"calendar.invite": ("Invitation", "Invitation", "Add and invite", "calendar_create_event", True, {"*"}),
+                   "calendar.update": ("Event update", "Event update", "Save and notify", "calendar_update_event", True, {"*"}),
+                   "calendar.delete": ("Cancellation", "Cancellation", "Delete and notify", "calendar_delete_event", True, {"*"}),
+                   "calendar.cancel": ("Cancellation", "Cancellation", "Cancel and notify", "calendar_delete_event", True, {"*"}),
+                   "calendar.reply": ("Reply", "Reply", "Send answer", "calendar_respond_to_event", True, {"*"})}
+    item = invite(cal)
+    v = cal.external.describe(next(q for q in cal.external.box.pending() if q.id == item))
+    assert (v["title"], v["subject"], v["label"]) == ("Invitation", "Autumn fair", "jana@example.org")

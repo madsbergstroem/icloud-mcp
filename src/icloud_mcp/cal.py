@@ -12,7 +12,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email.utils import getaddresses
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 from urllib.parse import quote, unquote, urljoin, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -957,6 +957,7 @@ class CalendarService:
         self._pool: list[_Conn] = []
         self._tl = callctx.CallState()
         self.outbox: Any = None            # ALLOW_CALENDAR_INVITES=approve: writes that email people wait here (set by the server)
+        self.external: Any = None          # package 5b: they wait as actions of the calendar types on the external source instead
         self._last_activity = 0.0
         self._ticking = False
 
@@ -1692,7 +1693,7 @@ class CalendarService:
         if self.s.allow_calendar_invites:
             if addresses:
                 self._check_guests(addresses)
-            if emails and self.s.invites_require_approval and self.outbox is None:
+            if emails and self.s.invites_require_approval and self.outbox is None and self.external is None:
                 raise CalendarError(
                     "Blocked: this would make iCloud email attendees, and on this server that waits for the owner's approval, "
                     "but there is no approval page here (local mode or DASHBOARD=false). Ask the owner to make this change in the Calendar app."
@@ -1706,7 +1707,7 @@ class CalendarService:
 
     @property
     def _hold(self) -> bool:
-        return bool(self.s.invites_require_approval and self.outbox is not None)
+        return bool(self.s.invites_require_approval and (self.outbox is not None or self.external is not None))
 
     def _queue(self, op: str, *, cal: Any, ics: Any, uid: str, ev: Any, obj: Any = None) -> dict[str, Any]:
         """Hold a write that would email people until the owner approves it on the dashboard. What is stored is the exact
@@ -1729,6 +1730,8 @@ class CalendarService:
                 "location": _text(ev, "location") or "", "description": (_text(ev, "description") or "")[:4000],
                 "organizer": org if org and org not in own else None}
         raw = ics.encode() if isinstance(ics, str) else bytes(ics)
+        if self.external is not None:                      # package 5b: an action of one of the calendar types
+            return self._queue_action(op, raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta)
         try:
             q = self.outbox.add(raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta,
                                 approval_page="the dashboard's Approvals page",   # calendar approvals exist only there
@@ -1741,6 +1744,114 @@ class CalendarService:
                 "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
                           "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call: approval_status with the outbox_id "
                           "says what became of it."}
+
+    def _queue_action(self, op: str, raw: bytes, reached_: list[str], meta: dict[str, Any]) -> dict[str, Any]:
+        from .gate import actions as A
+        try:
+            q = self.external.queue_external(CALENDAR_TYPES[op], self.params_of(op, raw, reached_, meta), None)
+        except A.ExternalError as e:
+            raise CalendarError(str(e)) from None
+        who = ", ".join(reached_) or ("the organizer" if op == "reply" else "the attendees")
+        return {"status": "queued_for_owner_approval", "written": False, "outbox_id": q.id,
+                "approve_at": self.s.approval_link("external", q.id), "would_email": who,
+                "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
+                          "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call: approval_status with the outbox_id "
+                          "says what became of it."}
+
+    def params_of(self, op: str, raw: bytes, reached_: list[str], meta: Mapping[str, Any]) -> dict[str, Any]:
+        """The parameters of a held change (package 5b): its metadata, who it reaches, the time as the owner reads it, and `ics`,
+        the whole object exactly as it will be written. Empty values are left out."""
+        p: dict[str, Any] = {k: str(meta[k]) for k in ("calendar_url", "calendar", "uid", "href", "etag", "start", "end", "location")
+                             if meta.get(k)}
+        p["summary"] = str(meta.get("summary") or "")
+        if when := event_when(meta.get("start"), meta.get("end"), self.s.default_timezone):
+            p["when"] = when
+        if op == "reply":
+            if reached_:
+                p["organizer"] = reached_[0]
+        elif reached_:
+            p["guests"] = list(reached_)
+        p["ics"] = raw.decode()
+        return p
+
+    def convert(self, raw: bytes, row: Mapping[str, Any]) -> bytes:
+        """A change held before 5b (the object, its metadata and who it reaches) in the canonical form of its type, read from the
+        row's action_type (5a wrote it), else from the operation (a new hash, D4-1)."""
+        from .gate import actions as A
+        meta = row.get("followup") or {}
+        type_id = row.get("action_type") or CALENDAR_TYPES[str(meta.get("op") or "")]
+        return A.canonical(type_id, A.check_params(action_type(OP_OF[type_id]), self.params_of(OP_OF[type_id], raw, list(row.get("recipients") or []), meta)))
+
+    @staticmethod
+    def _target(op: str, p: Mapping[str, Any]) -> str:
+        return f"{p['calendar_url'].rstrip('/')}/{quote(p['uid'], safe='@')}.ics" if op == "create" else str(p.get("href") or "")
+
+    def recheck(self, op: str, p: Mapping[str, Any]) -> str | None:
+        """The type's look just before the write (package 5b, the endings of 5a at the read): 'not_allowed' when a guest (for a
+        reply the organizer) is no longer allowed by the calendar's own lists, the same check as when the agent asked;
+        'target_changed' when the event changed (another ETag) or is gone, or a new event's id is taken; None when all is as
+        the owner saw it. Raises ExternalError, and the request waits again, when the event cannot be read."""
+        from .gate import actions as A
+        try:
+            self._check_guests(reached(p))
+        except CalendarError:
+            return "not_allowed"
+        try:
+            with self._principal() as pr:
+                got = pr.client.request(self._target(op, p), "GET")    # the event as it is now; also proves the connection works
+            status = int(getattr(got, "status", 0) or 0)
+            gone = status == 404
+            if op == "create" and not gone and 200 <= status < 300:
+                return "target_changed"                              # an event with the same id is already in the calendar
+            if op != "create":
+                etag = (getattr(got, "headers", None) or {}).get("ETag")
+                if gone or (etag and p.get("etag") and _bare_etag(etag) != _bare_etag(p["etag"])):
+                    return "target_changed"
+            if not gone and not 200 <= status < 300:
+                raise CalendarError(f"The calendar server did not show the event (HTTP {status}).")
+        except Exception as e:  # noqa: BLE001  -- only a read so far: nothing was written
+            raise A.ExternalError(f"Nothing was written, it still waits: {self._reason(e)}") from None
+        return None
+
+    def write(self, op: str, p: Mapping[str, Any]) -> Any:
+        """Write an approved change exactly as stored, conditional on the version it was based on (package 5b, the endings of 5a
+        at the write): iCloud could not be reached before the write went out -> failed (it waits again); 412 or 404 -> failed,
+        and the next approval ends it at the read (D5-6); another 4xx -> failed (nothing was written); a 5xx, a read timeout or a
+        connection lost after the write went out -> unclear, never written again (D5-2); 2xx -> sent."""
+        from .gate import actions as A
+        url, body = self._target(op, p), p["ics"]
+        written = False
+        try:
+            with self._principal() as pr:
+                client = pr.client
+                self._tl.mutated = True
+                written = True                                    # from here on the write may reach iCloud
+                if op == "create":
+                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"})
+                elif op == "delete":
+                    resp = client.request(url, "DELETE", "", {"If-Match": p["etag"]})
+                else:
+                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-Match": p["etag"]})
+                self._uid_cache.pop(p["uid"], None)
+        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the write may have reached iCloud
+            if not written or self._not_reached(e):
+                return A.Result("failed", f"Nothing was written, it still waits: {self._reason(e)}")
+            return A.Result("unclear", f"iCloud did not answer clearly ({type(e).__name__}), so the change may or may not have been "
+                                       "saved. It is not written again; look in your calendar first.")
+        status = int(getattr(resp, "status", 0) or 0)
+        if 200 <= status < 300:
+            verb = {"create": "Added", "update": "Updated", "delete": "Deleted", "cancel": "Cancelled one occurrence of",
+                    "reply": "Answered"}.get(op, "Changed")
+            who = reached(p)
+            tail = f" iCloud was asked to email {', '.join(who)}." if who else ""
+            return A.Result("sent", f"{verb} “{p.get('summary') or 'the event'}”.{tail}")
+        if status >= 500:
+            return A.Result("unclear", f"The calendar server answered HTTP {status}, so the change may or may not have been saved. "
+                                       "It is not written again; look in your calendar first.")
+        if status in (404, 412):                                  # a 4xx: nothing was written
+            return A.Result("failed", "Nothing was written: the event changed in the calendar a moment ago. It still waits; approving "
+                                      "it again checks the event and ends the request.")
+        return A.Result("failed", f"Nothing was written: the calendar server refused the change (HTTP {status}). It still waits.")
 
     def approve(self, outbox: Any, item_id: str, sha256: str | None = None) -> dict[str, Any]:
         """The owner approved a held change: write exactly what was stored, conditional on the version it was based on. Called only
@@ -2249,3 +2360,144 @@ class CalendarService:
             self._delete_conditional(obj, uid)
             self._uid_cache.pop(uid, None)
             return {"deleted": True, "uid": uid, "summary": summary, "calendar": self._cal_name(cal)}
+
+
+def event_when(start: str | None, end: str | None, tz_name: str) -> str:
+    """'Fri 20 Nov 2026, 19:00–21:00' in the server's time zone, from the ISO times stored with a held change. All-day events
+    show the date only; anything unparsable is shown as stored."""
+    def parse(v: str | None) -> datetime | None:
+        try:
+            return datetime.fromisoformat(v) if v else None
+        except ValueError:
+            return None
+    a, b = parse(start), parse(end)
+    if a is None:
+        return " – ".join(x for x in (start, end) if x)
+    if len(start or "") == 10:                                   # an all-day event: a date, no time
+        last = b - timedelta(days=1) if b and len(end or "") == 10 else None   # DTEND of an all-day event is exclusive
+        day = a.strftime("%a %d %b %Y")
+        return day if last is None or last <= a else f"{day} – {last.strftime('%a %d %b %Y')}"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz = None
+    if tz is not None and a.tzinfo is not None:
+        a, b = a.astimezone(tz), (b.astimezone(tz) if b and b.tzinfo else b)
+    out = a.strftime("%a %d %b %Y, %H:%M")
+    if b is None:
+        return out
+    return out + ("–" + b.strftime("%H:%M") if b.date() == a.date() else " – " + b.strftime("%a %d %b %Y, %H:%M"))
+
+
+# -- the action types (docs/SENDGATE.md, package 5b) ----------------------------------------------------------------------------
+# One type per operation (D5-4): (badge and title, main button, the tool that asks for it, the type's note: what approving does,
+# then the second sentence of the card before 5b). The note names "the guests"; who they are is on the line under the title.
+_UNCHANGED = "If the event changes in your calendar before you approve, nothing is written."
+_TYPE_LOOKS = {
+    "create": ("Invitation", "Add and invite", "calendar_create_event",
+               "Approving adds the event to your calendar, and iCloud emails an invitation to the guests. Nothing is in your calendar yet."),
+    "update": ("Event update", "Save and notify", "calendar_update_event",
+               f"Approving saves the change, and iCloud emails an update to the guests. {_UNCHANGED}"),
+    "delete": ("Cancellation", "Delete and notify", "calendar_delete_event",
+               f"Approving deletes the event, and iCloud emails a cancellation to the guests. {_UNCHANGED}"),
+    "cancel": ("Cancellation", "Cancel and notify", "calendar_delete_event",
+               f"Approving cancels this occurrence, and iCloud emails a cancellation to the guests. {_UNCHANGED}"),
+    "reply": ("Reply", "Send answer", "calendar_respond_to_event", f"Approving sends your answer to the organizer. {_UNCHANGED}"),
+}
+OP_OF = {t: op for op, t in CALENDAR_TYPES.items()}
+
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "calendar_url": {"type": "string", "minLength": 1},
+        "calendar": {"type": "string"},
+        "uid": {"type": "string", "minLength": 1},
+        "href": {"type": "string"},
+        "etag": {"type": "string"},
+        "summary": {"type": "string"},
+        "start": {"type": "string"},
+        "end": {"type": "string"},
+        "when": {"type": "string"},                    # the start and end as the owner reads them, in DEFAULT_TIMEZONE
+        "location": {"type": "string"},
+        "guests": {"type": "array", "items": {"type": "string"}},
+        "organizer": {"type": "string"},
+        "ics": {"type": "string", "minLength": 1},     # the whole object exactly as it will be written; the description lives here
+    },
+    "required": ["calendar_url", "uid", "summary", "ics"],
+    "additionalProperties": False,
+}
+_NO_DESCRIPTION = "Only a new or changed event has a description to edit. A cancellation or a reply has none."
+
+
+def _events(p: Mapping[str, Any]) -> tuple[Any, list[Any]]:
+    parsed = icalendar.Calendar.from_ical(p["ics"])
+    return parsed, list(parsed.walk("VEVENT"))
+
+
+def description_of(p: Mapping[str, Any]) -> str:
+    """The description the card shows: of the one event in `ics`; with more than one (an overridden occurrence), the series'."""
+    _, events = _events(p)
+    ev = events[0] if len(events) == 1 else next((e for e in events if "recurrence-id" not in e), events[0] if events else None)
+    return str(ev.get("description") or "") if ev is not None else ""
+
+
+def with_description(p: Mapping[str, Any], text: str) -> dict[str, Any]:
+    """The parameters with the description of the one event in `ics` replaced, so the stored bytes are what is written."""
+    parsed, events = _events(p)
+    if len(events) != 1:
+        raise ValueError("This change does not hold exactly one event, so its description cannot be edited here.")
+    ev = events[0]
+    if "description" in ev:
+        del ev["description"]
+    if text:
+        ev.add("description", text)
+    return {**p, "ics": parsed.to_ical().decode()}
+
+
+def _locked(op: str) -> Any:
+    def why(p: Mapping[str, Any]) -> str:
+        """Why the description of this request cannot be edited, or "" (the locks of 5a: textedit.calendar_block)."""
+        if op not in ("create", "update"):
+            return _NO_DESCRIPTION
+        try:
+            events = _events(p)[1]
+        except Exception:  # noqa: BLE001  -- an event that cannot be read is not edited
+            return "This event could not be read, so its description cannot be edited here."
+        return "" if len(events) == 1 else "This change does not hold exactly one event, so its description cannot be edited here."
+    return why
+
+
+def reached(p: Mapping[str, Any]) -> list[str]:
+    """Who a held change makes iCloud email: the guests, or for a reply the organizer."""
+    return list(p.get("guests") or ([p["organizer"]] if p.get("organizer") else []))
+
+
+def action_type(op: str) -> Any:
+    from .gate import actions as A
+    badge, button, _, note = _TYPE_LOOKS[op]
+    return A.ActionType(
+        id=CALENDAR_TYPES[op], title=badge, badge=badge, approve_label=button, params_schema=SCHEMA,
+        rows=(("When", "when"), ("Calendar", "calendar"), ("Where", "location")), text_field="ics", recipients=reached,
+        subject=lambda p: p.get("summary") or "(no title)", note=note, text_caption="The description exactly as it will be saved.",
+        text_of=description_of, with_text=with_description, text_locked=_locked(op))
+
+
+class CalendarExecutor:
+    """Writes an approved change to iCloud, once per approval, after the type's recheck found the lists and the event as the owner
+    saw them. Called from a worker thread."""
+
+    def __init__(self, service: "CalendarService"):
+        self.svc = service
+
+    def execute(self, request: Any) -> Any:
+        return self.svc.write(OP_OF[request.action_type], request.params)
+
+
+def register_types(registry: Any, service: "CalendarService") -> None:
+    """The five calendar types on the external source. The owner's lists are the calendar's own (an empty INVITE_ALLOWLIST allows
+    everyone, a domain entry the domain), checked by the service when it queues and again in the recheck, so the registry's own
+    list lets everyone through."""
+    executor = CalendarExecutor(service)
+    for op in CALENDAR_TYPES:
+        registry.register(action_type(op), executor, ["*"], recheck=functools.partial(service.recheck, op),
+                          channel_tool=_TYPE_LOOKS[op][2], builtin=True)
