@@ -956,8 +956,9 @@ class CalendarService:
         self._pool_lock = threading.Lock()
         self._pool: list[_Conn] = []
         self._tl = callctx.CallState()
-        self.outbox: Any = None            # ALLOW_CALENDAR_INVITES=approve: writes that email people wait here (set by the server)
-        self.external: Any = None          # package 5b: they wait as actions of the calendar types on the external source instead
+        # ALLOW_CALENDAR_INVITES=approve: writes that email people wait as actions of the calendar types on the external source
+        # (package 5b; set by the server)
+        self.external: Any = None
         self._last_activity = 0.0
         self._ticking = False
 
@@ -1693,7 +1694,7 @@ class CalendarService:
         if self.s.allow_calendar_invites:
             if addresses:
                 self._check_guests(addresses)
-            if emails and self.s.invites_require_approval and self.outbox is None and self.external is None:
+            if emails and self.s.invites_require_approval and self.external is None:
                 raise CalendarError(
                     "Blocked: this would make iCloud email attendees, and on this server that waits for the owner's approval, "
                     "but there is no approval page here (local mode or DASHBOARD=false). Ask the owner to make this change in the Calendar app."
@@ -1707,13 +1708,12 @@ class CalendarService:
 
     @property
     def _hold(self) -> bool:
-        return bool(self.s.invites_require_approval and (self.outbox is not None or self.external is not None))
+        return bool(self.s.invites_require_approval and self.external is not None)
 
     def _queue(self, op: str, *, cal: Any, ics: Any, uid: str, ev: Any, obj: Any = None) -> dict[str, Any]:
         """Hold a write that would email people until the owner approves it on the dashboard. What is stored is the exact
         object that will be written, plus the version (ETag) it was based on, so an event changed in the meantime is never
-        overwritten."""
-        from .outbox import OutboxFull
+        overwritten. Since package 5b it waits as an action of the type of its operation on the external source."""
         etag = getattr(obj, "etag", None) if obj is not None else None
         if obj is not None and not etag:
             raise CalendarError("The server did not report this event's version, so the change cannot wait safely for approval. "
@@ -1727,23 +1727,9 @@ class CalendarService:
         meta = {"op": op, "calendar_url": str(cal.url), "calendar": self._cal_name(cal), "uid": uid,
                 "href": str(obj.url) if obj is not None else None, "etag": etag, "summary": _text(ev, "summary") or "",
                 "start": _iso(ev.get("dtstart").dt) if ev.get("dtstart") is not None else None, "end": _iso(end),
-                "location": _text(ev, "location") or "", "description": (_text(ev, "description") or "")[:4000],
-                "organizer": org if org and org not in own else None}
+                "location": _text(ev, "location") or "", "organizer": org if org and org not in own else None}
         raw = ics.encode() if isinstance(ics, str) else bytes(ics)
-        if self.external is not None:                      # package 5b: an action of one of the calendar types
-            return self._queue_action(op, raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta)
-        try:
-            q = self.outbox.add(raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta,
-                                approval_page="the dashboard's Approvals page",   # calendar approvals exist only there
-                                action_type=CALENDAR_TYPES.get(op))
-        except OutboxFull as e:
-            raise CalendarError(str(e)) from e
-        who = meta["organizer"] if op == "reply" else ", ".join(guests) or "the attendees"
-        return {"status": "queued_for_owner_approval", "written": False, "outbox_id": q.id,
-                "approve_at": self.s.approval_link("calendar", q.id), "would_email": who,
-                "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
-                          "the approval page (approve_at). Tell the owner it is waiting; do not repeat the call: approval_status with the outbox_id "
-                          "says what became of it."}
+        return self._queue_action(op, raw, guests if op != "reply" else [a for a in [meta["organizer"]] if a], meta)
 
     def _queue_action(self, op: str, raw: bytes, reached_: list[str], meta: dict[str, Any]) -> dict[str, Any]:
         from .gate import actions as A
@@ -1751,7 +1737,7 @@ class CalendarService:
             q = self.external.queue_external(CALENDAR_TYPES[op], self.params_of(op, raw, reached_, meta), None)
         except A.ExternalError as e:
             raise CalendarError(str(e)) from None
-        who = ", ".join(reached_) or ("the organizer" if op == "reply" else "the attendees")
+        who = (reached_[0] if reached_ else None) if op == "reply" else ", ".join(reached_) or "the attendees"     # as before 5b
         return {"status": "queued_for_owner_approval", "written": False, "outbox_id": q.id,
                 "approve_at": self.s.approval_link("external", q.id), "would_email": who,
                 "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
@@ -1852,82 +1838,6 @@ class CalendarService:
             return A.Result("failed", "Nothing was written: the event changed in the calendar a moment ago. It still waits; approving "
                                       "it again checks the event and ends the request.")
         return A.Result("failed", f"Nothing was written: the calendar server refused the change (HTTP {status}). It still waits.")
-
-    def approve(self, outbox: Any, item_id: str, sha256: str | None = None) -> dict[str, Any]:
-        """The owner approved a held change: write exactly what was stored, conditional on the version it was based on. Called only
-        from the owner's approval page, never from a tool. sha256: the version the owner looked at; another one is not written.
-
-        How it ends (docs/SENDGATE.md, package 5a): a guest (for a reply the organizer) the lists no longer allow -> discarded
-        (not_allowed); the event changed or is gone when read just before the write -> discarded (target_changed); the read fails,
-        or iCloud could not be reached before the write went out -> waits again; iCloud answers 412 or 404 to the write itself ->
-        waits again, and the next approval ends it at the read (D5-6); another 4xx -> waits again (nothing was written); a 5xx,
-        a read timeout or a connection lost after the write went out -> unclear, never written again (D5-2); 2xx -> sent."""
-        from .gate.actions import Rechecked
-        q = outbox.claim(item_id, "executing")
-        if q is None:
-            raise CalendarError("That change is no longer waiting (already approved, discarded or expired).")
-        if sha256 is not None and q.sha256 != sha256:             # edited between the owner's look and the click
-            outbox.restore(q)
-            raise CalendarError("The change was edited just now. Nothing was written; look at it again.")
-        m = q.followup or {}
-        try:
-            self._check_guests(list(q.recipients))                # the lists as they are now, the same check as when the agent asked
-        except CalendarError as e:
-            outbox.finish(q.id, "discarded", "not_allowed")
-            raise Rechecked("not_allowed", f"Not written: {e}") from e
-        body = q.raw.decode()
-        url = (f"{m['calendar_url'].rstrip('/')}/{quote(m['uid'], safe='@')}.ics" if m.get("op") == "create" else m.get("href"))
-        written = False
-        try:
-            with self._principal() as p:
-                client = p.client
-                self._tl.mutated = True
-                got = client.request(url, "GET")                  # the event as it is now; also proves the connection works
-                gone = int(getattr(got, "status", 0) or 0) == 404
-                if m.get("op") == "create" and not gone and 200 <= int(got.status) < 300:
-                    outbox.finish(q.id, "discarded", "target_changed")
-                    raise Rechecked("target_changed", "Not written: an event with the same id is already in the calendar.")
-                if m.get("op") != "create":
-                    etag = (getattr(got, "headers", None) or {}).get("ETag")
-                    if gone or (etag and m.get("etag") and _bare_etag(etag) != _bare_etag(m["etag"])):
-                        outbox.finish(q.id, "discarded", "target_changed")
-                        raise Rechecked("target_changed", "Not written: the event is no longer in the calendar." if gone else
-                                        "Not written: the event changed in the calendar after the agent asked. Ask again if it is still wanted.")
-                if not gone and not 200 <= int(got.status) < 300:
-                    raise CalendarError(f"The calendar server did not show the event (HTTP {got.status}).")
-                written = True                                    # from here on the write may reach iCloud
-                if m["op"] == "create":
-                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"})
-                elif m["op"] == "delete":
-                    resp = client.request(url, "DELETE", "", {"If-Match": m["etag"]})
-                else:
-                    resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-Match": m["etag"]})
-                self._uid_cache.pop(m["uid"], None)
-        except Rechecked:
-            raise
-        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the write may have reached iCloud
-            if not written or self._not_reached(e):
-                outbox.restore(q)
-                raise CalendarError(f"Nothing was written, it still waits: {self._reason(e)}") from e
-            outbox.finish(q.id, "unclear")
-            return {"status": "unclear", "note": f"iCloud did not answer clearly ({type(e).__name__}), so the change may or may not "
-                                                 "have been saved. It is not written again; look in your calendar first."}
-        status = int(getattr(resp, "status", 0) or 0)
-        if 200 <= status < 300:
-            outbox.finish(q.id, "sent")
-            verb = {"create": "Added", "update": "Updated", "delete": "Deleted", "cancel": "Cancelled one occurrence of",
-                    "reply": "Answered"}.get(m["op"], "Changed")
-            tail = f" iCloud was asked to email {', '.join(q.recipients)}." if q.recipients else ""
-            return {"status": "sent", "note": f"{verb} “{m.get('summary') or 'the event'}”.{tail}"}
-        if status >= 500:
-            outbox.finish(q.id, "unclear")
-            return {"status": "unclear", "note": f"The calendar server answered HTTP {status}, so the change may or may not have been "
-                                                 "saved. It is not written again; look in your calendar first."}
-        outbox.restore(q)                                         # a 4xx: nothing was written
-        if status in (404, 412):
-            raise CalendarError("Nothing was written: the event changed in the calendar a moment ago. It still waits; approving it "
-                                "again checks the event and ends the request.")
-        raise CalendarError(f"Nothing was written: the calendar server refused the change (HTTP {status}). It still waits.")
 
     @staticmethod
     def _not_reached(e: BaseException) -> bool:
@@ -2456,7 +2366,7 @@ def with_description(p: Mapping[str, Any], text: str) -> dict[str, Any]:
 
 def _locked(op: str) -> Any:
     def why(p: Mapping[str, Any]) -> str:
-        """Why the description of this request cannot be edited, or "" (the locks of 5a: textedit.calendar_block)."""
+        """Why the description of this request cannot be edited, or "" (the locks the calendar had before 5b)."""
         if op not in ("create", "update"):
             return _NO_DESCRIPTION
         try:
