@@ -617,3 +617,23 @@ def test_a_file_the_owner_or_an_upload_adds_lands_in_its_place_and_can_be_taken_
     wire = email.message_from_bytes(server.messages[0], policy=policy.default)
     part = mail_mod.iter_attachment_parts(wire)[0]
     assert part.get_payload(decode=True) == b"%PDF-1.4 the owner's" and part[mail_mod.ADDED_HEADER] is None
+
+
+def test_a_mail_text_keeps_its_own_limit_and_what_is_kept_of_an_original_goes_with_the_mail(env, monkeypatch):
+    """protects=MAX_BODY_CHARS for an edited mail (30,000 by default, not the 10,000 of other actions), and the memory of the mail
+    a reply answers, dropped once that reply no longer waits; fails_when=a long text cannot be saved, or the kept original
+    outlives its mail; no_claim=the page's one read per folder (test_outbox.py)."""
+    mail, _, fake, _ = env
+    answering(monkeypatch)
+    fake.original = ORIGINAL
+    monkeypatch.setattr(MailService, "_select", staticmethod(lambda c, folder, *, readonly=True, expect=None: 7))
+    src = mail.external
+    q = waiting(mail, mail.reply("INBOX", 7, "Short.")["outbox_id"])
+    assert src.text_limit_of(q) == mail.s.max_body_chars == 30000
+    raw, _ = src.with_text(q, src.clean_text("y" * 20000))
+    assert "y" * 100 in src.describe(dataclasses.replace(q, raw=raw))["text"]
+    src.contexts([q])
+    assert len(mail._contexts) == 1
+    src.box.claim(q.id, "discarded")
+    src.contexts([waiting(mail, queue(mail))])
+    assert mail._contexts == {}

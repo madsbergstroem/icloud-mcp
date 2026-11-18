@@ -2120,6 +2120,11 @@ class MailService:
             people = [a for _, a in parse_addrs([str(r.params.get(f) or "") for f in ("to", "cc", "bcc")])]
             items.append(SimpleNamespace(id=r.id, sha256=fingerprint(fu), followup=fu, recipients=list(dict.fromkeys(people))))
         found = self.approval_contexts(items) if items else {}
+        if self.external is not None:                     # what is kept for mail that no longer waits is dropped
+            live = {q.id for q in self.external.box.pending()}
+            with self._contexts_lock:
+                for k in [k for k in self._contexts if k[0] not in live]:
+                    del self._contexts[k]
         out: dict[str, dict[str, Any]] = {}
         for r, q in zip(requests, items):
             got, ctx = found.get(r.id) or {}, {}
@@ -2130,7 +2135,7 @@ class MailService:
             if orig:
                 frm = ", ".join(a.get("email", "") for a in orig.get("from") or [] if isinstance(a, dict))
                 ctx["original"] = {"label": "In reply to" if r.action_type == "mail.reply" else "Forwards", "subject": orig.get("subject") or "",
-                                   "from": frm, "unavailable": bool(orig.get("unavailable"))}
+                                   "from": frm, "unavailable": bool(orig.get("unavailable")), **({"bulk": True} if orig.get("bulk") else {})}
             if warnings:
                 to = ", ".join(q.recipients) or "the recipients"
                 ctx["warnings"] = warnings
@@ -3062,7 +3067,7 @@ def action_type(type_id: str, svc: "MailService") -> Any:
         text_field="message", editable_fields=("subject", "to", "cc", "bcc"), recipient_fields=("to", "cc", "bcc"),
         recipients=mail_addresses, subject_field="subject", subject=lambda p: p.get("subject") or "(no subject)",
         text_style="mail", note=_MAIL_NOTE, text_of=_text_of(svc), with_text=_with_text(svc), text_locked=_locked(svc),
-        blocked=_waits_for(svc), blobs=_blobs,
+        blocked=_waits_for(svc), blobs=_blobs, text_limit=svc.s.max_body_chars,
         edit_note=f"At most {svc.s.max_recipients} recipients." + (" A changed subject keeps the reply in its thread." if reply else ""))
 
 
@@ -3083,7 +3088,7 @@ def register_types(registry: Any, service: "MailService", account: Any = None) -
     typed in; the registry's own list lets everyone through. account(): the name of the provider mail goes out from, for the tag
     on the From row ('' for none)."""
     import dataclasses
-    executor, files = MailExecutor(service), MailFiles(service)
+    executor, files, context = MailExecutor(service), MailFiles(service), service.action_contexts   # one context: one read for a page
 
     def tags(p: Mapping[str, Any]) -> dict[str, str]:
         name = account() if account is not None else ""
@@ -3092,4 +3097,4 @@ def register_types(registry: Any, service: "MailService", account: Any = None) -
         at = action_type(type_id, service)
         registry.register(dataclasses.replace(at, row_tags=tags), executor, ["*"], recheck=service.recheck,
                           recheck_owner_allowed=True, allows=lambda a: recipient_allowed(a, service.s.send_allowlist), files=files,
-                          context=service.action_contexts, status_kind="mail", channel_tool=tool, builtin=True)
+                          context=context, status_kind="mail", channel_tool=tool, builtin=True)
