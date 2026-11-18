@@ -1,6 +1,7 @@
 """Write the waiting requests from DATA_DIR/approvals.db back to their JSON queue files, for a rollback to a version without the
 approval store (docs/SENDGATE.md, package 3, "Rollback"): external requests to external-outbox.json, and waiting iMessages to
-imessage-outbox.json in the form 4a reads (packages 4a and 4b; that file is written only when an iMessage waits). It ships in the package, so it runs in the
+imessage-outbox.json in the form 4a reads (packages 4a and 4b; that file is written only when an iMessage waits), and waiting
+calendar changes to calendar-outbox.json (package 5a; written only when one waits). It ships in the package, so it runs in the
 Docker image:
 
     docker run --rm -v <your data volume>:/data <this image> python -m icloud_mcp.gate.export_queue /data
@@ -44,7 +45,8 @@ def main(argv: list[str]) -> int:
 IMESSAGE = "imessage.send"
 PLAN = (("external", "external-outbox.json", {"skip": (IMESSAGE,)}),
         ("external", "imessage-outbox.json", {"only": (IMESSAGE,), "as_params": True}),
-        ("imessage", "imessage-outbox.json", {}))
+        ("imessage", "imessage-outbox.json", {}),
+        ("calendar", "calendar-outbox.json", {}))
 
 
 if __name__ == "__main__":

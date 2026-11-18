@@ -151,8 +151,11 @@ def fingerprint(raw_params: Any) -> str:
 class Store:
     keeps_keys = True                        # a key stays bound after its request ended (external.py asks for the fingerprint)
 
-    def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None):
-        """source: which kind of request this store holds (external, imessage). legacy: the JSON queue file to read in once."""
+    def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None,
+                 type_of: Any = None):
+        """source: which kind of request this store holds (external, imessage, calendar). legacy: the JSON queue file to read in
+        once. type_of(q): the action type of a request read in from that file without one (package 5a: the calendar's
+        operation), so it outlasts the request's content."""
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source, self.ttl, self.max_items, self.keep_days = source, ttl, max_items, max(1, keep_days)
@@ -163,6 +166,7 @@ class Store:
         self._on_recovered: Any = None
         self._lock = threading.RLock()
         self._purged_at = 0.0
+        self.type_of = type_of
         first = _hold_lock(self.dir)
         self._db = self._open()
         if first:
@@ -472,7 +476,7 @@ class Store:
                             key = None                            # both stay; the one in the table keeps the key
                         else:
                             self._db.execute("UPDATE request SET key = NULL WHERE id = ?", (holder["id"],))
-                values = (q.action_type, q.created_at, q.expires_at, q.sha256, key, q.requested_by, q.raw, json.dumps(q.recipients),
+                values = (q.action_type or self._type_of(q), q.created_at, q.expires_at, q.sha256, key, q.requested_by, q.raw, json.dumps(q.recipients),
                           json.dumps(q.followup) if q.followup is not None else None, q.edited_from)
                 if have is not None:                              # exported: the file's copy is the one the old version kept
                     self._db.execute("UPDATE request SET action_type = ?, created_at = ?, expires_at = ?, sha256 = ?, key = ?, requested_by = ?, "
@@ -490,6 +494,15 @@ class Store:
         if dropped_keys:
             self._note(f"{len(dropped_keys)} request(s) from {legacy.name} lost their request_id, which another waiting request holds: "
                        + ", ".join(dropped_keys))
+
+    def _type_of(self, q: QueuedMessage) -> str | None:
+        """The type `type_of` gives a request read in from the file; none when it cannot tell (the request still reads in)."""
+        if self.type_of is None:
+            return None
+        try:
+            return self.type_of(q) or None
+        except Exception:  # noqa: BLE001  -- an entry the function cannot read keeps no type rather than stopping the start
+            return None
 
     def has_source(self, source: str) -> bool:
         """Whether any row of `source` is in the database (package 4b looks before it moves iMessage rows)."""
