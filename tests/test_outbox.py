@@ -262,7 +262,7 @@ async def test_a_send_cut_off_on_the_page_reads_unclear_and_is_logged_unconfirme
         page = (await c.post("/outbox", data={"password": PASSWORD})).text
         r = await c.post("/outbox/act", data=buttons(page, "approve"))
         assert "may or may not have gone out" in r.text and "still queued" not in r.text and "Nothing is waiting" in r.text
-    assert mail.outbox.state_of(qid) == ("unclear", None)
+    assert mail.external.box.state_of(qid) == ("unclear", None)              # since package 6b mail waits as actions
     from icloud_mcp.audit import AuditLog
     line, = [e for e in AuditLog(mail.s.data_dir).entries(10) if e["action"] == "approval.sent"]
     assert line["details"]["delivery"] == "unconfirmed" and line["details"]["outbox_id"] == qid
@@ -303,7 +303,7 @@ async def test_page_reads_each_original_once_and_the_approve_check_uses_the_same
         assert fake.fetched == []                                            # no password: nothing is read
         page = (await c.post("/outbox", data={"password": PASSWORD})).text
         assert fake.fetched == [[7]]                                         # both items, one folder: one FETCH
-        assert page.count("Weekly from News &lt;news@example.org&gt;, bulk mail") == 2 and "I read the warning" in page
+        assert page.count("Weekly from news@example.org, bulk mail") == 2 and "I read the warning" in page    # the card's form (6b)
         again = (await c.post("/outbox", data={"password": PASSWORD})).text
         assert fake.fetched == [[7]] and again.count("bulk mail") == 2       # the second page comes from memory
         r = await c.post("/outbox/act", data=buttons(again, "approve"))
@@ -311,7 +311,7 @@ async def test_page_reads_each_original_once_and_the_approve_check_uses_the_same
         assert len(mail._contexts) == 2
         await c.post("/outbox/act", data=buttons(r.text, "discard"))
         assert len(mail._contexts) == 1                                      # a discarded item's view is dropped at the next page
-    stored = b"".join(p.read_bytes() for p in mail.outbox.path.parent.glob("approvals.db*"))   # the approval store since package 6a
+    stored = b"".join(p.read_bytes() for p in mail.external.box.path.parent.glob("approvals.db*"))   # the approval store since package 6a
     assert b"safety_warnings" not in stored                                 # the kept view lives in memory only
 
 
@@ -354,14 +354,14 @@ async def test_discard_all_clears_only_what_the_owner_saw(web):
         send(mail, subject=f"junk {i}")
     async with client(app) as c:
         page = (await c.post("/outbox", data={"password": PASSWORD})).text
-        m = re.search(r'name="kind" value="mail"><input type="hidden" name="action" value="discard_all"><input type="hidden" name="exp" '
+        m = re.search(r'name="kind" value="external"><input type="hidden" name="action" value="discard_all"><input type="hidden" name="exp" '
                       r'value="(\d+)"><input type="hidden" name="ids" value="([^"]+)"><input type="hidden" name="tok" value="([0-9a-f]+)"', page)
-        assert m and "Discard all 3 emails" in page
+        assert m and "Discard all 3 requests" in page                     # since package 6b a mail is an action like the others
         late = send(mail, subject="the one the owner asked for")["outbox_id"]            # arrives after the page was drawn
-        bad = await c.post("/outbox/act", data={"kind": "mail", "action": "discard_all", "exp": m[1], "ids": m[2], "tok": "0" * 64})
-        assert bad.status_code == 403 and len(mail.outbox.pending()) == 4
-        done = await c.post("/outbox/act", data={"kind": "mail", "action": "discard_all", "exp": m[1], "ids": m[2], "tok": m[3]})
-        assert "Discarded 3" in done.text and [q.id for q in mail.outbox.pending()] == [late] and sent == []
+        bad = await c.post("/outbox/act", data={"kind": "external", "action": "discard_all", "exp": m[1], "ids": m[2], "tok": "0" * 64})
+        assert bad.status_code == 403 and len(mail.external.box.pending()) == 4
+        done = await c.post("/outbox/act", data={"kind": "external", "action": "discard_all", "exp": m[1], "ids": m[2], "tok": m[3]})
+        assert "Discarded 3" in done.text and [q.id for q in mail.external.box.pending()] == [late] and sent == []
 
 
 def test_a_keyed_message_is_queued_once_even_when_rebuilt_and_after_a_restart(tmp_path):

@@ -107,4 +107,4 @@ async def test_every_answer_an_agent_reads_about_mail_stays_the_same(web, monkey
         GOLDEN.write_text(json.dumps(got, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
     assert got == json.loads(GOLDEN.read_text())
     for label, (have, want) in action_types.items():       # D6-8: kind stays mail; the type comes along with 6b
-        assert have in (None, want), label
+        assert have == want, label

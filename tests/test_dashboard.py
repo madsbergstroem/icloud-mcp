@@ -62,12 +62,16 @@ async def signed_in(c):
     return s["csrf"]
 
 
+def mail_of(mcp):
+    """The mail service behind the server. Since package 6b its mail waits as actions of the mail types on the external source."""
+    return mcp._icloud_dashboard.sources["external"].registry.get("mail.send").executor.svc
+
+
 def queue(mcp, subject="Lunch <b>now</b>", body="See you & bye"):
-    mail = mcp._icloud_dashboard.sources["mail"].mail
-    return mail.send(to=["bob@example.org"], subject=subject, body=body)["outbox_id"]
+    return mail_of(mcp).send(to=["bob@example.org"], subject=subject, body=body)["outbox_id"]
 
 
-def sha_of(mcp, kind="mail"):
+def sha_of(mcp, kind="external"):
     return mcp._icloud_dashboard.sources[kind].pending()[0].sha256
 
 
@@ -81,11 +85,11 @@ async def test_everything_needs_a_session(web):
         assert r.headers["referrer-policy"] == "same-origin"
         s = (await c.get("/dashboard/api/session")).json()
         assert s["signed_in"] is False and s["password_login"] is True and s["passkeys"] is False and "csrf" not in s
-        for path in ("/dashboard/api/today", "/dashboard/api/state", f"/dashboard/api/items/mail:{qid}", "/dashboard/api/activity",
+        for path in ("/dashboard/api/today", "/dashboard/api/state", f"/dashboard/api/items/external:{qid}", "/dashboard/api/activity",
                      "/dashboard/api/security", "/dashboard/api/server", "/dashboard/api/push", "/dashboard/activity.json",
                      "/dashboard/state.json"):
             assert (await c.get(path)).status_code == 401, path
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": sha_of(mcp)}, headers=SAME)
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": sha_of(mcp)}, headers=SAME)
         assert r.status_code == 401 and sent == []
 
 
@@ -131,7 +135,7 @@ async def test_other_origins_and_missing_csrf_are_refused(web):
         r = await c.post("/dashboard/api/signin", json={"password": PASSWORD}, headers={"origin": "https://evil.example.net"})
         assert r.status_code == 403
         token = await signed_in(c)
-        url, body = f"/dashboard/api/items/mail:{qid}/approve", {"sha": sha_of(mcp)}
+        url, body = f"/dashboard/api/items/external:{qid}/approve", {"sha": sha_of(mcp)}
         assert (await c.post(url, json=body, headers=SAME)).status_code == 403                                   # no csrf
         assert (await c.post(url, json=body, headers={**api("wrong"), "origin": BASE})).status_code == 403       # wrong csrf
         assert (await c.post(url, json=body, headers={**api(token), "origin": "https://evil.example.net"})).status_code == 403
@@ -144,18 +148,18 @@ async def test_approve_sends_once_and_is_logged(web):
     qid = queue(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
-        assert it["title"] == "Lunch <b>now</b>" and it["text"].strip() == "See you & bye"     # plain text; the app escapes it
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))
+        it = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
+        assert (it["title"], it["subject"]) == ("Email", "Lunch <b>now</b>") and it["text"].strip() == "See you & bye"   # plain text; the app escapes it
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))
         assert r.status_code == 200 and r.json() == {"ok": True, "note": "Sent to bob@example.org."} and len(sent) == 1
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))  # a replay
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))  # a replay
         assert r.status_code == 409 and r.json()["ok"] is False and len(sent) == 1
         a = (await c.get("/dashboard/api/activity")).json()
         first = a["days"][0]["entries"][0]
-        assert first["who"] == "You" and first["what"] == "approved email “Lunch <b>now</b>”"
+        assert first["who"] == "You" and first["what"] == "approved email “Email”"            # package 6b: the type's title
         assert a["chain"]["ok"] is True and a["chain"]["entries"] >= 2                        # none changed since they were written
         sent_today = (await c.get("/dashboard/api/today")).json()["sent_today"]
-        assert [(e["title"], e["what"], e["to"]) for e in sent_today] == [("Lunch <b>now</b>", "Email", "bob@example.org")]
+        assert [(e["title"], e["what"], e["to"]) for e in sent_today] == [("Email", "Email", "bob@example.org")]
 
 
 async def test_a_changed_message_is_not_sent_and_discard_sends_nothing(web):
@@ -163,11 +167,11 @@ async def test_a_changed_message_is_not_sent_and_discard_sends_nothing(web):
     qid = queue(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        url = f"/dashboard/api/items/mail:{qid}"
+        url = f"/dashboard/api/items/external:{qid}"
         assert (await c.post(f"{url}/approve", json={"sha": "0" * 64}, headers=api(token))).status_code == 409
         r = await c.post(f"{url}/discard", json={"sha": sha_of(mcp)}, headers=api(token))
         assert r.status_code == 200 and r.json() == {"ok": True, "note": "Discarded. Nothing was sent."}
-        assert sent == [] and mcp._icloud_dashboard.sources["mail"].pending() == []
+        assert sent == [] and mcp._icloud_dashboard.sources["external"].pending() == []
         assert (await c.get(url)).status_code == 404
     assert [e["action"] for e in mcp._icloud_dashboard.audit.entries()][0] == "approval.discarded"
 
@@ -325,18 +329,18 @@ async def test_a_failed_calendar_release_points_the_owner_to_the_check(web, monk
 
 
 async def test_a_failed_release_points_the_owner_to_the_check(web, monkeypatch):
-    from icloud_mcp.dashboard import MailApprovals
+    from icloud_mcp.gate.external import ExternalApprovals
 
     def fail(self, q):
         raise RuntimeError("SMTP authentication failed. Check ICLOUD_USERNAME and the app-specific password. "
                            "Run icloud_check_health to see which service is failing.")
-    monkeypatch.setattr(MailApprovals, "release", fail)
+    monkeypatch.setattr(ExternalApprovals, "release", fail)
     app, mcp, _, sent = web()
     qid = queue(mcp)
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": sha_of(mcp)}, headers=api(token))
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": sha_of(mcp)}, headers=api(token))
         err = r.json()["error"]
         assert r.status_code == 502 and "Check now under Settings › Server shows which service is failing." in err and "icloud_check_health" not in err
         assert len(src.pending()) == 1 and sent == []                               # still waiting, can be retried
@@ -506,50 +510,50 @@ async def test_the_live_state_changes_when_a_request_arrives_and_does_not_keep_t
 
 
 async def test_a_request_with_a_warning_is_marked_and_needs_an_explicit_override(web, monkeypatch):
-    from icloud_mcp.dashboard import MailApprovals
-    real = MailApprovals.describe
-    monkeypatch.setattr(MailApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "warnings": ["Check the address"]})
+    from icloud_mcp.gate.external import ExternalApprovals
+    real = ExternalApprovals.describe
+    monkeypatch.setattr(ExternalApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "warnings": ["Check the address"]})
     app, mcp, _, _ = web()
     qid = queue(mcp)
     async with client(app) as c:
         await signed_in(c)
         waiting = (await c.get("/dashboard/api/today")).json()["waiting"]
-        assert waiting[0]["key"] == f"mail:{qid}" and waiting[0]["warning"] is True
-        assert (await c.get(f"/dashboard/api/items/mail:{qid}")).json()["warnings"] == ["Check the address"]
+        assert waiting[0]["key"] == f"external:{qid}" and waiting[0]["warning"] is True
+        assert (await c.get(f"/dashboard/api/items/external:{qid}")).json()["warnings"] == ["Check the address"]
 
 
 async def test_nothing_is_sent_without_the_override_or_when_sending_fails(web, monkeypatch):
-    from icloud_mcp.dashboard import MailApprovals
-    real = MailApprovals.describe
+    from icloud_mcp.gate.external import ExternalApprovals
+    real = ExternalApprovals.describe
     app, mcp, _, sent = web()
     qid = queue(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        src = mcp._icloud_dashboard.sources["mail"]
-        url, body = f"/dashboard/api/items/mail:{qid}/approve", {"sha": sha_of(mcp)}
-        monkeypatch.setattr(MailApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "needs_override": True})
-        assert (await c.get(f"/dashboard/api/items/mail:{qid}")).json()["needs_override"] is True
+        src = mcp._icloud_dashboard.sources["external"]
+        url, body = f"/dashboard/api/items/external:{qid}/approve", {"sha": sha_of(mcp)}
+        monkeypatch.setattr(ExternalApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "needs_override": True})
+        assert (await c.get(f"/dashboard/api/items/external:{qid}")).json()["needs_override"] is True
         r = await c.post(url, json=body, headers=api(token))
         assert r.status_code == 422 and r.json()["ok"] is False and sent == [] and len(src.pending()) == 1
-        monkeypatch.setattr(MailApprovals, "describe", real)
+        monkeypatch.setattr(ExternalApprovals, "describe", real)
 
         def fail(self, q):
             raise RuntimeError("SMTP said no")
-        monkeypatch.setattr(MailApprovals, "release", fail)
+        monkeypatch.setattr(ExternalApprovals, "release", fail)
         r = await c.post(url, json=body, headers=api(token))
         assert r.status_code == 502 and r.json()["error"].startswith("Not sent (still waiting)") and sent == []
         assert len(src.pending()) == 1
 
 
 async def test_an_override_sends_a_flagged_request(web, monkeypatch):
-    from icloud_mcp.dashboard import MailApprovals
-    real = MailApprovals.describe
-    monkeypatch.setattr(MailApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "needs_override": True})
+    from icloud_mcp.gate.external import ExternalApprovals
+    real = ExternalApprovals.describe
+    monkeypatch.setattr(ExternalApprovals, "describe", lambda self, q, ctx=None: {**real(self, q, ctx), "needs_override": True})
     app, mcp, _, sent = web()
     qid = queue(mcp)
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": sha_of(mcp), "override": True}, headers=api(token))
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": sha_of(mcp), "override": True}, headers=api(token))
         assert r.status_code == 200 and len(sent) == 1
 
 
@@ -557,12 +561,12 @@ async def test_a_request_that_has_gone_is_not_replaced_by_another(web):
     app, mcp, _, _ = web()
     gone = queue(mcp, subject="First")
     queue(mcp, subject="Second")
-    mcp._icloud_dashboard.sources["mail"].discard(next(q for q in mcp._icloud_dashboard.sources["mail"].pending() if q.id == gone))
+    mcp._icloud_dashboard.sources["external"].discard(next(q for q in mcp._icloud_dashboard.sources["external"].pending() if q.id == gone))
     async with client(app) as c:
         await signed_in(c)
-        r = await c.get(f"/dashboard/api/items/mail:{gone}")
+        r = await c.get(f"/dashboard/api/items/external:{gone}")
         assert r.status_code == 404 and r.json()["gone"] is True and "no longer waiting" in r.json()["error"]
-        assert [w["title"] for w in (await c.get("/dashboard/api/today")).json()["waiting"]] == ["Second"]
+        assert [w["subject"] for w in (await c.get("/dashboard/api/today")).json()["waiting"]] == ["Second"]
 
 
 async def test_one_item_never_prunes_what_is_kept_for_the_approve_check(web, monkeypatch):
@@ -579,9 +583,9 @@ async def test_one_item_never_prunes_what_is_kept_for_the_approve_check(web, mon
         assert len((await c.get("/dashboard/api/today")).json()["waiting"]) == 7
         assert calls and all(n == 7 for n, _ in calls)                  # Today describes the whole queue at once
         calls.clear()
-        q = mcp._icloud_dashboard.sources["mail"].pending()[0]
-        await c.get(f"/dashboard/api/items/mail:{q.id}")
-        await c.post(f"/dashboard/api/items/mail:{q.id}/discard", json={"sha": q.sha256}, headers=api(token))
+        q = mcp._icloud_dashboard.sources["external"].pending()[0]
+        await c.get(f"/dashboard/api/items/external:{q.id}")
+        await c.post(f"/dashboard/api/items/external:{q.id}/discard", json={"sha": q.sha256}, headers=api(token))
         assert calls and not any(prune for n, prune in calls if n < 7)
 
 

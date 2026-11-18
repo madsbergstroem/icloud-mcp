@@ -98,6 +98,10 @@
          "<id:mail-4>"
         ],
         [
+         "Action",
+         "mail.send"
+        ],
+        [
          "Hash",
          "<short sha>"
         ]
@@ -108,10 +112,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "A queued mail message expired without an answer",
+       "target": "A queued request expired without an answer",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "a queued mail message expired without an answer",
+       "what": "a queued request expired without an answer",
        "when": "<volatile>",
        "who": "server"
       },
@@ -200,6 +204,10 @@
          "<id:mail-3>"
         ],
         [
+         "Action",
+         "mail.send"
+        ],
+        [
          "Sent to",
          "bob@example.org"
         ],
@@ -218,10 +226,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Withdrawn",
-       "target": "Email “Take me back”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "warn",
-       "what": "withdrew email “Take me back”",
+       "what": "withdrew email “Email”",
        "when": "<volatile>",
        "who": "Your assistant"
       },
@@ -302,6 +310,10 @@
          "<id:mail-2>"
         ],
         [
+         "Action",
+         "mail.send"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -316,10 +328,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "Email “Discard me”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "",
-       "what": "discarded email “Discard me”",
+       "what": "discarded email “Email”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -458,8 +470,16 @@
          "<id:mail-1>"
         ],
         [
+         "Action",
+         "mail.send"
+        ],
+        [
          "Sent to",
-         "bob@example.org, bob@example.org"
+         "bob@example.org"
+        ],
+        [
+         "Result",
+         "Sent"
         ],
         [
          "Hash",
@@ -476,10 +496,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "",
-       "target": "Email “Lunch”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "",
-       "what": "approved email “Lunch”",
+       "what": "approved email “Email”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -490,6 +510,10 @@
         [
          "Request",
          "<id:mail-1>"
+        ],
+        [
+         "Action",
+         "mail.send"
         ],
         [
          "Hash",
@@ -506,10 +530,10 @@
        "ok": false,
        "t": "<volatile>",
        "tag": "",
-       "target": "Email “Lunch”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "bad",
-       "what": "could not send email “Lunch”",
+       "what": "could not send email “Email”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -520,6 +544,10 @@
         [
          "Request",
          "<id:mail-1>"
+        ],
+        [
+         "Action",
+         "mail.send"
         ],
         [
          "Hash",
@@ -536,10 +564,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
-       "target": "Email “Lunch”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "",
-       "what": "brought back the original text of email “Lunch”",
+       "what": "brought back the original text of email “Email”",
        "when": "<volatile>",
        "who": "You"
       },
@@ -620,6 +648,10 @@
          "<id:mail-1>"
         ],
         [
+         "Action",
+         "mail.send"
+        ],
+        [
          "Hash",
          "<short sha>"
         ],
@@ -634,10 +666,10 @@
        "ok": true,
        "t": "<volatile>",
        "tag": "Edited",
-       "target": "Email “Lunch”",
+       "target": "Email “Email”",
        "time": "<volatile>",
        "tone": "",
-       "what": "edited email “Lunch” before sending",
+       "what": "edited email “Email” before sending",
        "when": "<volatile>",
        "who": "You"
       }
@@ -743,12 +775,13 @@
    "action": "approval.edited",
    "actor": "owner",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "kind": "external",
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Edited email “Lunch” before sending",
+   "summary": "Edited email “Email” before sending",
    "t": "<volatile>",
    "via": "password"
   },
@@ -784,12 +817,13 @@
    "action": "approval.edit_undone",
    "actor": "owner",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "kind": "external",
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Brought back the original text of email “Lunch”",
+   "summary": "Brought back the original text of email “Email”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -797,12 +831,13 @@
    "action": "approval.failed",
    "actor": "owner",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "kind": "external",
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
    "ok": false,
-   "summary": "Could not send email “Lunch”",
+   "summary": "Could not send email “Email”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -810,16 +845,17 @@
    "action": "approval.sent",
    "actor": "owner",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "delivery": "sent",
+    "kind": "external",
     "outbox_id": "<id:mail-1>",
     "recipients": [
-     "bob@example.org",
      "bob@example.org"
     ],
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Approved email “Lunch”",
+   "summary": "Approved email “Email”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -881,12 +917,13 @@
    "action": "approval.discarded",
    "actor": "owner",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "kind": "external",
     "outbox_id": "<id:mail-2>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Discarded email “Discard me”",
+   "summary": "Discarded email “Email”",
    "t": "<volatile>",
    "via": "password"
   },
@@ -922,7 +959,8 @@
    "action": "approval.withdrawn",
    "actor": "assistant",
    "details": {
-    "kind": "mail",
+    "action_type": "mail.send",
+    "kind": "external",
     "outbox_id": "<id:mail-3>",
     "reason": "mistake",
     "recipients": [
@@ -931,7 +969,7 @@
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "Withdrew email “Take me back”",
+   "summary": "Withdrew email “Email”",
    "t": "<volatile>"
   },
   {
@@ -972,13 +1010,14 @@
    "action": "approval.expired",
    "actor": "server",
    "details": {
+    "action_type": "mail.send",
     "expired_at": "<volatile>",
-    "kind": "mail",
+    "kind": "external",
     "outbox_id": "<id:mail-4>",
     "sha256": "<sha>"
    },
    "ok": true,
-   "summary": "A queued mail message expired without an answer",
+   "summary": "A queued request expired without an answer",
    "t": "<volatile>"
   },
   {
@@ -1189,7 +1228,8 @@
   },
   "mail": {
    "body": {
-    "account": "iCloud",
+    "account": "",
+    "action_type": "mail.send",
     "approve_label": "Send",
     "badge": "Email",
     "blocked": false,
@@ -1198,22 +1238,86 @@
     "edit": {
      "allowed": true,
      "edited": false,
+     "fields": [
+      {
+       "label": "Subject",
+       "limit": null,
+       "name": "subject",
+       "owner_allowed": false,
+       "recipient": false,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": "Lunch"
+      },
+      {
+       "label": "To",
+       "limit": null,
+       "name": "to",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": "bob@example.org"
+      },
+      {
+       "label": "Cc",
+       "limit": null,
+       "name": "cc",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": ""
+      },
+      {
+       "label": "Bcc",
+       "limit": null,
+       "name": "bcc",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": ""
+      },
+      {
+       "label": "Text",
+       "limit": 30000,
+       "name": "message",
+       "owner_allowed": false,
+       "recipient": false,
+       "required": true,
+       "text": true,
+       "type": "string",
+       "value": "See you at noon\r\n"
+      }
+     ],
      "limit": 30000,
      "original": null,
      "reason": "",
      "text": "See you at noon\r\n"
     },
+    "edit_note": "At most 25 recipients.",
     "expires_at": "<volatile>",
     "files": [],
     "group": false,
-    "key": "mail:<id:mail-1>",
-    "kind": "mail",
+    "key": "external:<id:mail-1>",
+    "kind": "external",
+    "kind_label": "Email",
     "max_bytes": 5242880,
     "missing": [],
     "needs_override": false,
-    "notes": [],
+    "notes": [
+     "Approving sends it once from your account."
+    ],
     "ok": true,
     "original": null,
+    "row_tags": {
+     "From": "iCloud"
+    },
     "rows": [
      [
       "From",
@@ -1222,16 +1326,15 @@
      [
       "To",
       "bob@example.org"
-     ],
-     [
-      "Will be delivered to",
-      "bob@example.org"
      ]
     ],
     "sha": "<sha>",
+    "subject": "Lunch",
     "text": "See you at noon\r\n",
-    "title": "Lunch",
+    "text_style": "mail",
+    "title": "Email",
     "to": "bob@example.org",
+    "to_shown": true,
     "warning": false,
     "warnings": []
    },
@@ -1437,7 +1540,8 @@
   },
   "mail": {
    "body": {
-    "account": "iCloud",
+    "account": "",
+    "action_type": "mail.send",
     "approve_label": "Send",
     "badge": "Email",
     "blocked": false,
@@ -1446,23 +1550,87 @@
     "edit": {
      "allowed": true,
      "edited": true,
+     "fields": [
+      {
+       "label": "Subject",
+       "limit": null,
+       "name": "subject",
+       "owner_allowed": false,
+       "recipient": false,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": "Lunch"
+      },
+      {
+       "label": "To",
+       "limit": null,
+       "name": "to",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": "bob@example.org"
+      },
+      {
+       "label": "Cc",
+       "limit": null,
+       "name": "cc",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": ""
+      },
+      {
+       "label": "Bcc",
+       "limit": null,
+       "name": "bcc",
+       "owner_allowed": false,
+       "recipient": true,
+       "required": true,
+       "text": false,
+       "type": "string",
+       "value": ""
+      },
+      {
+       "label": "Text",
+       "limit": 30000,
+       "name": "message",
+       "owner_allowed": false,
+       "recipient": false,
+       "required": true,
+       "text": true,
+       "type": "string",
+       "value": "mail edited, ÜBER-café\r\n"
+      }
+     ],
      "limit": 30000,
      "original": "See you at noon\r\n",
      "reason": "",
      "text": "mail edited, ÜBER-café\r\n"
     },
+    "edit_note": "At most 25 recipients.",
     "edited_rows": [],
     "expires_at": "<volatile>",
     "files": [],
     "group": false,
-    "key": "mail:<id:mail-1>",
-    "kind": "mail",
+    "key": "external:<id:mail-1>",
+    "kind": "external",
+    "kind_label": "Email",
     "max_bytes": 5242880,
     "missing": [],
     "needs_override": false,
-    "notes": [],
+    "notes": [
+     "Approving sends it once from your account."
+    ],
     "ok": true,
     "original": null,
+    "row_tags": {
+     "From": "iCloud"
+    },
     "rows": [
      [
       "From",
@@ -1471,16 +1639,15 @@
      [
       "To",
       "bob@example.org"
-     ],
-     [
-      "Will be delivered to",
-      "bob@example.org"
      ]
     ],
     "sha": "<sha>",
+    "subject": "Lunch",
     "text": "mail edited, ÜBER-café\r\n",
-    "title": "Lunch",
+    "text_style": "mail",
+    "title": "Email",
     "to": "bob@example.org",
+    "to_shown": true,
     "versions": [
      {
       "at": "<volatile>",
@@ -1494,10 +1661,6 @@
        ],
        [
         "To",
-        "bob@example.org"
-       ],
-       [
-        "Will be delivered to",
         "bob@example.org"
        ]
       ],
@@ -1521,10 +1684,6 @@
        ],
        [
         "To",
-        "bob@example.org"
-       ],
-       [
-        "Will be delivered to",
         "bob@example.org"
        ]
       ],
@@ -1566,6 +1725,7 @@
   "cursor": "<volatile>",
   "items": [
    {
+    "action_type": "mail.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:mail-1>",
@@ -1597,6 +1757,7 @@
     "status": "sent"
    },
    {
+    "action_type": "mail.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:mail-2>",
@@ -1620,6 +1781,7 @@
     "status": "discarded"
    },
    {
+    "action_type": "mail.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:mail-3>",
@@ -1643,6 +1805,7 @@
     "status": "withdrawn"
    },
    {
+    "action_type": "mail.send",
     "at": "<volatile>",
     "edited": false,
     "id": "<id:mail-4>",
@@ -1672,11 +1835,13 @@
   "body": {
    "kinds": {
     "external:Cancellation": 0,
+    "external:Email": 1,
+    "external:Email reply": 0,
     "external:Event update": 0,
+    "external:Forward": 0,
     "external:Invitation": 1,
     "external:Reply": 0,
-    "external:iMessage": 1,
-    "mail": 1
+    "external:iMessage": 1
    },
    "mac": "offline",
    "ok": true,
@@ -1690,11 +1855,13 @@
   "body": {
    "kinds": {
     "external:Cancellation": 0,
+    "external:Email": 0,
+    "external:Email reply": 0,
     "external:Event update": 0,
+    "external:Forward": 0,
     "external:Invitation": 0,
     "external:Reply": 0,
-    "external:iMessage": 0,
-    "mail": 0
+    "external:iMessage": 0
    },
    "mac": "offline",
    "ok": true,
@@ -1705,6 +1872,7 @@
   "status": 200
  },
  "status_after_failed": {
+  "action_type": "mail.send",
   "at": "<volatile>",
   "edited": false,
   "id": "<id:mail-1>",
@@ -1729,6 +1897,7 @@
    "status": "discarded"
   },
   "mail": {
+   "action_type": "mail.send",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:mail-2>",
@@ -1754,6 +1923,7 @@
    "status": "waiting"
   },
   "mail": {
+   "action_type": "mail.send",
    "at": "<volatile>",
    "edited": true,
    "id": "<id:mail-1>",
@@ -1779,6 +1949,7 @@
    "status": "unclear"
   },
   "mail": {
+   "action_type": "mail.send",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:mail-1>",
@@ -1804,6 +1975,7 @@
    "status": "expired"
   },
   "mail": {
+   "action_type": "mail.send",
    "at": "<volatile>",
    "edited": false,
    "id": "<id:mail-4>",
@@ -1827,16 +1999,20 @@
    "v": "<volatile>",
    "waiting": [
     {
+     "action_type": "mail.send",
      "badge": "Email",
      "blocked": false,
      "by": "",
      "created_at": "<volatile>",
      "expires_at": "<volatile>",
      "group": false,
-     "key": "mail:<id:mail-1>",
-     "kind": "mail",
-     "title": "Lunch",
+     "key": "external:<id:mail-1>",
+     "kind": "external",
+     "kind_label": "Email",
+     "subject": "Lunch",
+     "title": "Email",
      "to": "bob@example.org",
+     "to_shown": true,
      "warning": false
     },
     {
@@ -1913,7 +2089,7 @@
     {
      "t": "<volatile>",
      "time": "<volatile>",
-     "title": "Lunch",
+     "title": "Email",
      "to": "bob@example.org",
      "unclear": false,
      "what": "Email"

@@ -6,6 +6,7 @@ from email import policy
 
 import pytest
 
+from icloud_mcp.gate.actions import ExternalError
 from icloud_mcp.mail import PENDING_HEADER, MailError
 from test_dashboard import BASE, SAME, client, signed_in, web  # noqa: F401  -- web is a fixture
 
@@ -13,7 +14,12 @@ PDF = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n"
 
 
 def mail_of(mcp):
-    return mcp._icloud_dashboard.sources["mail"].mail
+    """The mail service; since package 6b its mail waits as actions of the mail types on the external source."""
+    return mcp._icloud_dashboard.sources["external"].registry.get("mail.send").executor.svc
+
+
+def waiting_mail(mcp):
+    return mcp._icloud_dashboard.sources["external"].box.pending()
 
 
 def ask(mcp, **kw):
@@ -30,11 +36,11 @@ def api(token):
 
 
 async def item(c, qid):
-    return (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
+    return (await c.get(f"/dashboard/api/items/external:{qid}")).json()
 
 
 async def approve(c, token, qid, sha):
-    return await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": sha}, headers=api(token))
+    return await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": sha}, headers=api(token))
 
 
 async def test_a_mail_without_its_file_waits_and_cannot_be_sent(web, tmp_path):
@@ -45,19 +51,19 @@ async def test_a_mail_without_its_file_waits_and_cannot_be_sent(web, tmp_path):
     assert r["files_to_add"][0]["filename"] == "Quote-2026.pdf" and r["files_to_add"][0]["upload_url"].startswith(f"{BASE}/files/")
     stored = b"".join(p.read_bytes() for p in tmp_path.glob("approvals.db*"))     # the approval store since package 6a
     assert token_of(r).encode() not in stored                          # only the token's hash is kept on the server
-    with pytest.raises(MailError, match="still waits for Quote-2026.pdf"):
-        mail_of(mcp).approve(r["outbox_id"])
+    with pytest.raises(ExternalError, match="still waits for Quote-2026.pdf"):
+        mcp._icloud_dashboard.sources["external"].release(waiting_mail(mcp)[0])
     async with client(app) as c:
         token = await signed_in(c)
-        q = mail_of(mcp).outbox.pending()[0]
+        q = waiting_mail(mcp)[0]
         resp = await approve(c, token, q.id, q.sha256)
         assert resp.status_code == 409 and "a file is still missing" in resp.json()["error"]
         it = await item(c, q.id)
         assert it["blocked"] is True and it["missing"] == [{"index": 0, "filename": "Quote-2026.pdf"}]
-        assert "Waiting for: Quote-2026.pdf" in it["notes"] and it["max_bytes"] == mcp._icloud_dashboard.s.max_attachment_bytes
+        assert it["max_bytes"] == mcp._icloud_dashboard.s.max_attachment_bytes          # package 6b: the card says it, not a note
         waiting = (await c.get("/dashboard/api/today")).json()["waiting"]
-        assert waiting[0]["key"] == f"mail:{q.id}" and waiting[0]["blocked"] is True
-    assert sent == [] and len(mail_of(mcp).outbox.pending()) == 1      # still waiting, nothing went out
+        assert waiting[0]["key"] == f"external:{q.id}" and waiting[0]["blocked"] is True
+    assert sent == [] and len(waiting_mail(mcp)) == 1      # still waiting, nothing went out
 
 
 def test_it_waits_even_when_owner_approval_is_off(web):
@@ -92,7 +98,7 @@ async def test_an_agent_upload_fills_the_file_and_the_owner_sends_it(web):
         assert again.status_code == 404                                # one file, one upload
         assert (await c.put("/files/not-a-token", content=PDF)).status_code == 404
         token = await signed_in(c)
-        q = mail_of(mcp).outbox.pending()[0]
+        q = waiting_mail(mcp)[0]
         it = await item(c, q.id)
         assert it["blocked"] is False and it["missing"] == [] and [f["filename"] for f in it["files"]] == ["Quote-2026.pdf"]
         resp = await approve(c, token, q.id, it["sha"])
@@ -128,7 +134,7 @@ async def test_the_owner_adds_the_file_in_the_app_and_sends_it(web):
         assert it["blocked"] is False and it["missing"] == [] and it["approve_label"] == "Send" and it["sha"] == got["sha"]
         act = await approve(c, token, qid, got["sha"])
         assert act.json()["ok"], act.text
-        assert (await c.get(f"/dashboard/api/items/mail:{qid}")).status_code == 404   # sent: no longer waiting
+        assert (await c.get(f"/dashboard/api/items/external:{qid}")).status_code == 404   # sent: no longer waiting
     att = next(sent[0][0].iter_attachments())
     assert att.get_filename() == "Offer_final.pdf" and att.get_content() == PDF
 
@@ -136,7 +142,7 @@ async def test_the_owner_adds_the_file_in_the_app_and_sends_it(web):
 async def test_an_old_hash_or_a_foreign_origin_changes_nothing(web):
     app, mcp, _, sent = web()
     r = ask(mcp)
-    old = mail_of(mcp).outbox.pending()[0].sha256
+    old = waiting_mail(mcp)[0].sha256
     async with client(app) as c:
         await c.put(f"/files/{token_of(r)}", content=PDF)
         token = await signed_in(c)
@@ -148,7 +154,7 @@ async def test_an_old_hash_or_a_foreign_origin_changes_nothing(web):
         no_token = await c.post(f"/dashboard/attach/{r['outbox_id']}/file", headers=SAME,
                                 data={"csrf": "wrong", "index": "0"}, files={"file": ("x.pdf", PDF, "application/pdf")})
         assert no_token.status_code == 403
-    assert [f["filename"] for f in mail_of(mcp).describe_queued(mail_of(mcp).outbox.pending()[0])["attachments"]] == ["Quote-2026.pdf"]
+    assert [f["filename"] for f in mcp._icloud_dashboard.sources["external"].files_of(waiting_mail(mcp)[0])["files"]] == ["Quote-2026.pdf"]
 
 
 async def test_uploads_keep_to_the_size_limit(web):
@@ -183,12 +189,12 @@ async def test_a_client_that_opens_links_shows_the_owner_the_item_and_the_mail_i
     first = await tool.run(ARGS, context=_Ctx(url=True))
     assert isinstance(first, InputRequiredResult)
     ask = first.input_requests["add_file"].params
-    assert ask.mode == "url" and ask.url == f"{BASE}/dashboard#/item/mail:{mail_of(mcp).outbox.pending()[0].id}" and "Quote-2026.pdf" in ask.message
-    assert len(mail_of(mcp).outbox.pending()) == 1
+    assert ask.mode == "url" and ask.url == f"{BASE}/dashboard#/item/mail:{waiting_mail(mcp)[0].id}" and "Quote-2026.pdf" in ask.message
+    assert len(waiting_mail(mcp)) == 1
     again = await tool.run(ARGS, context=_Ctx(url=True, state=first.request_state))    # the client's retry after the link
     text = again if isinstance(again, str) else again.content[0].text
     assert json.loads(text)["status"] == "queued_waiting_for_files" and "upload_url" in text
-    assert len(mail_of(mcp).outbox.pending()) == 1                                    # asked once, queued once
+    assert len(waiting_mail(mcp)) == 1                                    # asked once, queued once
 
 
 @pytest.mark.parametrize("ctx", [_Ctx(url=False), _Ctx(url=True, version="2025-11-25")], ids=["form-only", "older-protocol"])

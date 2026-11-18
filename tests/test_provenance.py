@@ -124,7 +124,7 @@ def test_every_approval_source_shares_one_base():
     from icloud_mcp import dashboard, external
     from icloud_mcp.gate.source import ApprovalSource
     assert dashboard.ApprovalSource is ApprovalSource
-    for cls in (dashboard.MailApprovals, external.ExternalApprovals):          # calendar: an action since package 5b
+    for cls in (external.ExternalApprovals,):          # calendar and mail: actions since packages 5b and 6b
         assert issubclass(cls, ApprovalSource), cls.__name__
 
 

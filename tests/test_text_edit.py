@@ -22,6 +22,21 @@ def text_of(raw: bytes) -> str:
     return email.message_from_bytes(raw, policy=policy.default).get_body(preferencelist=("plain",)).get_content()
 
 
+def mail_of(mcp):
+    """The mail service; since package 6b its mail waits as actions of the mail types on the external source."""
+    return mcp._icloud_dashboard.sources["external"].registry.get("mail.send").executor.svc
+
+
+def message_of(mcp, q):
+    """A waiting mail action as the message it stands for (package 6b)."""
+    return mail_of(mcp).message_of(q)
+
+
+def queue_message(mcp, msg):
+    src = mcp._icloud_dashboard.sources["external"]
+    return src.queue_external("mail.send", mail_of(mcp).params_of(msg, None), None)
+
+
 def audit_text(mcp) -> str:
     return (mcp._icloud_dashboard.audit.path).read_text()
 
@@ -88,144 +103,143 @@ def stored_ics(q) -> bytes:
 async def test_the_owner_edits_a_mail_and_what_is_sent_is_the_edited_text(web):
     app, mcp, _, sent = web()
     qid = queue(mcp, subject="Lunch", body="See you at noon")
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     before = src.pending()[0]
     async with client(app) as c:
         token = await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
         assert it["edit"]["allowed"] is True and it["edit"]["text"].strip() == "See you at noon" and it["edit"]["edited"] is False
-        r = await c.put(url(f"mail:{qid}"), json={"sha": it["sha"], "text": "See you at one, ÜBER-café"}, headers=api(token))
+        r = await c.put(url(f"external:{qid}"), json={"sha": it["sha"], "text": "See you at one, ÜBER-café"}, headers=api(token))
         assert r.status_code == 200 and r.json()["changed"] is True and r.json()["sha"] != it["sha"]
         after = src.pending()[0]
-        assert text_of(after.raw).strip() == "See you at one, ÜBER-café"
+        assert message_of(mcp, after).get_body(preferencelist=("plain",)).get_content().strip() == "See you at one, ÜBER-café"
         assert (after.id, after.created_at, after.expires_at, after.recipients) == (before.id, before.created_at, before.expires_at, before.recipients)
-        old_msg = email.message_from_bytes(before.raw, policy=policy.default)
-        new_msg = email.message_from_bytes(after.raw, policy=policy.default)
+        old_msg, new_msg = message_of(mcp, before), message_of(mcp, after)
         assert [(k, v) for k, v in new_msg.items() if not k.lower().startswith("content-")] == \
                [(k, v) for k, v in old_msg.items() if not k.lower().startswith("content-")]      # From, To, Subject, Message-ID stay
-        again = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
+        again = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
         assert again["sha"] == r.json()["sha"] and again["text"].strip() == "See you at one, ÜBER-café"
         assert again["edit"]["edited"] is True and again["edit"]["original"].strip() == "See you at noon"
-        stale = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))
+        stale = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": it["sha"]}, headers=api(token))
         assert stale.status_code == 409 and sent == []                                       # the old version can no longer go out
-        ok = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": again["sha"]}, headers=api(token))
+        ok = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": again["sha"]}, headers=api(token))
         assert ok.status_code == 200
     assert [text_of(m.as_bytes()).strip() for m, _ in sent] == ["See you at one, ÜBER-café"] and sent[0][1] == ["bob@example.org"]
 
 
 async def test_an_edit_keeps_the_attachments_of_a_mail(web):
     app, mcp, *_ = web()
-    mail = mcp._icloud_dashboard.sources["mail"].mail
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = "me@icloud.com", "bob@example.org", "Files"
     msg.set_content("See attached.")
     msg.add_attachment(b"%PDF-1.4 example", maintype="application", subtype="pdf", filename="Receipts.pdf")
-    q = mail.outbox.add(msg.as_bytes(), ["bob@example.org"])
+    q = queue_message(mcp, msg)
     async with client(app) as c:
         token = await signed_in(c)
-        r = await c.put(url(f"mail:{q.id}"), json={"sha": q.sha256, "text": "Receipts are attached."}, headers=api(token))
+        r = await c.put(url(f"external:{q.id}"), json={"sha": q.sha256, "text": "Receipts are attached."}, headers=api(token))
         assert r.status_code == 200
-        it = (await c.get(f"/dashboard/api/items/mail:{q.id}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
         assert [f["filename"] for f in it["files"]] == ["Receipts.pdf"] and it["text"].strip() == "Receipts are attached."
 
 
 async def test_a_mail_with_an_html_part_cannot_be_edited_and_says_why(web):
     app, mcp, *_ = web()
-    mail = mcp._icloud_dashboard.sources["mail"].mail
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = "me@icloud.com", "bob@example.org", "Newsletter"
     msg.set_content("Plain version")
     msg.add_alternative("<p>HTML version</p>", subtype="html")
-    q = mail.outbox.add(msg.as_bytes(), ["bob@example.org"])
+    q = queue_message(mcp, msg)
     async with client(app) as c:
         token = await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/mail:{q.id}")).json()
-        assert it["edit"]["allowed"] is False and "HTML" in it["edit"]["reason"] and it["edit"]["text"] == ""
-        r = await c.put(url(f"mail:{q.id}"), json={"sha": q.sha256, "text": "Changed"}, headers=api(token))
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
+        assert it["edit"]["text"] == "" and "HTML" in mcp._icloud_dashboard.sources["external"].text_block(q)
+        # package 6b: the 2d form still changes subject and recipients; it leaves the locked text out
+        assert [f["name"] for f in it["edit"]["fields"]] == ["subject", "to", "cc", "bcc"]
+        r = await c.put(url(f"external:{q.id}"), json={"sha": q.sha256, "text": "Changed"}, headers=api(token))
         assert r.status_code == 422 and "HTML" in r.json()["error"]
-        assert mail.outbox.pending()[0].raw == q.raw                                          # untouched
+        assert mcp._icloud_dashboard.sources["external"].pending()[0].raw == q.raw                # untouched
 
 
 # -- the checks every kind shares ----------------------------------------------------------------------------------------------
 async def test_a_wrong_or_stale_sha_and_a_missing_session_change_nothing(web):
     app, mcp, *_ = web()
     qid = queue(mcp, body="Original words")
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     raw = src.pending()[0].raw
     async with client(app) as c:
-        assert (await c.put(url(f"mail:{qid}"), json={"sha": "x", "text": "No"}, headers=SAME)).status_code == 401
+        assert (await c.put(url(f"external:{qid}"), json={"sha": "x", "text": "No"}, headers=SAME)).status_code == 401
         token = await signed_in(c)
-        assert (await c.put(url(f"mail:{qid}"), json={"sha": "x", "text": "No"}, headers=SAME)).status_code == 403          # no CSRF token
+        assert (await c.put(url(f"external:{qid}"), json={"sha": "x", "text": "No"}, headers=SAME)).status_code == 403          # no CSRF token
         evil = {**api(token), "origin": "https://evil.example"}
-        assert (await c.put(url(f"mail:{qid}"), json={"sha": "x", "text": "No"}, headers=evil)).status_code == 403
-        r = await c.put(url(f"mail:{qid}"), json={"sha": "0" * 64, "text": "No"}, headers=api(token))
+        assert (await c.put(url(f"external:{qid}"), json={"sha": "x", "text": "No"}, headers=evil)).status_code == 403
+        r = await c.put(url(f"external:{qid}"), json={"sha": "0" * 64, "text": "No"}, headers=api(token))
         assert r.status_code == 409 and src.pending()[0].raw == raw
         sha = src.pending()[0].sha256
-        assert (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "First"}, headers=api(token))).status_code == 200
-        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "Second, from an old page"}, headers=api(token))
-        assert r.status_code == 409 and text_of(src.pending()[0].raw).strip() == "First"       # two pages cannot both win
-        assert (await c.put(url("mail:nothing"), json={"sha": sha, "text": "x"}, headers=api(token))).status_code == 409
+        assert (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "First"}, headers=api(token))).status_code == 200
+        r = await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "Second, from an old page"}, headers=api(token))
+        assert r.status_code == 409 and message_of(mcp, src.pending()[0]).get_body(preferencelist=("plain",)).get_content().strip() == "First"
+        assert (await c.put(url("external:nothing"), json={"sha": sha, "text": "x"}, headers=api(token))).status_code == 409
 
 
 async def test_bring_it_back_restores_the_text_the_agent_asked_for(web):
     app, mcp, *_ = web()
     qid = queue(mcp, body="Asked for by the agent")
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         token = await signed_in(c)
         sha = src.pending()[0].sha256
-        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
+        r = await c.put(url(f"external:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
         assert r.status_code == 422 and "nothing to bring back" in r.json()["error"]
-        sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "My version"}, headers=api(token))).json()["sha"]
-        sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "My second version"}, headers=api(token))).json()["sha"]
+        sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "My version"}, headers=api(token))).json()["sha"]
+        sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "My second version"}, headers=api(token))).json()["sha"]
         assert src.pending()[0].edited_from.strip() == "Asked for by the agent"               # always the agent's text, not the first edit
-        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
+        r = await c.put(url(f"external:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
         assert r.status_code == 200 and r.json()["changed"] is True
-        it = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
         assert it["text"].strip() == "Asked for by the agent" and it["edit"]["edited"] is False and it["edit"]["original"] is None
         # typing the original back by hand is the same as bringing it back
-        sha = (await c.put(url(f"mail:{qid}"), json={"sha": it["sha"], "text": "Something else"}, headers=api(token))).json()["sha"]
-        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "Asked for by the agent"}, headers=api(token))
+        sha = (await c.put(url(f"external:{qid}"), json={"sha": it["sha"], "text": "Something else"}, headers=api(token))).json()["sha"]
+        r = await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "Asked for by the agent"}, headers=api(token))
         assert r.status_code == 200 and src.pending()[0].edited_from is None
         # nothing to change: no new version, no log line
-        r = await c.put(url(f"mail:{qid}"), json={"sha": r.json()["sha"], "text": "Asked for by the agent"}, headers=api(token))
+        r = await c.put(url(f"external:{qid}"), json={"sha": r.json()["sha"], "text": "Asked for by the agent"}, headers=api(token))
         assert r.json()["changed"] is False
 
 
 async def test_the_log_records_that_a_text_was_edited_and_never_the_text(web):
     app, mcp, *_ = web()
     qid = queue(mcp, subject="Plans", body="Original-secret-words")
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         token = await signed_in(c)
         sha = src.pending()[0].sha256
-        sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "Edited-secret-words"}, headers=api(token))).json()["sha"]
-        await c.put(url(f"mail:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
+        sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "Edited-secret-words"}, headers=api(token))).json()["sha"]
+        await c.put(url(f"external:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))
         a = (await c.get("/dashboard/api/activity?filter=approvals")).json()
         entries = a["days"][0]["entries"]
-        assert [(e["what"], e["tag"]) for e in entries] == [("brought back the original text of email “Plans”", "Edited"),
-                                                           ("edited email “Plans” before sending", "Edited")]
+        assert [(e["what"], e["tag"]) for e in entries] == [("brought back the original text of email “Email”", "Edited"),
+                                                           ("edited email “Email” before sending", "Edited")]     # package 6b: the type's title
         assert entries[1]["note"] == "The text changed. The log keeps no text."
     log = audit_text(mcp)
     assert "Original-secret-words" not in log and "Edited-secret-words" not in log
     edits = [json.loads(line) for line in log.splitlines() if '"approval.edit' in line]
     assert [e["action"] for e in edits] == ["approval.edited", "approval.edit_undone"]
-    assert all(e["details"]["kind"] == "mail" and e["details"]["outbox_id"] == qid and e["actor"] == "owner" for e in edits)
+    assert all(e["details"]["kind"] == "external" and e["details"]["outbox_id"] == qid and e["actor"] == "owner" for e in edits)
     assert mcp._icloud_dashboard.audit.verify()["ok"] is True
 
 
 async def test_typing_the_original_back_by_hand_is_logged_as_bringing_it_back(web):
     app, mcp, *_ = web()
     qid = queue(mcp, subject="Plans", body="Original words")
-    src = mcp._icloud_dashboard.sources["mail"]
+    src = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         token = await signed_in(c)
-        sha = (await c.put(url(f"mail:{qid}"), json={"sha": src.pending()[0].sha256, "text": "Changed words"}, headers=api(token))).json()["sha"]
+        sha = (await c.put(url(f"external:{qid}"), json={"sha": src.pending()[0].sha256, "text": "Changed words"}, headers=api(token))).json()["sha"]
         assert src.pending()[0].edited_from is not None
-        r = await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": "Original words"}, headers=api(token))
+        r = await c.put(url(f"external:{qid}"), json={"sha": sha, "text": "Original words"}, headers=api(token))
         assert r.status_code == 200 and r.json()["changed"] is True
         entries = (await c.get("/dashboard/api/activity?filter=approvals")).json()["days"][0]["entries"]
-        assert [e["what"] for e in entries] == ["brought back the original text of email “Plans”", "edited email “Plans” before sending"]
+        assert [e["what"] for e in entries] == ["brought back the original text of email “Email”", "edited email “Email” before sending"]
     assert src.pending()[0].edited_from is None
     edits = [json.loads(line)["action"] for line in audit_text(mcp).splitlines() if '"approval.edit' in line]
     assert edits == ["approval.edited", "approval.edit_undone"]                          # the same entry "Bring it back" writes
@@ -335,7 +349,7 @@ def test_the_original_text_survives_a_restart_and_a_file_added_later(tmp_path):
 async def test_approval_status_is_not_disturbed_by_edit_entries_in_the_log(web):
     app, mcp, *_ = web()
     first, second = queue(mcp, subject="One", body="Asked for one"), queue(mcp, subject="Two", body="Asked for two")
-    mail = mcp._icloud_dashboard.sources["mail"]
+    mail = mcp._icloud_dashboard.sources["external"]
 
     async def ask(**args):
         return json.loads((await mcp.call_tool("approval_status", args)).content[0].text)
@@ -345,12 +359,12 @@ async def test_approval_status_is_not_disturbed_by_edit_entries_in_the_log(web):
         token = await signed_in(c)
         for qid, word in ((first, "one"), (second, "two")):
             sha = next(q for q in mail.pending() if q.id == qid).sha256
-            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": f"Edited {word}"}, headers=api(token))).json()["sha"]
+            sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": f"Edited {word}"}, headers=api(token))).json()["sha"]
             assert (await ask(id=qid))["status"] == "waiting"                              # an edit leaves it waiting
-            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))).json()["sha"]
-            sha = (await c.put(url(f"mail:{qid}"), json={"sha": sha, "text": f"Edited again {word}"}, headers=api(token))).json()["sha"]
+            sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "restore": True}, headers=api(token))).json()["sha"]
+            sha = (await c.put(url(f"external:{qid}"), json={"sha": sha, "text": f"Edited again {word}"}, headers=api(token))).json()["sha"]
             assert (await ask(id=qid))["status"] == "waiting"
-            await c.post(f"/dashboard/api/items/mail:{qid}/{'approve' if word == 'one' else 'discard'}", json={"sha": sha}, headers=api(token))
+            await c.post(f"/dashboard/api/items/external:{qid}/{'approve' if word == 'one' else 'discard'}", json={"sha": sha}, headers=api(token))
     got = await ask(id=first)
     assert (got["status"], got["kind"]) == ("sent", "mail") and got["id"] == first
     assert (await ask(id=second))["status"] == "discarded"

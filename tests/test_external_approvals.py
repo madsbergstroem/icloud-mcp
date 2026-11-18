@@ -79,7 +79,7 @@ def url(item_id):
 
 # -- nothing registered, nothing changes -----------------------------------------------------------------------------------
 async def test_without_a_registered_type_the_server_has_no_external_source(web, hub):
-    app, mcp, *_ = web()
+    app, mcp, *_ = web(READ_ONLY_AREAS="mail")                    # since package 6b held mail registers the mail types
     assert "external" not in mcp._icloud_dashboard.sources and "external" not in mcp._icloud_outboxes
     assert not [t.name for t in mcp._tool_manager.list_tools() if "external" in t.name]
     assert not (Path(mcp._icloud_dashboard.s.data_dir) / "external-outbox.json").exists()
@@ -147,13 +147,12 @@ async def test_a_queued_request_is_the_canonical_json_and_carries_its_type(web, 
     assert again.pending()[0].action_type == "test.echo" and again.pending()[0].raw == want        # survives a restart
 
 
-async def test_the_other_kinds_store_no_action_type_so_their_files_are_as_before(web):
+async def test_a_mail_is_an_action_that_says_its_type(web):
     app, mcp, *_ = web()
     from test_dashboard import queue
     queue(mcp)
-    box = mcp._icloud_dashboard.sources["mail"].mail.outbox             # the approval store since package 6a: the type stays in the row
-    assert [q.action_type for q in box.pending()] == [None]
-    assert all("action_type" not in q.to_json() for q in box.pending())
+    box = mcp._icloud_dashboard.sources["external"].box                 # since package 6b mail waits as an action of its type (D6-8)
+    assert [q.action_type for q in box.pending()] == ["mail.send"]
 
 
 async def test_parameters_are_checked_against_the_schema(web, hub):

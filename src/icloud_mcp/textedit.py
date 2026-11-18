@@ -21,92 +21,23 @@ owner types in who is not on the list is allowed for that request only; the vers
 from __future__ import annotations
 
 import asyncio
-import email
 import hmac
 import logging
-from email import policy
 from typing import Any
 
 from starlette.responses import Response
+
+from .gate.text import TextInvalid, TextLocked, clean, same  # noqa: F401  -- the gate's own since package 6b; read here as T.*
 
 log = logging.getLogger(__name__)
 
 _NOTHING = "Nothing was changed."
 
 
-class TextLocked(Exception):
-    """The text of this request cannot be edited here. The message says why, in words for the owner."""
-
-
-class TextInvalid(ValueError):
-    """The new text is not acceptable (empty, too long). The message says why, in words for the owner."""
-
-
-def clean(text: Any, *, allow_empty: bool, limit: int, strip: bool = False) -> str:
-    """The text as it will be stored: line breaks as \\n, no control characters."""
-    if not isinstance(text, str):
-        raise TextInvalid("The text is missing.")
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    if strip:
-        text = text.strip()
-    if "\x00" in text:
-        raise TextInvalid("The text has a character that cannot be sent.")
-    if not allow_empty and not text.strip():
-        raise TextInvalid("The text is empty.")
-    if len(text) > limit:
-        raise TextInvalid(f"The text is longer than {limit:,} characters.")
-    return text
-
-
-def same(a: str, b: str) -> bool:
-    """Two texts count as the same when only line-break style or the blank space at the end differs."""
-    return a.replace("\r\n", "\n").rstrip() == b.replace("\r\n", "\n").rstrip()
-
-
-# -- mail: the plain-text part of the stored MIME message, when there is no HTML part ----------------------------------------
-def _leaves(part: Any) -> Any:
-    if part.get_content_type() == "message/rfc822":
-        yield part
-    elif part.is_multipart():
-        for child in part.iter_parts():
-            yield from _leaves(child)
-    else:
-        yield part
-
-
-def mail_block(raw: bytes) -> str:
-    msg = email.message_from_bytes(raw, policy=policy.default)
-    if msg.get_content_type() in ("multipart/signed", "multipart/encrypted"):
-        return "This mail is signed or encrypted, so its text cannot be edited here."
-    if any(p.get_content_type() == "text/html" and p.get_content_disposition() != "attachment" for p in _leaves(msg)):
-        return ("This mail also has an HTML version, and only the plain text can be edited here. Changing one would leave "
-                "the two different.")
-    if msg.get_body(preferencelist=("plain",)) is None:
-        return "This mail has no plain-text part to edit."
-    return ""
-
-
-def mail_text(raw: bytes) -> str:
-    from .mail import _safe_content
-    part = email.message_from_bytes(raw, policy=policy.default).get_body(preferencelist=("plain",))
-    return _safe_content(part) if part is not None else ""
-
-
-def mail_with_text(raw: bytes, text: str) -> bytes:
-    from .mail import _set_text
-    msg = email.message_from_bytes(raw, policy=policy.default)
-    part = msg.get_body(preferencelist=("plain",))
-    if part is None:
-        raise TextLocked("This mail has no plain-text part to edit.")
-    part.clear_content()                  # the payload and the part's Content-* headers; From, To, Subject and the rest stay
-    _set_text(part, text)
-    return msg.as_bytes(policy=policy.SMTP)
-
-
 # -- what the app needs ------------------------------------------------------------------------------------------------------
 def outbox_of(src: Any) -> Any:
     """The queue a source reads (the same lookup the dashboard uses to hook up its push notes)."""
-    return getattr(getattr(src, "mail", None), "outbox", None) or getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
+    return getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
 
 
 def edit_info(src: Any, q: Any) -> dict[str, Any]:

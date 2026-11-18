@@ -15,8 +15,10 @@ async def test_the_state_counts_what_waits_by_kind_and_says_how_the_mac_is(web):
         await signed_in(c)
         s = (await c.get("/dashboard/api/state")).json()
         # the sidebar line: the type's badge; since package 5b the calendar's types have a line each (two share Cancellation)
-        assert s["kinds"] == {"mail": 1, "external:Invitation": 0, "external:Event update": 0, "external:Cancellation": 0,
-                              "external:Reply": 0, "external:iMessage": 2} and s["waiting"] == 3
+        # and since 6b the mail types (the side list names the type's badge, as for the others)
+        assert s["kinds"] == {"external:Email": 1, "external:Email reply": 0, "external:Forward": 0, "external:Invitation": 0,
+                              "external:Event update": 0, "external:Cancellation": 0, "external:Reply": 0, "external:iMessage": 2} \
+            and s["waiting"] == 3
         assert s["mac"] == "offline"                               # a helper is set up (BRIDGE_TOKEN) but has not connected
 
 
@@ -25,7 +27,7 @@ async def test_the_state_says_when_no_mac_helper_is_set_up(web):
     async with client(app) as c:
         await signed_in(c)
         s = (await c.get("/dashboard/api/state")).json()
-        assert s["mac"] == "off" and s["kinds"]["mail"] == 0
+        assert s["mac"] == "off" and s["kinds"]["external:Email"] == 0
 
 
 async def test_a_named_group_chat_is_titled_by_its_name_and_the_people_stay_in_the_card(web):
@@ -67,8 +69,8 @@ async def test_a_mail_says_which_account_it_goes_out_from(web):
     qid = queue(mcp)
     async with client(app) as c:
         await signed_in(c)
-        it = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
-        assert it["account"] == "iCloud"                             # the server's one account, by its provider
+        it = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
+        assert it["row_tags"] == {"From": "iCloud"}                   # the server's one account, by its provider, on the From row (6b)
 
 
 async def test_an_unclear_send_is_flagged_in_sent_today_and_activity_spells_imessage_right(web, monkeypatch):

@@ -47,7 +47,7 @@ def _expire(box, item_id):
 async def _scenario(web, monkeypatch) -> dict:
     app, mcp, _p, sent = web(ALLOW_CALENDAR_INVITES="approve", **IMESSAGE_ENV)
     dash = mcp._icloud_dashboard
-    mail_src, msg_src, cal_src = dash.sources["mail"], dash.sources["external"], dash.sources["external"]     # iMessage 4b, calendar 5b
+    mail_src, msg_src, cal_src = dash.sources["external"], dash.sources["external"], dash.sources["external"]     # iMessage 4b, calendar 5b, mail 6b
     ids: dict[str, str] = {}
     rec: dict = {}
 
@@ -76,7 +76,7 @@ async def _scenario(web, monkeypatch) -> dict:
     mail_id = name("mail-1", queue(mcp, subject="Lunch", body="See you at noon"))
     msg_id = name("imessage-1", queue_imessage(mcp)[1].id)
     cal_id = name("calendar-1", queue_calendar(mcp)[1].id)
-    keys = {"mail": f"mail:{mail_id}", "imessage": f"external:{msg_id}", "calendar": f"external:{cal_id}"}
+    keys = {"mail": f"external:{mail_id}", "imessage": f"external:{msg_id}", "calendar": f"external:{cal_id}"}
 
     async with client(app) as c:
         token = await signed_in(c)
@@ -132,7 +132,7 @@ async def _scenario(web, monkeypatch) -> dict:
                      "calendar": name("calendar-2", queue_calendar(mcp)[1].id)}
         rec["discard"] = {}
         for k, item_id in discarded.items():
-            src = "mail" if k == "mail" else "external"
+            src = "external"
             sha = (await get(f"/dashboard/api/items/{src}:{item_id}"))["body"]["sha"]
             rec["discard"][k] = await send("POST", f"/dashboard/api/items/{src}:{item_id}/discard", {"sha": sha})
         rec["status_discarded"] = {k: await _tool(mcp, "approval_status", id=item_id) for k, item_id in discarded.items()}
@@ -144,7 +144,7 @@ async def _scenario(web, monkeypatch) -> dict:
         lapsing = {"mail": name("mail-4", queue(mcp, subject="Too late", body="z")),
                    "imessage": name("imessage-5", queue_imessage(mcp, "Too late")[1].id),
                    "calendar": name("calendar-4", queue_calendar(mcp)[1].id)}
-        for k, box in (("mail", mail_src.mail.outbox), ("imessage", msg_src.box), ("calendar", cal_src.box)):
+        for k, box in (("mail", mail_src.box), ("imessage", msg_src.box), ("calendar", cal_src.box)):
             _expire(box, lapsing[k])
         rec["status_expired"] = {k: await _tool(mcp, "approval_status", id=item_id) for k, item_id in lapsing.items()}
         rec["status_unknown"] = await _tool(mcp, "approval_status", id="never-queued")

@@ -383,25 +383,65 @@ def test_the_type_of_each_mail_is_written_with_it(env, monkeypatch):
 
 
 # -- through the server's wiring ---------------------------------------------------------------------------------------------------
-def test_the_server_reads_outbox_json_in_once_with_ids_hashes_and_types(tmp_path, monkeypatch):
-    """protects=criterion 4 through the real wiring: the first start keeps every waiting mail with its id, hash, key and followup,
-    types it in the row, renames the file, and a second start changes nothing; fails_when=a mail is lost, renumbered, rehashed or
-    untyped, or the type leaks into what the mail reads back; no_claim=none beyond protects."""
+def test_the_server_moves_held_mail_to_the_mail_types_once(tmp_path, monkeypatch):
+    """protects=package 6b criterion 3, and 6a criterion 4 through the real wiring: mail held before 6b (the JSON file of before
+    6a, and rows of source mail, waiting and ended, one with two versions, one keyed draft whose key outlived its row, one with a
+    file of 5 MiB and one with a body too large for the canonical JSON) waits on under external with its id, state and versions,
+    its type from the row and a new hash, one approval.migrated line per waiting one naming both hashes; the draft's key still
+    answers already_decided; a second start moves nothing; fails_when=a mail is lost, doubled, keeps its old hash or source,
+    takes another type, loses a file or its key, or the log line is missing or repeated; no_claim=the Docker volume."""
+    import base64
     from icloud_mcp.outbox import Outbox
     from icloud_mcp.server import create_server
     for k, v in dict(ICLOUD_USERNAME=ME, ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", DATA_DIR=str(tmp_path), ALLOW_SEND="true",
-                     MCP_PUBLIC_URL="https://mcp.example.com", MCP_OWNER_PASSWORD="x" * 16).items():
+                     MCP_PUBLIC_URL="https://mcp.example.com", MCP_OWNER_PASSWORD="x" * 16, MAX_ATTACHMENT_BYTES=str(6 * 1024 * 1024)).items():
         monkeypatch.setenv(k, v)
+    s = Settings.from_env()
     old = Outbox(str(tmp_path), 3600, 20)
-    a = old.add(b"From: me@icloud.com\r\nTo: jana@example.org\r\nSubject: Lunch\r\n\r\nNoon?\r\n", ["jana@example.org"])
-    b = old.add(b"From: me@icloud.com\r\nTo: tom@example.net\r\nSubject: Fwd: Plan\r\n\r\nFYI\r\n", ["tom@example.net"],
-                {"folder": "INBOX", "uid": 9, "flag": "$Forwarded", "uidvalidity": 3}, key=None)
-    mcp, _ = create_server(Settings.from_env())
-    box = mcp._icloud_dashboard.sources["mail"].mail.outbox
-    assert sorted((q.id, q.sha256, q.followup, q.action_type) for q in box.pending()) == sorted(
-        [(a.id, a.sha256, None, None), (b.id, b.sha256, b.followup, None)])
-    assert dict(box._db.execute("SELECT id, action_type FROM request").fetchall()) == {a.id: "mail.send", b.id: "mail.forward"}
+    a = old.add(b"From: me@icloud.com\r\nTo: jana@example.org\r\nSubject: Lunch\r\nMessage-ID: <a1@icloud.com>\r\n\r\nNoon?\r\n", ["jana@example.org"])
+    rows = Store(str(tmp_path), "mail", 3600, 20, tombstones=True, type_of=mail_type_of, report_type=False)
+    built = MailService(s, outbox=rows)
+    big = bytes(range(256)) * (5 * 1024 * 1024 // 256)
+    f = built.send(to=["tom@example.net"], subject="Scan", body="Attached.",
+                   attachments=[{"filename": "scan.pdf", "content_base64": base64.b64encode(big).decode()}])["outbox_id"]
+    long_ = built.send(to=["jana@example.org"], subject="Minutes", body="Line of the minutes.\n" * 15000)["outbox_id"]
+    fwd = rows.add(b"From: me@icloud.com\r\nTo: tom@example.net\r\nSubject: Fwd: Plan\r\n\r\nFYI\r\n", ["tom@example.net"],
+                   {"folder": "INBOX", "uid": 9, "flag": "$Forwarded", "uidvalidity": 3})
+    fwd2 = rows.replace(fwd.id, fwd.sha256, fwd.raw.replace(b"FYI", b"FYI, see the plan"))
+    gone = rows.add(b"From: me@icloud.com\r\nTo: sam@example.net\r\nSubject: Old\r\n\r\nOld\r\n", ["sam@example.net"], key="draft:Drafts:7:4")
+    rows.claim(gone.id, "discarded")
+    rows._db.execute("UPDATE request SET decided_at = ? WHERE id = ?", (time.time() - 100 * 86400, gone.id))
+    rows._purged_at = 0
+    rows.pending()                                                    # the row goes with the retention, its key stays (6a)
+    hashes = {q.id: q.sha256 for q in rows.pending()}
+    mcp, _ = create_server(s)
+    src = mcp._icloud_dashboard.sources["external"]
+    box, mail = src.box, src.registry.get("mail.send").executor.svc
+    got = {q.id: q for q in box.pending()}
+    assert sorted(got) == sorted([a.id, f, long_, fwd.id]) and not box.has_source("mail") and "mail" not in mcp._icloud_outboxes
+    assert {i: q.action_type for i, q in got.items()} == {a.id: "mail.send", f: "mail.send", long_: "mail.send", fwd.id: "mail.forward"}
+    assert [i for i, h in {**hashes, a.id: a.sha256}.items() if got[i].sha256 == h] == []
+    assert [v["author"] for v in box.versions(fwd.id)] == ["assistant", "owner"]
+    assert json.loads(box.versions(fwd.id)[0]["raw"])["params"]["message"] != json.loads(box.versions(fwd.id)[1]["raw"])["params"]["message"]
+    assert json.loads(got[fwd.id].raw)["params"]["followup"] == fwd2.followup
+    assert json.loads(got[long_].raw)["params"]["message_blob"] and len(got[f].raw) < 4000
+    assert mail.message_of(got[a.id])["Message-ID"] == "<a1@icloud.com>"
     assert (tmp_path / "outbox.json.migrated").exists() and not (tmp_path / "outbox.json").exists()
+    lines = [json.loads(x) for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]
+    assert sorted((e["details"]["outbox_id"], e["details"]["old_sha256"], e["details"]["sha256"]) for e in lines) == \
+           sorted((i, {**hashes, a.id: a.sha256}[i], got[i].sha256) for i in got)
+    assert box._db.execute("SELECT source, request_id FROM key_tombstone").fetchall()[0][:] == ("external", gone.id)
+    with pytest.raises(A.AlreadyDecided):
+        src.queue_external("mail.send", {**json.loads(got[a.id].raw)["params"], "subject": "Old"}, None, key="draft:Drafts:7:4",
+                           key_fingerprint="x")
+    create_server(s)
+    assert len([x for x in (tmp_path / "audit.jsonl").read_text().splitlines() if "approval.migrated" in x]) == 4
+    sent = []
+    monkeypatch.setattr(MailService, "_smtp_send", lambda self, msg, rcpts: sent.append(msg.as_bytes()) or {})
+    monkeypatch.setattr(MailService, "imap", contextlib.contextmanager(lambda self, fresh=False: (yield FakeIMAP())))
+    assert src.release(got[f]).delivery == "sent"
+    wire = email.message_from_bytes(sent[0], policy=policy.default)
+    assert [p.get_payload(decode=True) for p in mail_mod.iter_attachment_parts(wire)] == [big]   # the same bytes, 5 MiB
 
 
 async def test_the_card_logs_refused_recipients_and_an_unclear_send_reads_unclear(web, monkeypatch):
@@ -420,24 +460,25 @@ async def test_the_card_logs_refused_recipients_and_an_unclear_send_reads_unclea
             raise SmtpFailed("SMTP send failed: timed out.", True) from TimeoutError("timed out")
         return {"tom@example.net": (550, b"No such user here")}
     monkeypatch.setattr(MailService, "_smtp_send", smtp)
-    mail = mcp._icloud_dashboard.sources["mail"].mail
+    mail = mcp._icloud_dashboard.sources["external"].registry.get("mail.send").executor.svc     # mail on the external source (6b)
     first = mail.send(to=["jana@example.org", "tom@example.net"], subject="Lunch", body="Noon?")["outbox_id"]
     second = mail.send(to=["jana@example.org"], subject="Dinner", body="Seven?")["outbox_id"]
     async with client(app) as c:
         h = api(await signed_in(c))
         for item in (first, second):
-            sha = (await c.get(f"/dashboard/api/items/mail:{item}")).json()["sha"]
-            got = (await c.post(f"/dashboard/api/items/mail:{item}/approve", json={"sha": sha}, headers=h)).json()
+            sha = (await c.get(f"/dashboard/api/items/external:{item}")).json()["sha"]
+            got = (await c.post(f"/dashboard/api/items/external:{item}/approve", json={"sha": sha}, headers=h)).json()
             if item == first:
                 assert got["note"] == "Sent to jana@example.org. The mail server refused 1: tom@example.net." and "state" not in got
             else:
                 assert got["state"] == "unclear" and "may or may not have gone out" in got["note"]
     lines = {e["details"]["outbox_id"]: e["details"] for e in mcp._icloud_dashboard.audit.entries(20) if e["action"] == "approval.sent"}
-    assert lines[first]["refused"] == 1 and lines[first].get("delivery") is None and "action_type" not in lines[first]
+    # since package 6b the line names the type, and a sent mail's delivery is "sent", as for every action (D6-8)
+    assert lines[first]["refused"] == 1 and lines[first]["delivery"] == "sent" and lines[first]["action_type"] == "mail.send"
     assert lines[second]["delivery"] == "unconfirmed" and "refused" not in lines[second]
     status = J.loads((await mcp.call_tool("approval_status", {"id": second})).content[0].text)
-    assert status["status"] == "unclear" and set(status) == {"id", "kind", "status", "edited", "at"}
-    assert mail.outbox.state_of(first) == ("sent", None) and mail.outbox.state_of(second) == ("unclear", None)
+    assert status["status"] == "unclear" and status["kind"] == "mail" and set(status) == {"id", "kind", "status", "edited", "at", "action_type"}
+    assert mail.external.box.state_of(first) == ("sent", None) and mail.external.box.state_of(second) == ("unclear", None)
 
 
 # -- package 6b: the mail types ------------------------------------------------------------------------------------------------------

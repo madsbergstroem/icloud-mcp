@@ -52,13 +52,13 @@ async def test_today_lists_what_waits_and_an_item_opens_with_its_message(web):
         h = await signed(c)
         qid = queue(mcp, subject="Meeting on Thursday", body="Does 10 work?")
         today = (await c.get("/dashboard/api/today")).json()
-        assert [w["title"] for w in today["waiting"]] == ["Meeting on Thursday"]
-        assert today["waiting"][0]["to"] == "bob@example.org" and today["waiting"][0]["key"] == f"mail:{qid}"
-        it = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()
+        assert [(w["title"], w["subject"]) for w in today["waiting"]] == [("Email", "Meeting on Thursday")]     # package 6b, variant A
+        assert today["waiting"][0]["to"] == "bob@example.org" and today["waiting"][0]["key"] == f"external:{qid}"
+        it = (await c.get(f"/dashboard/api/items/external:{qid}")).json()
         assert it["text"].strip() == "Does 10 work?" and it["approve_label"] == "Send" and it["files"] == [] and it["missing"] == []
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": it["sha"]}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": it["sha"]}, headers=h)
         assert r.status_code == 200 and "bob@example.org" in r.json()["note"]
-        assert (await c.get(f"/dashboard/api/items/mail:{qid}")).status_code == 404
+        assert (await c.get(f"/dashboard/api/items/external:{qid}")).status_code == 404
         assert (await c.get("/dashboard/api/today")).json()["waiting"] == []
 
 
@@ -67,31 +67,32 @@ async def test_a_changed_or_unknown_item_is_refused_and_discard_sends_nothing(we
     async with client(app) as c:
         h = await signed(c)
         qid = queue(mcp)
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/approve", json={"sha": "0" * 64}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{qid}/approve", json={"sha": "0" * 64}, headers=h)
         assert r.status_code == 409 and not sent
-        sha = (await c.get(f"/dashboard/api/items/mail:{qid}")).json()["sha"]
-        r = await c.post(f"/dashboard/api/items/mail:{qid}/discard", json={"sha": sha}, headers=h)
+        sha = (await c.get(f"/dashboard/api/items/external:{qid}")).json()["sha"]
+        r = await c.post(f"/dashboard/api/items/external:{qid}/discard", json={"sha": sha}, headers=h)
         assert r.status_code == 200 and r.json()["note"].startswith("Discarded") and not sent
 
 
 async def test_attachments_are_listed_and_only_safe_kinds_are_previewed(web):
     app, mcp, *_ = web()
-    mail = mcp._icloud_dashboard.sources["mail"].mail
+    src = mcp._icloud_dashboard.sources["external"]          # since package 6b a mail waits as an action of its type
+    mail = src.registry.get("mail.send").executor.svc
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = "me@icloud.com", "bob@example.org", "Files"
     msg.set_content("See attached.")
     msg.add_attachment(b"%PDF-1.4 example", maintype="application", subtype="pdf", filename="Receipts.pdf")
     msg.add_attachment(b"MZ\x90\x00", maintype="application", subtype="octet-stream", filename="tool.exe")
-    q = mail.outbox.add(msg.as_bytes(), ["bob@example.org"])
+    q = src.queue_external("mail.send", mail.params_of(msg, None), None)
     async with client(app) as c:
         await signed(c)
-        it = (await c.get(f"/dashboard/api/items/mail:{q.id}")).json()
+        it = (await c.get(f"/dashboard/api/items/external:{q.id}")).json()
         files = {f["filename"]: f for f in it["files"]}
         assert files["Receipts.pdf"]["preview"] is True and files["tool.exe"]["preview"] is False
-        r = await c.get(f"/dashboard/api/items/mail:{q.id}/files/{files['Receipts.pdf']['index']}")
+        r = await c.get(f"/dashboard/api/items/external:{q.id}/files/{files['Receipts.pdf']['index']}")
         assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and r.content.startswith(b"%PDF")
         assert "sandbox" in r.headers["content-security-policy"] and r.headers["x-content-type-options"] == "nosniff"
-        r = await c.get(f"/dashboard/api/items/mail:{q.id}/files/{files['tool.exe']['index']}")
+        r = await c.get(f"/dashboard/api/items/external:{q.id}/files/{files['tool.exe']['index']}")
         assert r.status_code == 415
 
 
@@ -216,7 +217,7 @@ async def test_notifications_a_device_subscribes_gets_a_note_for_a_new_request_a
         assert r.status_code == 200
         qid = queue(mcp, subject="Private subject", body="Private text")
         note = _json.loads(decrypt(svc.calls[-1][1], ua, auth))
-        assert note == {"title": "Approval needed", "body": "An email is waiting for your approval.", "open": f"mail:{qid}"}
+        assert note == {"title": "Approval needed", "body": "An email is waiting for your approval.", "open": f"external:{qid}"}
         assert (await c.post("/dashboard/api/push/test", json={}, headers=h)).json()["ok"] == 1
         dev = (await c.get("/dashboard/api/push")).json()["devices"][0]
         assert dev["label"] == "iPhone · Safari" and dev["last_sent_at"]
