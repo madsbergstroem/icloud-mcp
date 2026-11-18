@@ -38,7 +38,7 @@ function formView(it) {
   const people = f.some((x) => x.recipient);
   return titleBlock(it.title, "Editing")
     + `<div class="cf">${rows}${text}</div>
-      <p class="note">${people ? "Someone you type in who is not on your list is allowed for this request only. " : ""}Your changes become a new version; several in a row count as one. The earlier ones stay in the list.</p>`;
+      <p class="note">${people ? "Someone you type in who is not on your list is allowed for this request only. " : ""}${it.edit_note ? `${esc(it.edit_note)} ` : ""}Your changes become a new version; several in a row count as one. The earlier ones stay in the list.</p>`;
 }
 
 function wireForm(el, key, it, done) {

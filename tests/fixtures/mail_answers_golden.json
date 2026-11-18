@@ -1,0 +1,213 @@
+{
+ "approval_status": {
+  "draft": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:draft>",
+   "kind": "mail",
+   "status": "waiting"
+  },
+  "forward": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:forward>",
+   "kind": "mail",
+   "status": "waiting"
+  },
+  "forward_withdrawn": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:forward>",
+   "kind": "mail",
+   "status": "withdrawn"
+  },
+  "reply": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:reply>",
+   "kind": "mail",
+   "status": "waiting"
+  },
+  "send": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:send>",
+   "kind": "mail",
+   "status": "waiting"
+  },
+  "send_sent": {
+   "at": "<volatile>",
+   "edited": false,
+   "id": "<id:send>",
+   "kind": "mail",
+   "status": "sent"
+  }
+ },
+ "draft": {
+  "approve_at": "https://mcp.example.com/dashboard#/item/mail:<id:draft>",
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in 'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status with the outbox_id says what became of it.",
+  "outbox_id": "<id:draft>",
+  "recipients": [
+   "tom@example.net"
+  ],
+  "sent": false,
+  "status": "queued_for_owner_approval",
+  "subject": "Holiday rota",
+  "to": [
+   {
+    "email": "tom@example.net",
+    "name": ""
+   }
+  ]
+ },
+ "draft_after_sent": {
+  "already_decided": true,
+  "notice": "Nothing was queued: this draft was already queued once and that mail was decided. Do not send it again; approval_status with the outbox_id says more, and the owner can send the draft from Mail.",
+  "outbox_id": "<id:draft>",
+  "sent": true,
+  "status": "sent"
+ },
+ "draft_again": {
+  "already_queued": true,
+  "approve_at": "https://mcp.example.com/dashboard#/item/mail:<id:draft>",
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in 'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status with the outbox_id says what became of it.",
+  "outbox_id": "<id:draft>",
+  "recipients": [
+   "tom@example.net"
+  ],
+  "sent": false,
+  "status": "queued_for_owner_approval",
+  "subject": "Holiday rota",
+  "to": [
+   {
+    "email": "tom@example.net",
+    "name": ""
+   }
+  ]
+ },
+ "forward": {
+  "approve_at": "https://mcp.example.com/dashboard#/item/mail:<id:forward>",
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in 'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status with the outbox_id says what became of it.",
+  "outbox_id": "<id:forward>",
+  "recipients": [
+   "tom@example.net"
+  ],
+  "sent": false,
+  "status": "queued_for_owner_approval",
+  "subject": "Fwd: Invoice 2291",
+  "to": [
+   {
+    "email": "tom@example.net",
+    "name": ""
+   }
+  ]
+ },
+ "reply": {
+  "approve_at": "https://mcp.example.com/dashboard#/item/mail:<id:reply>",
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "in_reply_to": "<message-id>",
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in 'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status with the outbox_id says what became of it.",
+  "outbox_id": "<id:reply>",
+  "recipients": [
+   "jana@example.org"
+  ],
+  "sent": false,
+  "status": "queued_for_owner_approval",
+  "subject": "Re: Invoice 2291",
+  "to": [
+   {
+    "email": "jana@example.org",
+    "name": "Jana Example"
+   }
+  ]
+ },
+ "send": {
+  "approve_at": "https://mcp.example.com/dashboard#/item/mail:<id:send>",
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message is queued and is delivered only if the owner approves it on their approval page (address in 'approve_at'), where they sign in themselves. Tell the owner it is waiting there. You cannot approve, discard, speed up or bypass this. If it is wrong, approval_withdraw takes it back; ask the owner before you queue a corrected one. Never ask for, guess or handle the owner password, and never send the owner to any other address. Do not send it again: approval_status with the outbox_id says what became of it.",
+  "outbox_id": "<id:send>",
+  "recipients": [
+   "jana@example.org"
+  ],
+  "sent": false,
+  "status": "queued_for_owner_approval",
+  "subject": "Lunch on Friday",
+  "to": [
+   {
+    "email": "jana@example.org",
+    "name": ""
+   }
+  ]
+ },
+ "send_waiting_for_file": {
+  "cc": [],
+  "expires_in_seconds": "<volatile>",
+  "files_to_add": [
+   {
+    "filename": "Quote.pdf",
+    "upload_url": "https://mcp.example.com/files/<token>"
+   }
+  ],
+  "message_id": "<message-id>",
+  "notice": "NOT SENT. This message waits for the files in 'files_to_add' and then for the owner's approval. If you can reach a file (a shell, a script, an HTTP client), send its raw bytes with an HTTP PUT to its upload_url, for example curl -T Quote.pdf '<upload_url>'. Otherwise give the owner 'owner_link': they add the file there and approve the message. An upload_url is a password for that one file: never put it anywhere else.",
+  "outbox_id": "<id:send_waiting_for_file>",
+  "owner_link": "https://mcp.example.com/dashboard#/item/mail:<id:send_waiting_for_file>",
+  "recipients": [
+   "jana@example.org"
+  ],
+  "sent": false,
+  "status": "queued_waiting_for_files",
+  "subject": "Quote",
+  "to": [
+   {
+    "email": "jana@example.org",
+    "name": ""
+   }
+  ]
+ },
+ "upload": {
+  "body": {
+   "filename": "Quote.pdf",
+   "next": "The mail now waits for the owner's approval. It is not sent yet.",
+   "ok": true,
+   "size": 16,
+   "still_waiting": []
+  },
+  "status": 200
+ },
+ "upload_again": {
+  "body": {
+   "error": "No file is waiting here: it was already added, or the message was sent, discarded or has expired.",
+   "ok": false
+  },
+  "status": 404
+ },
+ "withdraw": {
+  "id": "<id:forward>",
+  "status": "withdrawn",
+  "withdrawn": true
+ },
+ "withdraw_again": {
+  "id": "<id:forward>",
+  "status": "withdrawn",
+  "withdrawn": false
+ },
+ "withdraw_sent": {
+  "id": "<id:send>",
+  "status": "sent",
+  "withdrawn": false
+ }
+}

@@ -225,7 +225,7 @@ class Item extends HTMLElement {
   card() {
     const it = this.it;
     // the quoted mail it answers is folded away, so the new text and the buttons are what you see first
-    const m = it.kind === "mail" ? /^(On .+ wrote:|Am .+ schrieb .+:|-{2,} ?Original Message ?-{2,}|>)/m.exec(it.text || "") : null;
+    const m = it.kind === "mail" || it.text_style === "mail" ? /^(On .+ wrote:|Am .+ schrieb .+:|-{2,} ?Original Message ?-{2,}|>)/m.exec(it.text || "") : null;
     const own = m ? it.text.slice(0, m.index).trimEnd() : (it.text || "");
     const quoted = m ? it.text.slice(m.index) : "";
     const long = own.length > 900;
@@ -235,7 +235,9 @@ class Item extends HTMLElement {
     const ext = it.kind === "external" && !chat;
     // a value the service changed since the owner looked is marked (package 2c)
     const fresh = new Set([...(it.changed || []).map((c) => c.label), ...(it.edited_rows || [])]);
-    const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}</dd>`;
+    // a type may tag a row's value (package 6b: the account a mail goes out from, "iCloud")
+    const rowTag = (k) => (it.row_tags && it.row_tags[k] ? ` ${tag(it.row_tags[k])}` : "");
+    const dd = ([k, v]) => `<dt>${esc(k)}</dt><dd>${fresh.has(k) ? `<mark class="changed">${esc(v)}</mark>` : esc(v)}${rowTag(k)}</dd>`;
     // a type that names who it reaches under the title (to_shown) has no recipient row: all its rows come before the text
     const rows = ext ? (it.to_shown ? it.rows : it.rows.slice(0, 1)).map(dd).join("") : this.rowsHtml();
     const more = ext && !it.to_shown ? it.rows.slice(1).map(dd).join("") : "";
@@ -295,7 +297,8 @@ class Item extends HTMLElement {
   resultHtml() {
     const r = this.result, it = this.it;
     if (!r) return "";
-    const to = it.kind === "external" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
+    // a mail names whom it goes to (package 6b keeps it); another action names its kind
+    const to = it.kind === "external" && it.text_style !== "mail" ? esc(it.badge) : it.to ? esc(it.to) : "the recipients";
     // a type's own note says where to look (a calendar change: the calendar), so the line does not name the type as a place
     if (r.state === "unclear" && it.kind === "external") return `<div class="notice warn"><div>${r.note ? "<b>Not sure it went through.</b> Nothing will be sent again." : `<b>Not sure it reached ${esc(it.badge)}.</b> Nothing will be sent again; look there first.`}
       <div class="btns"><ion-button size="small" data-done>Done</ion-button></div>${r.note ? `<p class="sub" style="margin:10px 0 0">${esc(r.note)}</p>` : ""}</div></div>`;
@@ -363,6 +366,10 @@ class Item extends HTMLElement {
           ${f.added ? `<div style="display:flex;gap:4px;margin-top:4px"><ion-button size="small" fill="clear" data-replace="${f.index}">Replace</ion-button>
             <ion-button size="small" fill="clear" color="danger" data-remove="${f.index}">Remove</ion-button>
             <input type="file" hidden data-input="${f.index}"></div>` : ""}</ion-label></ion-item>`).join("")}</ion-list>`;
+    }
+    // what the request answers or forwards, as its type read it (package 6b): its subject and its sender, never more
+    if (it.kind === "external" && it.original && !it.original.unavailable && (it.original.subject || it.original.from)) {
+      h += `<p class="note"><b>${esc(it.original.label || "In reply to")}</b> “${esc(it.original.subject || "(no subject)")}”${it.original.from ? ` from ${esc(it.original.from)}` : ""}</p>`;
     }
     const notes = it.notes.filter((n) => !n.startsWith("Attachments:") && !n.startsWith("Waiting for:") && !n.startsWith("In reply to:"));
     h += `<p class="note">${notes.map(esc).join(" ")} This request expires in about ${esc(left(it.expires_at))}.${it.edit && it.edit.edited

@@ -39,6 +39,11 @@ What else holds:
 - A store opened with tombstones=True (mail, package 6a: a key names one saved draft) keeps a bound key beyond keep_days: when an
   ended row is dropped, its key, fingerprint, ending and time stay in `key_tombstone`, and asking again with that key answers as
   if the row were still there (AlreadyDecided). Tombstones are not dropped with the activity retention.
+- Blobs (package 6b): what does not fit a request's canonical JSON (a mail's attachments, a large body) is kept in `blob`, by its
+  sha256. A type stages a blob before it names it (stage), and every version that names one is a row of `blob_ref`, which the
+  store works out from the version's bytes (refs_of, set by the external source). A blob goes, in the same transaction, once
+  nothing names it any more: its last version ended, was dropped or was written over. A staged blob nothing named within an hour
+  goes too.
 - The database and its WAL files are mode 600; a database file others can read stops the start, and so does one written by a
   newer version (PRAGMA user_version).
 - On first start the source's JSON queue file is read into the table and renamed `<name>.migrated`, row by row: an id already
@@ -104,6 +109,17 @@ CREATE TABLE IF NOT EXISTS version (
   raw         BLOB,
   PRIMARY KEY (request_id, n)
 );
+CREATE TABLE IF NOT EXISTS blob (
+  sha256     TEXT PRIMARY KEY,
+  data       BLOB NOT NULL,
+  staged_at  REAL
+);
+CREATE TABLE IF NOT EXISTS blob_ref (
+  request_id  TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  sha256      TEXT NOT NULL,
+  PRIMARY KEY (request_id, n, sha256)
+);
 CREATE TABLE IF NOT EXISTS key_tombstone (
   source          TEXT NOT NULL,
   key             TEXT NOT NULL,
@@ -137,6 +153,10 @@ class KeyConflict(Exception):
     """The key is bound to a request with other parameters."""
 
 
+class MissingBlob(StoreUnavailable):
+    """A version names a blob the store does not hold (it was never staged, or was dropped before it was named)."""
+
+
 def _hold_lock(data_dir: Path) -> bool:
     """Take DATA_DIR's lock for this process. True the first time (this open recovers crashed rows), False when this process
     already holds it. Another process holding it stops the start with the lock's path."""
@@ -164,12 +184,14 @@ class Store:
     keeps_keys = True                        # a key stays bound after its request ended (external.py asks for the fingerprint)
 
     def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None,
-                 type_of: Any = None, tombstones: bool = False, report_type: bool = True):
+                 type_of: Any = None, tombstones: Any = False, report_type: bool = True):
         """source: which kind of request this store holds (external, imessage, calendar, mail). legacy: the JSON queue file to read
         in once. type_of(q): the action type of a request read in from that file or queued without one (package 5a: the
         calendar's operation; 6a: mail's kind), so it outlasts the request's content. tombstones: keep bound keys after their rows
-        are dropped (package 6a). report_type=False keeps the type in the row only: the requests read back carry none, so what
-        the log, approval_status and the pages say stays as before (mail in 6a; 6b reports it)."""
+        are dropped (package 6a); a collection of action types keeps only the keys of rows of those types (the external source
+        since 6b: mail's keys, not those of the actions agents ask for). report_type=False keeps the type in the row only: the
+        requests read back carry none, so what the log, approval_status and the pages say stays as before (mail in 6a; 6b
+        reports it). refs_of(raw), set later by the external source: the blobs a version's bytes name."""
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source, self.ttl, self.max_items, self.keep_days = source, ttl, max_items, max(1, keep_days)
@@ -181,8 +203,9 @@ class Store:
         self._lock = threading.RLock()
         self._purged_at = 0.0
         self.type_of = type_of
-        self.tombstones = tombstones
+        self.tombstones = tombstones if isinstance(tombstones, bool) else tuple(tombstones)
         self.report_type = report_type
+        self.refs_of: Any = None
         first = _hold_lock(self.dir)
         self._db = self._open()
         if first:
@@ -240,13 +263,68 @@ class Store:
         self._db.execute("UPDATE request SET state = ?, decided_at = ?, outcome_reason = ?, raw = NULL, recipients = NULL, "
                          "followup = NULL, edited_from = NULL WHERE id = ?", (state, time.time(), reason, item_id))
         self._db.execute("UPDATE version SET raw = NULL WHERE request_id = ?", (item_id,))
+        self._unref(item_id)
 
     def _version(self, item_id: str, sha: str, raw: bytes, author: str) -> int:
         """Inside a transaction: add the next version of a request. Returns its number."""
         n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM version WHERE request_id = ?", (item_id,)).fetchone()[0]
         self._db.execute("INSERT INTO version (request_id, n, created_at, author, sha256, raw) VALUES (?,?,?,?,?,?)",
                          (item_id, n, time.time(), author, sha, raw))
+        self._ref(item_id, n, raw)
         return n
+
+    # -- blobs (package 6b) -----------------------------------------------------------------------------------------------
+    def stage(self, data: bytes) -> str:
+        """Keep `data` as a blob a version is about to name; returns its sha256. Nothing names it yet: unnamed for an hour, it
+        goes. Inside the store's own transaction (a conversion while adopt runs) it joins that transaction."""
+        sha = hashlib.sha256(data).hexdigest()
+        with self._lock:
+            if self._db.in_transaction:
+                self._put_blob(sha, data)
+            else:
+                with self._tx():
+                    self._put_blob(sha, data)
+        return sha
+
+    def _put_blob(self, sha: str, data: bytes) -> None:
+        self._db.execute("INSERT OR IGNORE INTO blob (sha256, data, staged_at) VALUES (?, ?, ?)", (sha, data, time.time()))
+        self._db.execute("UPDATE blob SET staged_at = ? WHERE sha256 = ? AND staged_at IS NOT NULL", (time.time(), sha))
+
+    def blob(self, sha: str) -> bytes | None:
+        """A blob's bytes, or None when the store does not hold it."""
+        with self._lock:
+            r = self._db.execute("SELECT data FROM blob WHERE sha256 = ?", (sha,)).fetchone()
+        return bytes(r["data"]) if r is not None else None
+
+    def _ref(self, item_id: str, n: int, raw: bytes | None) -> None:
+        """Inside a transaction: the blobs version n names, from its bytes; each must be held (MissingBlob otherwise). The blobs it
+        named before and names no more go when nothing else names them."""
+        self._db.execute("DELETE FROM blob_ref WHERE request_id = ? AND n = ?", (item_id, n))
+        shas: set[str] = set()
+        if raw is not None and self.refs_of is not None:
+            try:
+                shas = {str(x) for x in self.refs_of(bytes(raw))}
+            except Exception:  # noqa: BLE001  -- bytes no type can read name nothing
+                shas = set()
+        for sha in sorted(shas):
+            if not self._db.execute("SELECT 1 FROM blob WHERE sha256 = ?", (sha,)).fetchone():
+                raise MissingBlob(sha)
+            self._db.execute("INSERT OR IGNORE INTO blob_ref (request_id, n, sha256) VALUES (?, ?, ?)", (item_id, n, sha))
+            self._db.execute("UPDATE blob SET staged_at = NULL WHERE sha256 = ?", (sha,))
+        self._gc()
+
+    def _unref(self, item_id: str, n: int | None = None) -> None:
+        """Inside a transaction: the versions of a request (all, or version n) name no blob any more."""
+        if n is None:
+            self._db.execute("DELETE FROM blob_ref WHERE request_id = ?", (item_id,))
+        else:
+            self._db.execute("DELETE FROM blob_ref WHERE request_id = ? AND n = ?", (item_id, n))
+        self._gc()
+
+    def _gc(self) -> None:
+        """Inside a transaction: drop every blob nothing names, and staged ones nothing named within an hour."""
+        self._db.execute("DELETE FROM blob WHERE sha256 NOT IN (SELECT sha256 FROM blob_ref) AND "
+                         "(staged_at IS NULL OR staged_at < ?)", (time.time() - 3600,))
 
     def versions(self, item_id: str) -> list[dict[str, Any]]:
         """Every version of a request, oldest first: n, created_at, author, sha256, raw (None once the request ended)."""
@@ -309,13 +387,17 @@ class Store:
                     self._purged_at = now
                     with self._tx():
                         if self.tombstones:              # a key still bound outlives its row (D6-3)
+                            kinds = "" if self.tombstones is True else f" AND action_type IN ({','.join('?' * len(self.tombstones))})"
                             self._db.execute("INSERT OR REPLACE INTO key_tombstone (source, key, request_id, key_fingerprint, state, decided_at) "
                                              "SELECT source, key, id, key_fingerprint, state, decided_at FROM request WHERE source = ? AND "
-                                             f"state NOT IN ('waiting', 'executing') AND decided_at < ? AND key IS NOT NULL AND NOT COALESCE(({_FREEING}), 0)",
-                                             (self.source, now - self.keep_days * 86400))
+                                             f"state NOT IN ('waiting', 'executing') AND decided_at < ? AND key IS NOT NULL AND NOT COALESCE(({_FREEING}), 0)"
+                                             + kinds, (self.source, now - self.keep_days * 86400,
+                                                       *(() if self.tombstones is True else self.tombstones)))
                         self._db.execute("DELETE FROM request WHERE source = ? AND state NOT IN ('waiting', 'executing') AND decided_at < ?",
                                          (self.source, now - self.keep_days * 86400))
                         self._db.execute("DELETE FROM version WHERE request_id NOT IN (SELECT id FROM request)")
+                        self._db.execute("DELETE FROM blob_ref WHERE request_id NOT IN (SELECT id FROM request)")
+                        self._gc()
         except sqlite3.OperationalError as e:
             log.warning("approval store: expiry skipped this time (%s)", type(e).__name__)
             return
@@ -447,9 +529,11 @@ class Store:
                 before = self._db.execute("SELECT sha256 FROM version WHERE request_id = ? AND n = ?", (item_id, last["n"] - 1)).fetchone()
                 if before is not None and before["sha256"] == new_sha:      # back to what was there before the owner's edits
                     self._db.execute("DELETE FROM version WHERE request_id = ? AND n = ?", (item_id, last["n"]))
+                    self._unref(item_id, last["n"])
                 else:                                                       # edits in a row are one version
                     self._db.execute("UPDATE version SET raw = ?, sha256 = ?, created_at = ? WHERE request_id = ? AND n = ?",
                                      (raw, new_sha, time.time(), item_id, last["n"]))
+                    self._ref(item_id, last["n"], raw)
             else:
                 self._version(item_id, new_sha, raw, author)
             return q
@@ -568,11 +652,14 @@ class Store:
                         continue
                     self._db.execute("UPDATE version SET raw = ?, sha256 = ? WHERE request_id = ? AND n = ?",
                                      (vraw, hashlib.sha256(vraw).hexdigest(), r["id"], v["n"]))
+                    self._ref(r["id"], v["n"], vraw)
                 self._db.execute("UPDATE request SET source = ?, action_type = ?, raw = ?, sha256 = ?, followup = ? WHERE id = ?",
                                  (self.source, action_type or r["action_type"], new_raw, new_sha,
                                   r["followup"] if action_type is not None or new_raw == r["raw"] else None, r["id"]))
                 if r["state"] == "waiting":
                     moved.append((r["id"], old_sha, new_sha))
+            # the keys a source kept beyond its rows (mail's tombstones, package 6a) move with them (package 6b)
+            self._db.execute("UPDATE OR IGNORE key_tombstone SET source = ? WHERE source = ?", (self.source, other))
         if rows:
             log.info("approval store: %d %s request(s) moved to %s", len(rows), other, self.source)
         return moved
@@ -602,8 +689,9 @@ class Store:
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
         file in again and never revives a request the old version already sent. Refused while a request is being carried out.
         only/skip pick action types; as_params writes an action's parameters as its bytes, the form a source had before it became
-        an action type (package 4b: iMessage back to 4a), with the hash of those bytes; as_object(type, params) -> (bytes,
-        metadata) writes the bytes and metadata a source kept before (package 5b: a calendar change back to 5a). A request
+        an action type (package 4b: iMessage back to 4a), with the hash of those bytes; as_object(type, params, blob) -> (bytes,
+        metadata) writes the bytes and metadata a source kept before (package 5b: a calendar change back to 5a; 6b: a mail, whose
+        attachments it reads with blob(sha256)). A request
         written in another source's form is removed here instead of ended: the previous version reads it in under its own source
         with the same id, which a row left here would hold.
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
@@ -616,7 +704,7 @@ class Store:
                                       sha256=hashlib.sha256(b).hexdigest(), action_type=None) for q in waiting]
             elif as_object is not None:
                 waiting = [dc_replace(q, raw=raw, followup=meta, sha256=hashlib.sha256(raw).hexdigest())
-                           for q in waiting for raw, meta in [as_object(q.action_type, json.loads(q.raw.decode())["params"])]]
+                           for q in waiting for raw, meta in [as_object(q.action_type, json.loads(q.raw.decode())["params"], self.blob)]]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]
             unclear = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'unclear'", (self.source,)).fetchone()[0]
             tmp = path.with_suffix(".tmp")
@@ -628,6 +716,7 @@ class Store:
                     if as_params or as_object is not None:                 # read in again under the source it came from
                         self._db.execute("DELETE FROM request WHERE id = ?", (q.id,))
                         self._db.execute("DELETE FROM version WHERE request_id = ?", (q.id,))
+                        self._unref(q.id)
                         continue
                     self._end(q.id, "discarded", "exported")
                     self._db.execute("UPDATE request SET key = NULL WHERE id = ?", (q.id,))

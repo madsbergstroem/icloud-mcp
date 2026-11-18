@@ -97,11 +97,13 @@ def _record(item_id: str, kind: str | None, status: str, t: Any, edited: bool = 
 
 
 class ApprovalLedger:
-    def __init__(self, outboxes: dict[str, Any], audit: Any):
+    def __init__(self, outboxes: dict[str, Any], audit: Any, kinds: Any = None):
         """outboxes: kind -> Outbox (None entries are skipped). Also starts logging every entry that times out unanswered, which
-        the outbox otherwise drops without a trace."""
+        the outbox otherwise drops without a trace. kinds(action_type): what a request of the external source is called in the
+        answer when its type says so (mail stays "mail" when it becomes an action, D6-8), else None."""
         self.outboxes = {kind: box for kind, box in outboxes.items() if box is not None}
         self.audit = audit
+        self.kinds = kinds
         for kind, box in self.outboxes.items():
             box.on_expiry(lambda q, kind=kind: self._log_expiry(kind, q))
             if hasattr(box, "on_recovered"):          # the store: requests a crash left half carried out
@@ -147,11 +149,21 @@ class ApprovalLedger:
                     edited[item_id] = e["action"] == "approval.edited"
         return edited
 
+    def _kind(self, kind: str | None, action_type: str | None) -> str | None:
+        """The kind an answer names: a type's own (D6-8) for a request of the external source, else the queue's."""
+        if kind == "external" and action_type and self.kinds is not None:
+            try:
+                return self.kinds(action_type) or kind
+            except Exception:  # noqa: BLE001
+                return kind
+        return kind
+
     def _answer(self, item_id: str, waiting: dict[str, tuple[str, Any]], latest: dict[str, dict[str, Any]],
                 edited: dict[str, bool]) -> dict[str, Any]:
         if item_id in waiting:                      # still in the queue wins: a release that failed puts the entry back
             kind, q = waiting[item_id]
-            return _record(item_id, kind, "waiting", q.created_at, getattr(q, "edited_from", None) is not None, getattr(q, "action_type", None))
+            return _record(item_id, self._kind(kind, getattr(q, "action_type", None)), "waiting", q.created_at,
+                           getattr(q, "edited_from", None) is not None, getattr(q, "action_type", None))
         e = latest.get(item_id)
         if e is None:
             return _record(item_id, None, "unknown", None)
@@ -159,7 +171,7 @@ class ApprovalLedger:
         kind = d.get("kind") if isinstance(d.get("kind"), str) else None
         when = d.get("expired_at") if e.get("action") == "approval.expired" and d.get("expired_at") else e.get("t")
         kind_of = d.get("action_type") if isinstance(d.get("action_type"), str) else None
-        out = _record(item_id, kind, _outcome(e) or "unknown", when, edited.get(item_id, False), kind_of)
+        out = _record(item_id, self._kind(kind, kind_of), _outcome(e) or "unknown", when, edited.get(item_id, False), kind_of)
         if e.get("action") == "approval.discarded" and d.get("reason") in _REASONS:      # the server ended it, not the owner
             out["reason"] = d["reason"]
             out["note"] = _REASONS[d["reason"]]

@@ -13,7 +13,11 @@ again under the same id. The command prints how many it wrote and what the rollb
 ended, among them unclear ones, and their keys, so a request_id used again after the rollback queues a new request.
 Exit codes: 0 written, 1 refused (the server still runs, a request is being carried out, the file exists), 2 wrong arguments.
 """
+import base64
+import email
 import sys
+from email import policy
+from email.message import EmailMessage
 from typing import Any
 
 from .store import Store
@@ -49,10 +53,51 @@ CALENDAR = {"calendar.invite": "create", "calendar.update": "update", "calendar.
             "calendar.reply": "reply"}
 
 
-def calendar_object(type_id: str, p: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+def calendar_object(type_id: str, p: dict[str, Any], blob: Any = None) -> tuple[bytes, dict[str, Any]]:
     """A calendar action back in the form 5a reads: the object as the bytes, and the metadata 5a's card and write use."""
     meta = {k: p.get(k) for k in ("calendar_url", "calendar", "uid", "href", "etag", "start", "end", "organizer")}
     return p["ics"].encode(), {**meta, "op": CALENDAR[type_id], "summary": p.get("summary") or "", "location": p.get("location") or ""}
+
+
+# Since package 6b a mail is an action of type mail.send, mail.reply or mail.forward, and its parameters are the headers the owner
+# may change (from, to, cc, bcc, subject), `message` (the rest of the MIME message: its other headers, the text, and each attachment
+# as a part whose body is a blob, named by the header below), or `message_blob` when that rest is itself large, `files` and
+# `followup`. mail_message puts them back together: the one place a mail's parameters become the bytes that go out, used by the
+# export and by mail's executor (mail.py) alike. The gate does not import mail.
+BLOB_HEADER = "X-Icloud-Mcp-Blob"
+MAIL_HEADERS = (("From", "from"), ("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"), ("Subject", "subject"))
+MAIL = ("mail.send", "mail.reply", "mail.forward")
+
+
+def mail_message(p: dict[str, Any], blob: Any) -> bytes:
+    """The MIME message a mail action stands for, exactly as it is sent and filed: its five headers first, in the order the
+    server writes them, then the rest of `message` with every attachment's bytes back in place. ValueError when a blob is
+    missing or a header does not fit."""
+    rest = blob(p["message_blob"]) if p.get("message_blob") else str(p.get("message") or "").encode("latin-1")
+    if rest is None:
+        raise ValueError("The body of this mail is missing from the approval store.")
+    msg = email.message_from_bytes(rest, policy=policy.default)
+    for part in [x for x in msg.walk() if x.get(BLOB_HEADER)]:
+        data = blob(str(part[BLOB_HEADER]).strip())
+        if data is None:
+            raise ValueError(f"The attachment {part.get_filename() or ''} is missing from the approval store.".replace("  ", " "))
+        del part[BLOB_HEADER]
+        if part.get_content_type() == "message/rfc822":
+            part.set_payload([email.message_from_bytes(data, policy=policy.default)])
+        else:
+            del part["Content-Transfer-Encoding"]
+            part["Content-Transfer-Encoding"] = "base64"
+            part.set_payload(base64.encodebytes(data).decode("ascii"))
+    head = EmailMessage(policy=policy.SMTP)
+    for name, field in MAIL_HEADERS:
+        if p.get(field):
+            head[name] = p[field]
+    return head.as_bytes(policy=policy.SMTP)[:-2] + msg.as_bytes(policy=policy.SMTP)
+
+
+def mail_object(type_id: str, p: dict[str, Any], blob: Any = None) -> tuple[bytes, dict[str, Any] | None]:
+    """A mail action back in the form 6a reads: the message as the bytes, and its followup."""
+    return mail_message(p, blob), p.get("followup")
 
 
 # (source, file, which rows). Since package 4b an iMessage is an action of type imessage.send: it goes back to the file 4a reads,
