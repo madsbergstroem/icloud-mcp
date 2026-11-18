@@ -1371,7 +1371,10 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     if s.enable_calendar:
         cal = CalendarService(s)
         if s.invites_require_approval and s.writable("calendar") and provider is not None and s.dashboard:
-            cal.outbox = Outbox(s.data_dir, s.outbox_ttl, s.outbox_max, filename="calendar-outbox.json")
+            from .cal import calendar_type_of
+            from .gate.store import Store             # package 5a: the approval store; the JSON file is read in once
+            cal.outbox = Store(s.data_dir, "calendar", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
+                               legacy="calendar-outbox.json", type_of=calendar_type_of)
             approval["calendar"] = cal
         health["calendar"] = lambda: {"calendars": len(cal.list_calendars())}
         warm["calendar"] = cal.prewarm                           # the calendar list, plus spare connections for parallel reads
@@ -2958,7 +2961,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
-                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
+                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage", "calendar"))) if x)) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check

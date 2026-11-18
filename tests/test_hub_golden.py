@@ -40,9 +40,9 @@ async def _tool(mcp, name, **args):
 
 
 def _expire(box, item_id):
-    if hasattr(box, "_items"):                       # the JSON queue (mail, calendar)
+    if hasattr(box, "_items"):                       # the JSON queue (mail)
         box._items[item_id] = dataclasses.replace(box._items[item_id], expires_at=time.time() - 30)
-    else:                                            # the approval store (iMessage, package 4a)
+    else:                                            # the approval store (iMessage since 4a, calendar since 5a)
         box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, item_id))
 
 
@@ -68,7 +68,11 @@ async def _scenario(web, monkeypatch) -> dict:
 
     monkeypatch.setattr(MailService, "_smtp_send", smtp_send)
     answer_with(msg_src, monkeypatch, imessage)
-    monkeypatch.setattr(type(cal_src.cal), "release", lambda self, q: "Added “Autumn fair”. iCloud now emails jana@example.org.")
+    def approve(self, outbox, item_id, sha256=None):                  # package 5a: approve() ends the request in the store
+        outbox.claim(item_id, "executing")
+        outbox.finish(item_id, "sent")
+        return {"status": "sent", "note": "Added “Autumn fair”. iCloud now emails jana@example.org."}
+    monkeypatch.setattr(type(cal_src.cal), "approve", approve)
 
     mail_id = name("mail-1", queue(mcp, subject="Lunch", body="See you at noon"))
     msg_id = name("imessage-1", queue_imessage(mcp)[1].id)

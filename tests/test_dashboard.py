@@ -301,10 +301,10 @@ async def test_dashboard_can_be_turned_off(web):
 async def test_a_failed_calendar_release_points_the_owner_to_the_check(web, monkeypatch):
     from icloud_mcp.cal import CalendarError, CalendarService
 
-    def fail(self, q):
+    def fail(self, outbox, item_id, sha256=None):                  # package 5a: approve() leaves it waiting when nothing was written
         raise CalendarError("CalDAV authentication failed. Check ICLOUD_USERNAME and the app-specific password. "
                             "Run icloud_check_health to see which service is failing.")
-    monkeypatch.setattr(CalendarService, "release", fail)
+    monkeypatch.setattr(CalendarService, "approve", fail)
     app, mcp, _, _ = web(ALLOW_CALENDAR_INVITES="approve")
     src = mcp._icloud_dashboard.sources["calendar"]
     src.cal.outbox.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"],
@@ -382,7 +382,12 @@ def test_event_times_read_like_a_calendar():
 async def test_held_calendar_changes_show_up_and_are_released(web, monkeypatch):
     from icloud_mcp.cal import CalendarService
     released = []
-    monkeypatch.setattr(CalendarService, "release", lambda self, q: released.append(q.followup["op"]) or "Added “Autumn fair”.")
+    def approve(self, outbox, item_id, sha256=None):                # package 5a: approve() ends the request in the store
+        q = outbox.claim(item_id, "executing")
+        outbox.finish(item_id, "sent")
+        released.append(q.followup["op"])
+        return {"status": "sent", "note": "Added “Autumn fair”."}
+    monkeypatch.setattr(CalendarService, "approve", approve)
     app, mcp, _, _ = web(ALLOW_CALENDAR_INVITES="approve")
     src = mcp._icloud_dashboard.sources["calendar"]
     src.cal.outbox.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org", "tom@example.net"],

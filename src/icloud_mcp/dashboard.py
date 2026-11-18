@@ -43,6 +43,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from . import passkeys as P
 from .gate.source import ApprovalSource
+from .gate.status import Released
 from .approvals import flagged
 from .audit import AuditLog
 from . import textedit as T
@@ -275,24 +276,23 @@ class CalendarApprovals(ApprovalSource):
         notes = [f"{effect} {who}.",
                  "Nothing is in your calendar yet." if m.get("op") == "create" else
                  "If the event changes in your calendar before you approve, nothing is written."]
+        try:
+            text = T.calendar_text(q.raw)                         # the description in full; the metadata keeps 4000 characters
+        except Exception:  # noqa: BLE001  -- an object with more than one event: the copy in the metadata
+            text = m.get("description") or ""
         return {"title": m.get("summary") or "(no title)", "badge": badge, "rows": [(k, v) for k, v in rows if v],
-                "text": m.get("description") or "", "notes": notes, "warnings": [], "needs_override": False}
+                "text": text, "notes": notes, "warnings": [], "needs_override": False}
 
     def approve_label_for(self, q) -> str:
         return self._LABELS.get((q.followup or {}).get("op"), ("", "Approve"))[1]
 
     def release(self, q):
-        claimed = self.cal.outbox.claim(q.id)
-        if claimed is None:
-            raise RuntimeError("It is no longer waiting.")
-        try:
-            return self.cal.release(claimed)
-        except Exception:
-            self.cal.outbox.restore(claimed)
-            raise
+        """Every ending is a state of the store (package 5a): cal.approve ends it, puts it back, or raises Rechecked."""
+        r = self.cal.approve(self.cal.outbox, q.id, q.sha256)
+        return Released(r["note"], "unconfirmed" if r["status"] == "unclear" else None)     # a sent change logs as before
 
     def discard(self, q):
-        self.cal.outbox.claim(q.id)
+        self.cal.outbox.claim(q.id, "discarded")
 
     text_limit = T.CALENDAR_MAX_CHARS
 

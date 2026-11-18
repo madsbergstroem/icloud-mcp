@@ -259,3 +259,47 @@ def test_a_version_the_owner_did_not_look_at_is_not_written(env):
     with pytest.raises(CalendarError, match="edited just now"):
         cal.approve(cal.outbox, item, "0" * 64)
     assert state(cal, item) == ("waiting", None) and writes(server) == []
+
+
+def test_a_calendar_change_cut_off_while_written_ends_unclear_at_the_next_start(tmp_path):
+    """protects=package 5a criterion 4: a row of source calendar left executing ends unclear once, also when another source's
+    store opened first, and is logged once; fails_when=it stays executing or waits again (it may have been written);
+    no_claim=a real process kill: the first store is a second process that exits without finishing."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from icloud_mcp.audit import AuditLog
+    from icloud_mcp.gate.status import ApprovalLedger
+    src = Path(__file__).resolve().parents[1] / "src"
+    code = ("import os, sys; sys.path.insert(0, %r)\n" % str(src)
+            + "from icloud_mcp.gate.store import Store\n"
+            + "st = Store(%r, 'calendar', 3600, 20)\n" % str(tmp_path)
+            + "q = st.add(b'BEGIN:VCALENDAR', ['jana@example.org'], {'op': 'create'}, action_type='calendar.invite')\n"
+            + "st.claim(q.id, 'executing')\nprint(q.id, flush=True)\nos._exit(0)\n")
+    qid = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True).stdout.strip()
+    Store(str(tmp_path), "external", 3600, 20)                        # another source's store takes the lock first
+    box = Store(str(tmp_path), "calendar", 3600, 20)
+    audit = AuditLog(str(tmp_path))
+    ApprovalLedger({"calendar": box}, audit)
+    assert box.state_of(qid) == ("unclear", "interrupted") and box.pending() == []
+    lines = [e for e in audit.entries(10) if e["action"] == "approval.sent"]
+    assert len(lines) == 1 and lines[0]["details"]["kind"] == "calendar" and lines[0]["details"]["delivery"] == "unconfirmed"
+
+
+def test_the_server_reads_the_calendar_queue_file_in_once_with_ids_hashes_and_types(tmp_path, monkeypatch):
+    """protects=package 5a criterion 3 through the real wiring: the first start keeps every waiting change and names its type,
+    the dashboard shows it, and a second start changes nothing; fails_when=a change is lost, renumbered, rehashed or untyped;
+    no_claim=none beyond protects."""
+    from icloud_mcp.outbox import Outbox
+    from icloud_mcp.server import create_server
+    for k, v in dict(ICLOUD_USERNAME=ME, ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", DATA_DIR=str(tmp_path),
+                     MCP_PUBLIC_URL="https://mcp.example.com", MCP_OWNER_PASSWORD="x" * 16, ALLOW_CALENDAR_INVITES="approve").items():
+        monkeypatch.setenv(k, v)
+    old = Outbox(str(tmp_path), 3600, 20, filename="calendar-outbox.json")
+    a = old.add(b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ["jana@example.org"], {"op": "delete", "summary": "Autumn fair"})
+    mcp, _ = create_server(Settings.from_env())
+    box = mcp._icloud_dashboard.sources["calendar"].cal.outbox
+    assert [(q.id, q.sha256) for q in box.pending()] == [(a.id, a.sha256)]
+    assert box._db.execute("SELECT action_type FROM request WHERE id = ?", (a.id,)).fetchone()[0] == "calendar.delete"
+    assert (tmp_path / "calendar-outbox.json.migrated").exists() and not (tmp_path / "calendar-outbox.json").exists()
