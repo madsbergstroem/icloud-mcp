@@ -498,6 +498,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err(f"Not sent (still waiting): {for_owner(str(e))}", 502)
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None), sha256=q.sha256,
+                     **({"refused": note.refused} if getattr(note, "refused", 0) else {}),       # package 6a: recipients the server refused
                      recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")]
                      + ([v["label"]] if v.get("log_to") and v.get("label") else []))     # D4-2: a type the server registers itself
         # "state" only when the send is not certain; nothing is sent again from here

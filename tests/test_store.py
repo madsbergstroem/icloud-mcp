@@ -631,3 +631,92 @@ def test_the_export_writes_waiting_calendar_changes_back_for_the_previous_versio
     old = Outbox(str(tmp_path), 3600, 20, filename="calendar-outbox.json")
     assert [(x.id, x.sha256, x.raw, x.followup["op"], x.recipients) for x in old.pending()] == [(q.id, q.sha256, ICS, "create", ["jana@example.org"])]
     assert not (tmp_path / "imessage-outbox.json").exists()
+
+
+# -- mail (package 6a) ------------------------------------------------------------------------------------------------------------
+MAIL = b"From: me@icloud.com\r\nTo: jana@example.org\r\nSubject: Lunch\r\nMessage-ID: <m1@icloud.com>\r\n\r\nSee you at noon.\r\n"
+
+
+@pytest.mark.parametrize("how", ["sent", "unclear", "discarded"])
+def test_a_mail_key_outlives_the_activity_retention_as_a_tombstone(tmp_path, how):
+    """protects=D6-3 and the review's tombstone: a saved draft whose mail ended is refused again after keep_days dropped its row,
+    with the ending it had; fails_when=the same draft queues a second mail once the row is gone, or the tombstone forgets the
+    ending; no_claim=mail's own answer to the agent (tests/test_mail_release.py)."""
+    st = S.Store(str(tmp_path), "mail", 3600, 20, keep_days=1, tombstones=True)
+    q = st.add(MAIL, ["jana@example.org"], {"folder": "Drafts", "uid": 4, "action": "trash"}, key="draft:Drafts:7:4", action_type="mail.send")
+    if how == "discarded":
+        st.claim(q.id, "discarded")
+    else:
+        st.claim(q.id, "executing")
+        st.finish(q.id, how)
+    st._db.execute("UPDATE request SET decided_at = ? WHERE id = ?", (time.time() - 2 * 86400, q.id))
+    st._purged_at = 0
+    st.pending()
+    assert row(st, q.id) is None                                         # the activity retention dropped the row ...
+    with pytest.raises(S.AlreadyDecided) as e:                            # ... and the key still answers
+        st.add(MAIL + b" ", ["jana@example.org"], key="draft:Drafts:7:4", action_type="mail.send")
+    assert (e.value.item_id, e.value.state) == (q.id, how) and st.pending() == []
+
+
+def test_a_freed_mail_key_leaves_no_tombstone_and_other_stores_keep_none(tmp_path):
+    """protects=a tombstone only for a key that was still bound (an expired mail may be asked for again), and only where asked for
+    (external keeps package 3's rule); fails_when=an expired draft is refused for good, or the external source refuses a key after
+    keep_days; no_claim=none beyond protects."""
+    st = S.Store(str(tmp_path), "mail", 0, 20, keep_days=1, tombstones=True)
+    q = st.add(MAIL, ["jana@example.org"], key="draft:Drafts:7:5")
+    st.pending()                                                         # ttl 0: it expired
+    st._db.execute("UPDATE request SET decided_at = ? WHERE id = ?", (time.time() - 2 * 86400, q.id))
+    st._purged_at = 0
+    st.pending()
+    assert st._db.execute("SELECT COUNT(*) FROM key_tombstone").fetchone()[0] == 0
+    st.ttl = 3600
+    assert st.add(MAIL + b" ", ["jana@example.org"], key="draft:Drafts:7:5").id != q.id
+
+
+def test_a_mail_queue_file_is_read_in_with_everything_it_kept(tmp_path):
+    """protects=package 6a criterion 4: the first start keeps every waiting mail byte for byte with its id, hash, key, followup,
+    edited_from and requested_by, and renames the file; fails_when=one of them changes or the file stays; no_claim=the server's
+    wiring (tests/test_mail_release.py)."""
+    old = Outbox(str(tmp_path), 3600, 20)
+    a = old.add(MAIL, ["jana@example.org"], {"folder": "INBOX", "uid": 7, "flag": "\\Answered", "uidvalidity": 3}, requested_by="agent-a")
+    b = old.add(MAIL + b"x", ["tom@example.net"], {"folder": "Drafts", "uid": 4, "action": "trash"}, key="draft:Drafts:7:4")
+    b = old.replace(b.id, b.sha256, MAIL + b"y", edited_from="See you at one.")
+    st = S.Store(str(tmp_path), "mail", 3600, 20, legacy="outbox.json", tombstones=True)
+    want = [(x.id, x.sha256, x.raw, x.key, x.followup, x.edited_from, x.requested_by, x.recipients) for x in (a, b)]
+    assert sorted((x.id, x.sha256, x.raw, x.key, x.followup, x.edited_from, x.requested_by, x.recipients) for x in st.pending()) == sorted(want)
+    assert (tmp_path / "outbox.json.migrated").exists() and not (tmp_path / "outbox.json").exists()
+
+
+def test_the_export_writes_waiting_mail_back_for_the_previous_version(tmp_path):
+    """protects=package 6a criterion 4: a rollback keeps the waiting mail with its id, hash, bytes, key and followup in the file the
+    previous version reads; fails_when=no outbox.json, another id, hash or byte, or a file written when no mail waits;
+    no_claim=the previous version itself (its Outbox class reads the file here)."""
+    st = S.Store(str(tmp_path), "mail", 3600, 20, tombstones=True)
+    q = st.add(MAIL, ["jana@example.org"], {"folder": "Drafts", "uid": 4, "action": "trash"}, key="draft:Drafts:7:4", action_type="mail.send")
+    st._db.close()
+    os.close(S._locks.pop(str(Path(tmp_path).resolve())))
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    run = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(tmp_path)], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0 and "Wrote 1 waiting request(s) to outbox.json" in run.stdout, run.stderr
+    old = Outbox(str(tmp_path), 3600, 20)
+    assert [(x.id, x.sha256, x.raw, x.key, x.followup) for x in old.pending()] == [(q.id, q.sha256, MAIL, q.key, q.followup)]
+    empty = tmp_path / "empty"
+    run = subprocess.run([sys.executable, "-m", "icloud_mcp.gate.export_queue", str(empty)], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0 and not (empty / "outbox.json").exists()
+
+
+def test_a_type_kept_in_the_row_only_is_written_for_new_and_read_in_requests_and_never_reported(tmp_path):
+    """protects=package 6a writes each mail's type into the row (6b reads it; it outlasts the content), while the log,
+    approval_status and the pages answer as before; fails_when=a row has no type, a request read back carries one, or a type
+    function that raises stops the queueing; no_claim=mail's own mapping (tests/test_mail_release.py)."""
+    old = Outbox(str(tmp_path), 3600, 20)
+    a = old.add(MAIL, ["jana@example.org"], {"folder": "INBOX", "uid": 7, "flag": "$Forwarded"})
+    kinds = {"$Forwarded": "mail.forward"}
+    st = S.Store(str(tmp_path), "mail", 3600, 20, legacy="outbox.json", tombstones=True, report_type=False,
+                 type_of=lambda q: kinds.get((q.followup or {}).get("flag"), "mail.send") if q.followup is not None else 1 / 0)
+    b = st.add(MAIL + b"b", ["tom@example.net"], {"folder": "Drafts", "uid": 4, "action": "trash"})
+    c = st.add(MAIL + b"c", ["tom@example.net"])                          # the type function raises: queued without a type
+    assert b.action_type is None and [x.action_type for x in st.pending()] == [None, None, None]
+    st.claim(b.id, "discarded")
+    types = dict(st._db.execute("SELECT id, action_type FROM request").fetchall())
+    assert types == {a.id: "mail.forward", b.id: "mail.send", c.id: None}

@@ -13,7 +13,7 @@ import re
 import time
 from pathlib import Path
 
-from icloud_mcp.mail import MailService
+from icloud_mcp.mail import MailService, SmtpFailed
 
 from test_dashboard import SAME, api, client, queue, signed_in, web  # noqa: F401  (web is a fixture)
 from test_text_edit import answer_with, IMESSAGE_ENV, queue_calendar, queue_imessage
@@ -40,10 +40,8 @@ async def _tool(mcp, name, **args):
 
 
 def _expire(box, item_id):
-    if hasattr(box, "_items"):                       # the JSON queue (mail)
-        box._items[item_id] = dataclasses.replace(box._items[item_id], expires_at=time.time() - 30)
-    else:                                            # the approval store (iMessage since 4a, calendar since 5a; both actions since 4b and 5b)
-        box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, item_id))
+    # the approval store (iMessage since 4a, calendar since 5a, both actions since 4b and 5b; mail since 6a)
+    box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, item_id))
 
 
 async def _scenario(web, monkeypatch) -> dict:
@@ -62,8 +60,8 @@ async def _scenario(web, monkeypatch) -> dict:
     real_smtp = MailService._smtp_send
 
     def smtp_send(self, msg, rcpts):
-        if smtp["fail"]:
-            raise RuntimeError("The mail server is not answering")
+        if smtp["fail"]:                             # package 6a: a failure that proves nothing went out, so the mail waits again
+            raise SmtpFailed("The mail server is not answering", False)
         return real_smtp(self, msg, rcpts)
 
     monkeypatch.setattr(MailService, "_smtp_send", smtp_send)

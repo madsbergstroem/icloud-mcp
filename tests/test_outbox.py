@@ -9,7 +9,8 @@ import pytest
 
 from icloud_mcp.cal import CalendarError, CalendarService
 from icloud_mcp.config import Settings
-from icloud_mcp.mail import ANSWERED, MailError, MailService
+from icloud_mcp.gate.actions import Rechecked
+from icloud_mcp.mail import ANSWERED, MailError, MailService, SmtpFailed
 from icloud_mcp.outbox import Outbox
 from icloud_mcp.server import create_server
 
@@ -77,14 +78,14 @@ def test_release_sends_stored_message_once(env):
     s, fake, sent = env
     mail = MailService(s)
     qid = send(mail, subject="Quarterly numbers", body="See attached", bcc=["carol@example.org"])["outbox_id"]
-    res = mail.release(qid)
+    res = mail.approve(qid)
     assert res["status"] == "sent" and res["saved_to"] == "Sent Messages"
     (msg, rcpts), = sent
     assert str(msg["Subject"]) == "Quarterly numbers" and "See attached" in msg.get_body(("plain",)).get_content()
     assert sorted(rcpts) == ["bob@example.org", "carol@example.org"]
     assert len(fake.appended) == 1 and fake.appended[0][0] == "Sent Messages"
     with pytest.raises(MailError):                        # second release of the same id must fail
-        mail.release(qid)
+        mail.approve(qid)
     assert len(sent) == 1
 
 
@@ -92,12 +93,13 @@ def test_failed_send_stays_queued_and_can_retry(env, monkeypatch):
     s, fake, sent = env
     mail = MailService(s)
     qid = send(mail)["outbox_id"]
-    monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: (_ for _ in ()).throw(MailError("SMTP send failed")))
+    # package 6a: only a failure that proves nothing went out puts it back (SmtpFailed with maybe_sent false)
+    monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: (_ for _ in ()).throw(SmtpFailed("SMTP send failed", False)))
     with pytest.raises(MailError):
-        mail.release(qid)
+        mail.approve(qid)
     assert [q.id for q in mail.outbox.pending()] == [qid]
     monkeypatch.setattr(MailService, "_smtp_send", lambda self, m, r: sent.append((m, r)) or {})
-    assert mail.release(qid)["status"] == "sent"
+    assert mail.approve(qid)["status"] == "sent"
 
 
 def test_reply_flags_original_only_after_release(env, monkeypatch):
@@ -107,7 +109,7 @@ def test_reply_flags_original_only_after_release(env, monkeypatch):
     mail = MailService(s)
     r = mail.reply("INBOX", 7, "Yes, happy to.")
     assert r["status"] == "queued_for_owner_approval" and fake.flags == []
-    res = mail.release(r["outbox_id"])
+    res = mail.approve(r["outbox_id"])
     assert res["original_marked_answered"] is True and fake.flags == [([7], [ANSWERED])]
     assert str(sent[0][0]["In-Reply-To"]) == "<1@example.org>"
 
@@ -123,7 +125,7 @@ def test_release_skips_stale_original_flags(env, monkeypatch, operation, current
               else mail.forward("INBOX", 7, ["bob@example.org"], note="FYI"))
     assert mail.outbox.pending()[0].followup["uidvalidity"] == 7
     fake.uidvalidity = current
-    result = mail.release(queued["outbox_id"])
+    result = mail.approve(queued["outbox_id"])
     assert result["status"] == "sent" and len(sent) == 1
     assert "out of date" in result["original_flag_skipped"]
     assert "original_marked_answered" not in result and "original_flagged" not in result
@@ -164,9 +166,9 @@ def test_allowlist_checked_when_queued_and_again_on_release(env):
         send(mail, to=["eve@evil.test"])
     qid = send(mail)["outbox_id"]
     tightened = MailService(dataclasses.replace(s, send_allowlist=("someone@else.test",)))
-    with pytest.raises(MailError, match="SEND_ALLOWLIST"):
-        tightened.release(qid)
-    assert sent == [] and len(tightened.outbox.pending()) == 1
+    with pytest.raises(Rechecked, match="SEND_ALLOWLIST"):     # package 6a: it ends (not_allowed) instead of waiting again
+        tightened.approve(qid)
+    assert sent == [] and tightened.outbox.pending() == []
 
 
 def test_send_disabled_and_approval_off_modes(env):
@@ -195,7 +197,7 @@ def test_calendar_invites_blocked_by_default(env):
 def web(env, monkeypatch):
     s, fake, sent = env
     created, orig = [], MailService.__init__
-    monkeypatch.setattr(MailService, "__init__", lambda self, st: (orig(self, st), created.append(self))[0])
+    monkeypatch.setattr(MailService, "__init__", lambda self, st, **kw: (orig(self, st, **kw), created.append(self))[0])
     mcp, provider = create_server(s)
     app = mcp.streamable_http_app(host="0.0.0.0")
     return app, provider, created[0], fake, sent
@@ -246,6 +248,26 @@ async def test_review_escapes_content_and_approve_sends_once(web):
         assert r.status_code == 400 and len(sent) == 1
 
 
+async def test_a_send_cut_off_on_the_page_reads_unclear_and_is_logged_unconfirmed(web, monkeypatch):
+    """protects=package 6a on /outbox: a send that may have gone out is shown as such, logged as unconfirmed and never offered
+    again; fails_when=the page says Sent or "still queued", or the mail waits again; no_claim=none."""
+    from icloud_mcp.mail import SmtpFailed
+    app, provider, mail, fake, sent = web
+    qid = queue_one(mail)
+
+    def cut(self, msg, rcpts):
+        raise SmtpFailed("SMTP send failed: timed out.", True) from TimeoutError("timed out")
+    monkeypatch.setattr(MailService, "_smtp_send", cut)
+    async with client(app) as c:
+        page = (await c.post("/outbox", data={"password": PASSWORD})).text
+        r = await c.post("/outbox/act", data=buttons(page, "approve"))
+        assert "may or may not have gone out" in r.text and "still queued" not in r.text and "Nothing is waiting" in r.text
+    assert mail.outbox.state_of(qid) == ("unclear", None)
+    from icloud_mcp.audit import AuditLog
+    line, = [e for e in AuditLog(mail.s.data_dir).entries(10) if e["action"] == "approval.sent"]
+    assert line["details"]["delivery"] == "unconfirmed" and line["details"]["outbox_id"] == qid
+
+
 async def test_forged_expired_or_swapped_tokens_are_rejected(web):
     app, provider, mail, fake, sent = web
     queue_one(mail)
@@ -289,7 +311,8 @@ async def test_page_reads_each_original_once_and_the_approve_check_uses_the_same
         assert len(mail._contexts) == 2
         await c.post("/outbox/act", data=buttons(r.text, "discard"))
         assert len(mail._contexts) == 1                                      # a discarded item's view is dropped at the next page
-    assert "safety_warnings" not in mail.outbox.path.read_text()           # the kept view lives in memory only
+    stored = b"".join(p.read_bytes() for p in mail.outbox.path.parent.glob("approvals.db*"))   # the approval store since package 6a
+    assert b"safety_warnings" not in stored                                 # the kept view lives in memory only
 
 
 async def test_wrong_passwords_lock_out_the_page(web):

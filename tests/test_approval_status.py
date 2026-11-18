@@ -88,7 +88,10 @@ def test_the_log_being_off_is_said(tmp_path):
 def lapse(box, q):
     """Let an entry run out of time; returns when it did."""
     ran_out = time.time() - 30
-    box._items[q.id] = dataclasses.replace(q, expires_at=ran_out)
+    if hasattr(box, "_items"):                       # the JSON queue
+        box._items[q.id] = dataclasses.replace(q, expires_at=ran_out)
+    else:                                            # the approval store (mail since package 6a)
+        box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (ran_out, q.id))
     return ran_out
 
 
@@ -414,7 +417,7 @@ async def test_a_request_that_expires_reads_expired_through_the_tool(web):
     _, mcp, *_ = web()
     q = queue(mcp)
     box = mcp._icloud_outboxes["mail"]
-    lapse(box, box._items[q])
+    lapse(box, next(x for x in box.pending() if x.id == q))
     got = await call(mcp, {"id": q})
     assert got["status"] == "expired" and got["kind"] == "mail"
 
@@ -457,7 +460,7 @@ async def test_the_old_outbox_page_writes_the_same_ids(tmp_path, monkeypatch):
     import contextlib
 
     from icloud_mcp.config import Settings
-    from icloud_mcp.mail import MailError, MailService
+    from icloud_mcp.mail import MailService, SmtpFailed
     from icloud_mcp.server import create_server
     from test_dashboard import PASSWORD
     from test_outbox import FakeIMAP
@@ -472,7 +475,7 @@ async def test_the_old_outbox_page_writes_the_same_ids(tmp_path, monkeypatch):
 
     def smtp(self, msg, rcpts):
         if fail:
-            raise MailError("The mail server refused it.")
+            raise SmtpFailed("The mail server refused it.", False)        # package 6a: provably never sent, so it waits again
         sent.append((msg, list(rcpts)))
         return {}
     monkeypatch.setattr(MailService, "imap", fake_imap)

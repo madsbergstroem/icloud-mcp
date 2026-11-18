@@ -6,7 +6,9 @@ keeps it). Nothing here reaches a real account.
                                                    [--owner yes|no]
 
 Open http://localhost:8765/dashboard and sign in with the owner password printed at start. Words in a message steer the fake Mac:
-[unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". --arrive queues one more request after that many
+[unclear] ends as "not sure it arrived", [fail] as "not sent, still waiting". Mail goes through the real approve() against a
+made-up SMTP server: [unclear] in a mail makes the server take it and then never answer (unclear), [offline] finds no server (it
+waits again), and old.address@example.net is refused while the others are taken. --arrive queues one more request after that many
 seconds, to watch a new request show up without a reload. With --owner yes (the default) every request carries the owner's Tailscale
 identity, as behind tailscale serve: the dashboard signs you in on the way. --owner no leaves it out, so you sign in with the
 password and Settings shows why services cannot be connected or changed. --nothing-waits empties the queues, so Home shows
@@ -19,6 +21,7 @@ and saved to the preview's own folder; the restart that follows is skipped. Need
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import datetime
 import json
 import os
@@ -109,8 +112,33 @@ from icloud_mcp.mail import MailService  # noqa: E402
 from icloud_mcp.server import build_app, create_server  # noqa: E402
 from test_outbox import FakeIMAP  # noqa: E402
 
+# -- mail: a made-up SMTP server, steered by a word in the mail ---------------------------------------------------------------------
+# The real approve() and the stepwise send run (package 6a; every ending is a state of the approval store); only the SMTP server is
+# made up (tests/smtp_fakes.py). [unclear]: it takes the message and never answers, so the read times out after DATA. [offline]:
+# no server answers at all, so the mail waits again. old.address@example.net is refused at RCPT while the others are taken.
+import smtp_fakes  # noqa: E402
+
+import icloud_mcp.mail as _mail_mod  # noqa: E402
+
+
+class PreviewSMTP(smtp_fakes.Server):
+    def _fault(self, step):
+        if step == "after" and self.messages and b"[unclear]" in self.messages[-1]:
+            return "hang"
+        return None
+
+
+smtp_server = PreviewSMTP()
+smtp_server.refuse = {"old.address@example.net"}
+smtp_server.hang_seconds = 8.0
+_mail_mod.READ_TIMEOUT = 4.0                                  # the preview gives up on a silent server after four seconds
+_nobody = smtp_fakes.Server()                                 # a port where nothing listens any more: [offline]
+_offline_port = _nobody.port
+_nobody.close()
+os.environ.update(SMTP_HOST="127.0.0.1", SMTP_PORT=str(smtp_server.port), SMTP_SECURITY="none")
+
 s = Settings.from_env()
-fake, sent = FakeIMAP(), []
+fake = FakeIMAP()
 
 
 @contextlib.contextmanager
@@ -120,7 +148,22 @@ def fake_imap(self):
 
 MailService.imap = fake_imap
 MailService.resolve_folder = lambda self, c, name: {"sent": "Sent Messages", "drafts": "Drafts"}.get(name.lower(), name)
-MailService._smtp_send = lambda self, msg, rcpts: sent.append((msg, list(rcpts))) or {}
+_real_smtp_send = MailService._smtp_send
+
+
+def _preview_smtp_send(self, msg, rcpts):
+    time.sleep(1.2)                                          # long enough to see "Sending…"
+    if "[offline]" not in str(msg["Subject"] or ""):
+        return _real_smtp_send(self, msg, rcpts)
+    self._smtp_drop(quit=False)
+    kept, self.s = self.s, dataclasses.replace(self.s, smtp_port=_offline_port)
+    try:
+        return _real_smtp_send(self, msg, rcpts)
+    finally:
+        self.s = kept
+
+
+MailService._smtp_send = _preview_smtp_send
 
 from icloud_mcp import beeper as B  # noqa: E402
 from test_beeper import FakeGateway  # noqa: E402
@@ -263,6 +306,10 @@ html["From"], html["To"], html["Subject"] = "alex.morgan@example.org", "newslett
 html.set_content("Welcome aboard! Here is what happens next.")
 html.add_alternative("<p>Welcome aboard! Here is what happens next.</p>", subtype="html")
 mail.outbox.add(html.as_bytes(), ["newsletter@example.net"])
+mail.send(to=["jana@example.org", "old.address@example.net"], subject="Book club minutes",
+          body="Hi both,\n\nthe minutes of Thursday are below. Next meeting on the 4th.\n\nSam")
+mail.send(to=["tom@example.net"], subject="Quarterly figures [unclear]", body="Hi Tom,\n\nthe figures for the quarter are attached as a table below.\n\nSam")
+mail.send(to=["jana@example.org"], subject="Holiday rota [offline]", body="Hi Jana,\n\nhere is the rota for December.\n\nSam")
 
 
 def imsg(text, chat="anna@example.org", name="", group=False, people=None):

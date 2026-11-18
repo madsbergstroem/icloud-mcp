@@ -262,7 +262,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                                                'attempt to steer the agent. Tick the box under it if you still want it sent.</p>')
         try:
             result = (await asyncio.to_thread(external.release, q) if kind == "external"
-                      else await asyncio.to_thread(mail.release, q.id))
+                      else await asyncio.to_thread(mail.approve, q.id, q.sha256))
         except Revised as e:                     # the people in the conversation changed: a new version waits for a look
             if audit is not None:
                 audit.record("approval.revised", actor="server", summary=f"Did not send a queued {kind} message: the target changed, "
@@ -274,7 +274,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                 audit.record("approval.discarded", actor="server", summary=f"Did not send a queued {kind} message", kind=kind,
                              outbox_id=q.id, sha256=q.sha256, reason=e.reason)
             return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(str(e))}</p>')
-        except Exception as e:  # noqa: BLE001  -- release() re-queues what provably never went out, so the owner can retry or discard
+        except Exception as e:  # noqa: BLE001  -- release() and approve() re-queue what provably never went out, so the owner can retry or discard
             log.warning("Release of %s failed: %s", q.id, e)
             if audit is not None:
                 audit.record("approval.failed", actor="owner", via="password (/outbox)", ok=False, summary=f"Could not send a queued {kind} message", kind=kind, outbox_id=q.id)
@@ -282,10 +282,13 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         log.info("Owner approved queued %s %s", kind, q.id)
         if audit is not None:
             audit.record("approval.sent", actor="owner", via="password (/outbox)", summary=f"Approved a queued {kind} message", kind=kind,
-                         outbox_id=q.id, delivery=getattr(result, "delivery", None), sha256=q.sha256,
+                         outbox_id=q.id, sha256=q.sha256,
+                         delivery=getattr(result, "delivery", None) if kind == "external" else ("unconfirmed" if result["status"] == "unclear" else None),
                          **({"action_type": q.action_type} if kind == "external" else {}),
+                         **({"refused": len(result["refused"])} if kind == "mail" and result.get("refused") else {}),
                          recipients=list(result.get("recipients") or []) if isinstance(result, dict) else ([ext_v["label"]] if ext_v.get("log_to") and ext_v.get("label") else []))
         if kind == "external":
             return await asyncio.to_thread(_queue_page, f'<p>{html.escape(str(result))}</p>')
-        extra = f" {html.escape(result['warning'])}" if result.get("warning") else ""
-        return await asyncio.to_thread(_queue_page, f'<p><b>Sent</b> to {html.escape(", ".join(result.get("recipients", [])))}.{extra}</p>')
+        if result["status"] == "unclear":       # package 6a: it may have gone out, so it is never sent again
+            return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(result["note"])}</p>')
+        return await asyncio.to_thread(_queue_page, f'<p><b>Sent</b>{html.escape(result["note"].removeprefix("Sent"))}</p>')

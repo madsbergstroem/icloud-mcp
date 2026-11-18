@@ -43,10 +43,10 @@ async def test_a_mail_without_its_file_waits_and_cannot_be_sent(web, tmp_path):
     assert r["status"] == "queued_waiting_for_files" and r["sent"] is False
     assert r["owner_link"] == f"{BASE}/dashboard#/item/mail:{r['outbox_id']}"
     assert r["files_to_add"][0]["filename"] == "Quote-2026.pdf" and r["files_to_add"][0]["upload_url"].startswith(f"{BASE}/files/")
-    stored = (tmp_path / "outbox.json").read_text()
-    assert token_of(r) not in stored                                   # only the token's hash is kept on the server
+    stored = b"".join(p.read_bytes() for p in tmp_path.glob("approvals.db*"))     # the approval store since package 6a
+    assert token_of(r).encode() not in stored                          # only the token's hash is kept on the server
     with pytest.raises(MailError, match="still waits for Quote-2026.pdf"):
-        mail_of(mcp).release(r["outbox_id"])
+        mail_of(mcp).approve(r["outbox_id"])
     async with client(app) as c:
         token = await signed_in(c)
         q = mail_of(mcp).outbox.pending()[0]
