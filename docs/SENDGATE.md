@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 to 4 and 5a are built; the others are not.
+shows. Packages 0 to 4, 5a and 5b are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
@@ -746,6 +746,18 @@ Acceptance criteria:
 4. After 5b, a search of `src/` for `kind == "calendar"` or `"calendar"` as a source finds nothing outside `cal.py` and the
    migration.
 5. Rollback: the export, then 5a, shows the same waiting requests, and approving one of them writes the event.
+
+### As built (5b)
+
+`cal.register_types` registers the five types (`builtin`, `allowed` `["*"]`, no `policy`); `CalendarService.recheck` gives the
+endings at the read and `CalendarService.write`, behind `CalendarExecutor`, those at the write; `approve()` is gone. `ActionType`
+gained `subject`, `text_caption` and, for a text inside another parameter, `text_of`, `with_text` and `text_locked`: `text_field`
+is `ics`, and the five types lock the description as before (only one event, only an invitation or an update). The parameters
+add `when`, the time as the owner reads it, worked out when the change is held. `Store.adopt` without a type converts by the whole
+row; the export writes the object and its metadata back, and a request exported in another source's form leaves the store, so
+the previous version can read it in under its id (this also mends the 4b rollback, which stopped at a duplicate id). Tests:
+`tests/test_calendar_release.py` (every ending on the external source, the five types, the start-up move, the rollback run
+against 5a from git), `tests/test_action_card_fields.py`, `tests/test_dashboard_cards.py`, `tests/test_dashboard.py`.
 
 ### Decisions for package 5
 
