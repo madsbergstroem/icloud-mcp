@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 to 4, 5a and 5b are built; the others are not.
+shows. Packages 0 to 4, 5a, 5b and 6a are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
@@ -866,6 +866,34 @@ Acceptance criteria:
 5. A row of source `mail` left `executing` ends `unclear` at start, also when another source's store opened first.
 6. `mail_send_draft` for a draft whose mail ended `unclear` queues nothing and answers with that mail's status.
 
+### As built (6a)
+
+`MailService.approve(item_id, sha256)` in `mail.py` replaces `release()` and ends every row as the tables say; the dashboard's mail
+source and `/outbox` only map its answer, and both pass the hash the owner looked at. A failure that leaves the mail waiting is
+raised in the owner's words ("The mail server could not be reached (ConnectionRefusedError)."), not in the agents' text, which
+says the message may have gone out.
+
+- The send goes step by step (`_smtp_transfer`): it flattens the message as `send_message` did (without `Bcc` and `Resent-Bcc`,
+  SMTPUTF8 and SIZE as before), then MAIL FROM, RCPT and DATA. `SmtpFailed` keeps the agents' texts and adds `maybe_sent`. As
+  built, the closed list is: any `OSError` (every smtplib error is one) while connecting, signing in, at MAIL FROM or at RCPT, a
+  missing SMTPUTF8 found before MAIL FROM, and `SMTPDataError` at DATA put it back; anything else at DATA ends `unclear`, and so
+  does an error from the send that is not an `OSError` at all.
+- Each mail's type (`mail.send`, `.reply`, `.forward`, from `mail.mail_type_of`) is written into the row, for new and read-in
+  mail, through `Store(type_of=...)`. `Store(report_type=False)` keeps it there only: the log lines, `approval_status` and the
+  pages carry no `action_type` for mail until 6b (D6-8).
+- Tombstones: `Store(tombstones=True)`, mail only, copies a key that is still bound into `key_tombstone` (key, request id,
+  fingerprint, ending, time) when `keep_days` drops its row, and `add` answers it as `AlreadyDecided`. Tombstones are never
+  dropped. `mail_send_draft` on such a draft answers `{status, sent, outbox_id, already_decided, notice}`, as `approval_request`
+  does for a decided key.
+- The note of a sent mail is "Sent to <the accepted>." plus "The mail server refused N: …" and what failed afterwards; the
+  `approval.sent` line gets `refused` (a count) through `Released.refused`. `MailApprovals.box` gives the card its versions.
+- Not changed: when flagging the original fails with anything but a `MailError`, `_send_and_file` ignores it as before, so the
+  note does not mention it.
+
+Tests: `tests/test_mail_release.py` (every row of both tables against `tests/smtp_fakes.py`, a made-up SMTP server that refuses,
+drops or hangs at each step and counts DATA; the Bcc on the wire; the list rules; the start-up; the draft key and its tombstone;
+the dashboard's log line), five tests in `tests/test_store.py`, one in `tests/test_outbox.py` for `/outbox`.
+
 ### 6b: one source
 
 Mail becomes actions on the external source, and the mail branches of gap 4 go: `gate/withdraw.py:50-52`, `:96`,
@@ -979,14 +1007,14 @@ Acceptance criteria:
 
 | # | Question | Recommended | Why |
 |---|----------|-------------|-----|
-| D6-1 | One package or 6a and 6b? | 6a, then 6b | 6a fixes M1 to M6 without a visible change; only 6b needs a mock |
-| D6-2 | An SMTP error code to the message itself (`SMTPDataError`)? | `failed` | The server takes the message over only with a 250 after the data ([RFC 5321, 4.1.1.4](https://www.rfc-editor.org/rfc/rfc5321#section-4.1.1.4)), and the gate keeps its three answers. Open: whether iCloud ever answers 4xx or 5xx after the data and still delivers; not checked |
-| D6-3 | A key after the mail ended | bound, as the store does for every source (`gate/store.py:319-328`) | A draft whose mail is `unclear` or `sent` but still in Drafts must not go out twice. The draft's key names one uid, and `mail_update_draft` makes a new uid (`mail.py:2401-2402`), so a changed draft is a new request. This departs from package 3's "mail keeps today's rule" |
-| D6-4 | One type, or one per kind? | `mail.send`, `mail.reply`, `mail.forward` | Badge fixed per type, and a forward or a draft no longer reads as a reply |
-| D6-5 | The whole message in one parameter, or the editable headers apart? | apart: `to`, `cc`, `bcc`, `subject` as fields, the rest in `message`, attachments as blobs | 2d edits fields of the parameters, and the canonical JSON cannot hold 5 MiB. Open: whether the blob table belongs in the gate or in mail's own part of the store |
-| D6-6 | The success note | keep "Sent to …", add the refused addresses | For mail, "sent" means accepted by the SMTP server, as every mail program uses it; 5a changed the calendar's note because iCloud, not this server, sends the invitations |
-| D6-7 | The steering warning and agent-added addresses after 6b | open | Today they are read from the mailbox when the card is shown (`mail.py:1959-1983`). Storing them at queue time freezes them; reading them needs a context hook the type does not have. Needs the mock and one more look |
-| D6-8 | `approval_status` `kind` for mail after 6b | `mail`, with `action_type` | iMessage and calendar answer `external` since 4b and 5b (`gate/status.py:89-92`); mail has upstream's agents, which read `kind` |
+| D6-1 | One package or 6a and 6b? | 6a, then 6b (owner, 2026-11-18) | 6a fixes M1 to M6 without a visible change; only 6b needs a mock |
+| D6-2 | An SMTP error code to the message itself (`SMTPDataError`)? | `failed` (owner, 2026-11-18) | The server takes the message over only with a 250 after the data ([RFC 5321, 4.1.1.4](https://www.rfc-editor.org/rfc/rfc5321#section-4.1.1.4)), and the gate keeps its three answers. Open: whether iCloud ever answers 4xx or 5xx after the data and still delivers; not checked |
+| D6-3 | A key after the mail ended | bound, as the store does for every source (`gate/store.py:319-328`) (owner, 2026-11-18) | A draft whose mail is `unclear` or `sent` but still in Drafts must not go out twice. The draft's key names one uid, and `mail_update_draft` makes a new uid (`mail.py:2401-2402`), so a changed draft is a new request. This departs from package 3's "mail keeps today's rule" |
+| D6-4 | One type, or one per kind? | `mail.send`, `mail.reply`, `mail.forward` (owner, 2026-11-18) | Badge fixed per type, and a forward or a draft no longer reads as a reply |
+| D6-5 | The whole message in one parameter, or the editable headers apart? | apart: `to`, `cc`, `bcc`, `subject` as fields, the rest in `message`, attachments as blobs (owner, 2026-11-18) | 2d edits fields of the parameters, and the canonical JSON cannot hold 5 MiB. Open: whether the blob table belongs in the gate or in mail's own part of the store |
+| D6-6 | The success note | keep "Sent to …", add the refused addresses (owner, 2026-11-18) | For mail, "sent" means accepted by the SMTP server, as every mail program uses it; 5a changed the calendar's note because iCloud, not this server, sends the invitations |
+| D6-7 | The steering warning and agent-added addresses after 6b | open (owner, 2026-11-18) | Today they are read from the mailbox when the card is shown (`mail.py:1959-1983`). Storing them at queue time freezes them; reading them needs a context hook the type does not have. Needs the mock and one more look |
+| D6-8 | `approval_status` `kind` for mail after 6b | `mail`, with `action_type` (owner, 2026-11-18) | iMessage and calendar answer `external` since 4b and 5b (`gate/status.py:89-92`); mail has upstream's agents, which read `kind` |
 
 Open questions, not decided above:
 
