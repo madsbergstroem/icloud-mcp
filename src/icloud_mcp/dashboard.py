@@ -43,6 +43,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from . import passkeys as P
 from .gate.source import ApprovalSource
+from .gate.status import Released
 from .approvals import flagged
 from .audit import AuditLog
 from . import textedit as T
@@ -188,12 +189,18 @@ class MailApprovals(ApprovalSource):
                 "rows": [(k, v) for k, v in rows if v], "text": body, "notes": notes, "warnings": warnings,
                 "needs_override": bool(flagged(d)), **({"blocked": "Add the file first", "files_link": f"/dashboard#/item/mail:{q.id}"} if waiting else {})}
 
+    @property
+    def box(self):
+        """The approval store (package 6a), so the card lists the versions an edit made (2c)."""
+        return self.mail.outbox
+
     def release(self, q):
-        r = self.mail.release(q.id)
-        return f"Sent to {', '.join(r.get('recipients', []))}." + (f" {r['warning']}" if r.get("warning") else "")
+        """Every ending is a state of the store (package 6a): mail.approve ends it, puts it back, or raises Rechecked."""
+        r = self.mail.approve(q.id, q.sha256)
+        return Released(r["note"], "unconfirmed" if r["status"] == "unclear" else None, len(r.get("refused") or {}))
 
     def discard(self, q):
-        self.mail.outbox.claim(q.id)
+        self.mail.outbox.claim(q.id, "discarded")
 
     @property
     def text_limit(self) -> int:

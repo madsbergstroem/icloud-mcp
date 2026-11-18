@@ -16,6 +16,7 @@ import pytest
 
 import icloud_mcp.mail as mail_mod
 import smtp_fakes
+from test_dashboard import web  # noqa: F401  -- a fixture
 from icloud_mcp.config import Settings
 from icloud_mcp.gate.actions import Rechecked
 from icloud_mcp.gate.store import Store
@@ -343,3 +344,61 @@ def test_the_type_of_each_mail_is_written_with_it(env, monkeypatch):
            "mail.send": queue(mail)}
     types = dict(mail.outbox._db.execute("SELECT id, action_type FROM request").fetchall())
     assert {t: types[i] for t, i in ids.items()} == {t: t for t in ids}
+
+
+# -- through the server's wiring ---------------------------------------------------------------------------------------------------
+def test_the_server_reads_outbox_json_in_once_with_ids_hashes_and_types(tmp_path, monkeypatch):
+    """protects=criterion 4 through the real wiring: the first start keeps every waiting mail with its id, hash, key and followup,
+    types it in the row, renames the file, and a second start changes nothing; fails_when=a mail is lost, renumbered, rehashed or
+    untyped, or the type leaks into what the mail reads back; no_claim=none beyond protects."""
+    from icloud_mcp.outbox import Outbox
+    from icloud_mcp.server import create_server
+    for k, v in dict(ICLOUD_USERNAME=ME, ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", DATA_DIR=str(tmp_path), ALLOW_SEND="true",
+                     MCP_PUBLIC_URL="https://mcp.example.com", MCP_OWNER_PASSWORD="x" * 16).items():
+        monkeypatch.setenv(k, v)
+    old = Outbox(str(tmp_path), 3600, 20)
+    a = old.add(b"From: me@icloud.com\r\nTo: jana@example.org\r\nSubject: Lunch\r\n\r\nNoon?\r\n", ["jana@example.org"])
+    b = old.add(b"From: me@icloud.com\r\nTo: tom@example.net\r\nSubject: Fwd: Plan\r\n\r\nFYI\r\n", ["tom@example.net"],
+                {"folder": "INBOX", "uid": 9, "flag": "$Forwarded", "uidvalidity": 3}, key=None)
+    mcp, _ = create_server(Settings.from_env())
+    box = mcp._icloud_dashboard.sources["mail"].mail.outbox
+    assert sorted((q.id, q.sha256, q.followup, q.action_type) for q in box.pending()) == sorted(
+        [(a.id, a.sha256, None, None), (b.id, b.sha256, b.followup, None)])
+    assert dict(box._db.execute("SELECT id, action_type FROM request").fetchall()) == {a.id: "mail.send", b.id: "mail.forward"}
+    assert (tmp_path / "outbox.json.migrated").exists() and not (tmp_path / "outbox.json").exists()
+
+
+async def test_the_card_logs_refused_recipients_and_an_unclear_send_reads_unclear(web, monkeypatch):
+    """protects=the log line's new refused count (M4) and an unclear ending through the dashboard: the note, the line and
+    approval_status say what happened; fails_when=the line lacks the count, an unclear send is logged as sent or waits again;
+    no_claim=the app's rendering (QA)."""
+    import json as J
+    from icloud_mcp.mail import SmtpFailed
+    from test_dashboard import api, client, signed_in
+    app, mcp, _, _ = web()
+    calls = []
+
+    def smtp(self, msg, rcpts):
+        calls.append(rcpts)
+        if len(calls) == 2:
+            raise SmtpFailed("SMTP send failed: timed out.", True) from TimeoutError("timed out")
+        return {"tom@example.net": (550, b"No such user here")}
+    monkeypatch.setattr(MailService, "_smtp_send", smtp)
+    mail = mcp._icloud_dashboard.sources["mail"].mail
+    first = mail.send(to=["jana@example.org", "tom@example.net"], subject="Lunch", body="Noon?")["outbox_id"]
+    second = mail.send(to=["jana@example.org"], subject="Dinner", body="Seven?")["outbox_id"]
+    async with client(app) as c:
+        h = api(await signed_in(c))
+        for item in (first, second):
+            sha = (await c.get(f"/dashboard/api/items/mail:{item}")).json()["sha"]
+            got = (await c.post(f"/dashboard/api/items/mail:{item}/approve", json={"sha": sha}, headers=h)).json()
+            if item == first:
+                assert got["note"] == "Sent to jana@example.org. The mail server refused 1: tom@example.net." and "state" not in got
+            else:
+                assert got["state"] == "unclear" and "may or may not have gone out" in got["note"]
+    lines = {e["details"]["outbox_id"]: e["details"] for e in mcp._icloud_dashboard.audit.entries(20) if e["action"] == "approval.sent"}
+    assert lines[first]["refused"] == 1 and lines[first].get("delivery") is None and "action_type" not in lines[first]
+    assert lines[second]["delivery"] == "unconfirmed" and "refused" not in lines[second]
+    status = J.loads((await mcp.call_tool("approval_status", {"id": second})).content[0].text)
+    assert status["status"] == "unclear" and set(status) == {"id", "kind", "status", "edited", "at"}
+    assert mail.outbox.state_of(first) == ("sent", None) and mail.outbox.state_of(second) == ("unclear", None)

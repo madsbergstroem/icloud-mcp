@@ -151,8 +151,9 @@ async def test_the_other_kinds_store_no_action_type_so_their_files_are_as_before
     app, mcp, *_ = web()
     from test_dashboard import queue
     queue(mcp)
-    stored = json.loads(mcp._icloud_dashboard.sources["mail"].mail.outbox.path.read_text())
-    assert all("action_type" not in item for item in stored["items"])
+    box = mcp._icloud_dashboard.sources["mail"].mail.outbox             # the approval store since package 6a: the type stays in the row
+    assert [q.action_type for q in box.pending()] == [None]
+    assert all("action_type" not in q.to_json() for q in box.pending())
 
 
 async def test_parameters_are_checked_against_the_schema(web, hub):

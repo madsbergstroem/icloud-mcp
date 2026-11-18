@@ -195,7 +195,7 @@ def test_calendar_invites_blocked_by_default(env):
 def web(env, monkeypatch):
     s, fake, sent = env
     created, orig = [], MailService.__init__
-    monkeypatch.setattr(MailService, "__init__", lambda self, st: (orig(self, st), created.append(self))[0])
+    monkeypatch.setattr(MailService, "__init__", lambda self, st, **kw: (orig(self, st, **kw), created.append(self))[0])
     mcp, provider = create_server(s)
     app = mcp.streamable_http_app(host="0.0.0.0")
     return app, provider, created[0], fake, sent
@@ -246,6 +246,26 @@ async def test_review_escapes_content_and_approve_sends_once(web):
         assert r.status_code == 400 and len(sent) == 1
 
 
+async def test_a_send_cut_off_on_the_page_reads_unclear_and_is_logged_unconfirmed(web, monkeypatch):
+    """protects=package 6a on /outbox: a send that may have gone out is shown as such, logged as unconfirmed and never offered
+    again; fails_when=the page says Sent or "still queued", or the mail waits again; no_claim=none."""
+    from icloud_mcp.mail import SmtpFailed
+    app, provider, mail, fake, sent = web
+    qid = queue_one(mail)
+
+    def cut(self, msg, rcpts):
+        raise SmtpFailed("SMTP send failed: timed out.", True) from TimeoutError("timed out")
+    monkeypatch.setattr(MailService, "_smtp_send", cut)
+    async with client(app) as c:
+        page = (await c.post("/outbox", data={"password": PASSWORD})).text
+        r = await c.post("/outbox/act", data=buttons(page, "approve"))
+        assert "may or may not have gone out" in r.text and "still queued" not in r.text and "Nothing is waiting" in r.text
+    assert mail.outbox.state_of(qid) == ("unclear", None)
+    from icloud_mcp.audit import AuditLog
+    line, = [e for e in AuditLog(mail.s.data_dir).entries(10) if e["action"] == "approval.sent"]
+    assert line["details"]["delivery"] == "unconfirmed" and line["details"]["outbox_id"] == qid
+
+
 async def test_forged_expired_or_swapped_tokens_are_rejected(web):
     app, provider, mail, fake, sent = web
     queue_one(mail)
@@ -289,7 +309,8 @@ async def test_page_reads_each_original_once_and_the_approve_check_uses_the_same
         assert len(mail._contexts) == 2
         await c.post("/outbox/act", data=buttons(r.text, "discard"))
         assert len(mail._contexts) == 1                                      # a discarded item's view is dropped at the next page
-    assert "safety_warnings" not in mail.outbox.path.read_text()           # the kept view lives in memory only
+    stored = b"".join(p.read_bytes() for p in mail.outbox.path.parent.glob("approvals.db*"))   # the approval store since package 6a
+    assert b"safety_warnings" not in stored                                 # the kept view lives in memory only
 
 
 async def test_wrong_passwords_lock_out_the_page(web):

@@ -1451,6 +1451,7 @@
      "reason": "",
      "text": "mail edited, ÜBER-café\r\n"
     },
+    "edited_rows": [],
     "expires_at": "<volatile>",
     "files": [],
     "group": false,
@@ -1480,6 +1481,56 @@
     "text": "mail edited, ÜBER-café\r\n",
     "title": "Lunch",
     "to": "bob@example.org",
+    "versions": [
+     {
+      "at": "<volatile>",
+      "by": "assistant",
+      "changes": [],
+      "n": 1,
+      "rows": [
+       [
+        "From",
+        "me@icloud.com"
+       ],
+       [
+        "To",
+        "bob@example.org"
+       ],
+       [
+        "Will be delivered to",
+        "bob@example.org"
+       ]
+      ],
+      "text": "See you at noon\r\n"
+     },
+     {
+      "at": "<volatile>",
+      "by": "owner",
+      "changes": [
+       {
+        "label": "Text",
+        "new": "mail edited, ÜBER-café\r\n",
+        "old": "See you at noon\r\n"
+       }
+      ],
+      "n": 2,
+      "rows": [
+       [
+        "From",
+        "me@icloud.com"
+       ],
+       [
+        "To",
+        "bob@example.org"
+       ],
+       [
+        "Will be delivered to",
+        "bob@example.org"
+       ]
+      ],
+      "text": "mail edited, ÜBER-café\r\n"
+     }
+    ],
     "warning": false,
     "warnings": []
    },

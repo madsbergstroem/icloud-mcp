@@ -151,7 +151,7 @@ async def test_an_unknown_an_expired_and_a_discarded_request_each_answer_with_th
     assert await withdraw(mcp, "never-queued") == {"id": "never-queued", "withdrawn": False, "status": "unknown"}
     gone = queue(mcp, subject="Old", body="Old")
     box = mcp._icloud_outboxes["mail"]
-    box._items[gone] = dataclasses.replace(box._items[gone], expires_at=time.time() - 30)
+    box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, gone))   # the approval store since 6a
     assert await withdraw(mcp, gone) == {"id": gone, "withdrawn": False, "status": "expired"}
     no = queue(mcp, subject="No", body="No")
     async with client(app) as c:

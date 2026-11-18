@@ -47,7 +47,7 @@ def sso_web(env, monkeypatch):  # noqa: F811
     monkeypatch.setattr(access_sso, "PyJWKClient", FakeJWKS)
     s = Settings.from_env()
     created, orig = [], MailService.__init__
-    monkeypatch.setattr(MailService, "__init__", lambda self, st: (orig(self, st), created.append(self))[0])
+    monkeypatch.setattr(MailService, "__init__", lambda self, st, **kw: (orig(self, st, **kw), created.append(self))[0])
     mcp, _provider = create_server(s)
     return mcp.streamable_http_app(host="0.0.0.0"), created[0], sent
 
@@ -82,7 +82,7 @@ async def test_header_is_ignored_when_the_option_is_off(env, monkeypatch):  # no
     s, fake, sent = env
     monkeypatch.setattr(access_sso, "PyJWKClient", FakeJWKS)
     created, orig = [], MailService.__init__
-    monkeypatch.setattr(MailService, "__init__", lambda self, st: (orig(self, st), created.append(self))[0])
+    monkeypatch.setattr(MailService, "__init__", lambda self, st, **kw: (orig(self, st, **kw), created.append(self))[0])
     mcp, _provider = create_server(s)
     app = mcp.streamable_http_app(host="0.0.0.0")
     queue_one(created[0], subject="Quarterly report")

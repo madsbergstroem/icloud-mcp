@@ -773,13 +773,20 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
 
     # ------------------------------------------------------------------ mail
     if s.enable_mail:
-        mail = MailService(s)
+        held = s.allow_send and s.writable("mail") and (s.require_approval or s.dashboard) and provider is not None
+        if held:                                                  # package 6a: the approval store; outbox.json is read in once
+            from .gate.store import Store
+            from .mail import mail_type_of
+            mail = MailService(s, outbox=Store(s.data_dir, "mail", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
+                                               legacy="outbox.json", type_of=mail_type_of, tombstones=True, report_type=False))
+        else:
+            mail = MailService(s)
         health["mail"] = mail.health
         warm["mail"] = mail.prewarm                               # the pooled logins, the folder list and the special folders
         pools["mail"] = lambda: {"warm": bool(mail._pool), "imap_kept": len(mail._pool), "imap_pool_size": s.imap_pool_size,
                                  "smtp_connected": mail._smtp is not None}
         # with the dashboard on, also without owner approval: a mail waiting for a file is shown and sent there
-        if s.allow_send and s.writable("mail") and (s.require_approval or s.dashboard) and provider is not None:
+        if held:
             approval["mail"] = mail
 
         @tool(annotations=_READ)
@@ -2958,7 +2965,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
-                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
+                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage", "mail"))) if x)) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
