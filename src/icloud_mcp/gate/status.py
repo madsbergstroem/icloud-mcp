@@ -46,12 +46,15 @@ _REASONS = {"target_changed": "The owner did not see this target: it changed aft
 
 class Released(str):
     """The one-line result of an approval, plus how delivery ended where the source can tell: 'sent', 'unconfirmed' or 'failed'
-    (an iMessage Messages did not confirm). It reads as the string it is; the dashboard writes `delivery` into the log."""
+    (an iMessage Messages did not confirm), and how many recipients the service refused while it took the rest (mail, package
+    6a). It reads as the string it is; the dashboard writes `delivery` and `refused` into the log."""
     delivery: str | None
+    refused: int
 
-    def __new__(cls, text: str, delivery: str | None = None) -> "Released":
+    def __new__(cls, text: str, delivery: str | None = None, refused: int = 0) -> "Released":
         obj = super().__new__(cls, text)
         obj.delivery = delivery
+        obj.refused = refused
         return obj
 
 

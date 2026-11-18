@@ -1,6 +1,6 @@
 """The approval store: requests in one SQLite file, DATA_DIR/approvals.db, with an explicit state for each (docs/SENDGATE.md,
 package 3). It has the methods of the JSON queue (outbox.py): add, pending, claim, replace, restore, on_new, on_expiry, so a source
-uses either. It holds the external source and iMessage (package 4a); mail and calendar move to it with packages 5 and 6.
+uses either. It holds the external source, iMessage (package 4a), calendar changes (package 5a) and mail (package 6a).
 
 States, and who moves a request between them:
 
@@ -36,6 +36,9 @@ What else holds:
   was sent or is unclear, and after the owner discarded it or the agent withdrew it: asking again answers with that request
   (AlreadyDecided). It is freed after `expired`, after a discard with reason `target_changed` and by an export, so the agent can
   ask again. The same key with other parameters (by fingerprint) is a conflict.
+- A store opened with tombstones=True (mail, package 6a: a key names one saved draft) keeps a bound key beyond keep_days: when an
+  ended row is dropped, its key, fingerprint, ending and time stay in `key_tombstone`, and asking again with that key answers as
+  if the row were still there (AlreadyDecided). Tombstones are not dropped with the activity retention.
 - The database and its WAL files are mode 600; a database file others can read stops the start, and so does one written by a
   newer version (PRAGMA user_version).
 - On first start the source's JSON queue file is read into the table and renamed `<name>.migrated`, row by row: an id already
@@ -101,6 +104,15 @@ CREATE TABLE IF NOT EXISTS version (
   raw         BLOB,
   PRIMARY KEY (request_id, n)
 );
+CREATE TABLE IF NOT EXISTS key_tombstone (
+  source          TEXT NOT NULL,
+  key             TEXT NOT NULL,
+  request_id      TEXT NOT NULL,
+  key_fingerprint TEXT,
+  state           TEXT NOT NULL,
+  decided_at      REAL,
+  PRIMARY KEY (source, key)
+);
 """
 # what keeps a key bound after its request ended; anything else frees it
 _FREEING = "state = 'expired' OR (state = 'discarded' AND outcome_reason IN ('target_changed', 'exported'))"
@@ -152,10 +164,10 @@ class Store:
     keeps_keys = True                        # a key stays bound after its request ended (external.py asks for the fingerprint)
 
     def __init__(self, data_dir: str, source: str, ttl: int, max_items: int, keep_days: int = 90, legacy: str | None = None,
-                 type_of: Any = None):
-        """source: which kind of request this store holds (external, imessage, calendar). legacy: the JSON queue file to read in
-        once. type_of(q): the action type of a request read in from that file without one (package 5a: the calendar's
-        operation), so it outlasts the request's content."""
+                 type_of: Any = None, tombstones: bool = False):
+        """source: which kind of request this store holds (external, imessage, calendar, mail). legacy: the JSON queue file to read
+        in once. type_of(q): the action type of a request read in from that file without one (package 5a: the calendar's
+        operation), so it outlasts the request's content. tombstones: keep bound keys after their rows are dropped (package 6a)."""
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source, self.ttl, self.max_items, self.keep_days = source, ttl, max_items, max(1, keep_days)
@@ -167,6 +179,7 @@ class Store:
         self._lock = threading.RLock()
         self._purged_at = 0.0
         self.type_of = type_of
+        self.tombstones = tombstones
         first = _hold_lock(self.dir)
         self._db = self._open()
         if first:
@@ -293,6 +306,11 @@ class Store:
                 if now - self._purged_at > 3600:
                     self._purged_at = now
                     with self._tx():
+                        if self.tombstones:              # a key still bound outlives its row (D6-3)
+                            self._db.execute("INSERT OR REPLACE INTO key_tombstone (source, key, request_id, key_fingerprint, state, decided_at) "
+                                             "SELECT source, key, id, key_fingerprint, state, decided_at FROM request WHERE source = ? AND "
+                                             f"state NOT IN ('waiting', 'executing') AND decided_at < ? AND key IS NOT NULL AND NOT COALESCE(({_FREEING}), 0)",
+                                             (self.source, now - self.keep_days * 86400))
                         self._db.execute("DELETE FROM request WHERE source = ? AND state NOT IN ('waiting', 'executing') AND decided_at < ?",
                                          (self.source, now - self.keep_days * 86400))
                         self._db.execute("DELETE FROM version WHERE request_id NOT IN (SELECT id FROM request)")
@@ -327,6 +345,10 @@ class Store:
                                 return self._q(old)
                             raise AlreadyDecided(old["id"], old["state"])
                         self._db.execute("UPDATE request SET key = NULL WHERE id = ?", (old["id"],))
+                    elif (gone := self._db.execute("SELECT * FROM key_tombstone WHERE source = ? AND key = ?", (self.source, key)).fetchone()):
+                        if key_fingerprint and gone["key_fingerprint"] and key_fingerprint != gone["key_fingerprint"]:
+                            raise KeyConflict()
+                        raise AlreadyDecided(gone["request_id"], gone["state"])
                 waiting = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'waiting'", (self.source,)).fetchone()[0]
                 if waiting >= self.max_items:
                     raise OutboxFull(f"{waiting} messages are already waiting for owner approval (OUTBOX_MAX={self.max_items}). "
