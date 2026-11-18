@@ -101,11 +101,14 @@ def test_only_a_type_of_the_servers_own_may_carry_files_a_context_or_its_own_lis
                                                  params_schema={"type": "object"}), Executor(), ["*"], **{field: value})
 
 
-@pytest.mark.parametrize("field", ["subject_field", "blocked", "row_tags", "blobs"])
+@pytest.mark.parametrize("field", ["subject_field", "blocked", "row_tags", "blobs", "people_rows"])
 def test_only_a_type_of_the_servers_own_may_have_the_new_card_fields(field):
-    """protects=as above, for the fields of ActionType; fails_when=a plugin type registers with one; no_claim=none."""
-    value = {"subject_field": "subject", "blocked": lambda p: "", "row_tags": lambda p: {}, "blobs": lambda p: []}[field]
-    at = A.ActionType(id="test.plain", title="Plain", badge="Plain", approve_label="Go", params_schema=SCHEMA, **{field: value})
+    """protects=as above, for the fields of ActionType; a To row of a plugin type would put an agent's words into the log as
+    whom it reached; fails_when=a plugin type registers with one; no_claim=none."""
+    value = {"subject_field": "subject", "blocked": lambda p: "", "row_tags": lambda p: {}, "blobs": lambda p: [],
+             "people_rows": True}[field]
+    rows = (("To", "to"),) if field == "people_rows" else ()
+    at = A.ActionType(id="test.plain", title="Plain", badge="Plain", approve_label="Go", params_schema=SCHEMA, rows=rows, **{field: value})
     with pytest.raises(ValueError, match=f"only a type the server registers itself may have {field}"):
         A.ActionRegistry().register(at, Executor(), ["*"])
 
@@ -337,3 +340,17 @@ def test_tombstones_may_be_kept_for_some_types_only(tmp_path):
     with pytest.raises(S.AlreadyDecided):
         box.add(b"m2", [], key="draft:Drafts:7:4", action_type="mail.send")
     assert box.add(b"o2", [], key="req-1", action_type="test.letter").key == "req-1"
+
+
+def test_a_key_may_stand_for_what_its_caller_says(tmp_path):
+    """protects=a mail's key names one saved draft: asking again for it returns the request that waits even when its parameters
+    differ (a Message-ID made afresh), never a conflict, and after it ended the same key queues nothing; fails_when=a second
+    request waits or the key conflicts; no_claim=none."""
+    src = source(tmp_path)
+    fp = S.fingerprint({"key": "draft:Drafts:7:4"})
+    a = src.queue_external("test.letter", {"to": "jana@example.org", "subject": "Rota", "body": "One"}, None, key="draft:Drafts:7:4", key_fingerprint=fp)
+    b = src.queue_external("test.letter", {"to": "tom@example.net", "subject": "Rota", "body": "Two"}, None, key="draft:Drafts:7:4", key_fingerprint=fp)
+    assert a.id == b.id and len(src.box.pending()) == 1
+    src.box.claim(a.id, "discarded")
+    with pytest.raises(A.AlreadyDecided):
+        src.queue_external("test.letter", {"to": "jana@example.org", "subject": "Rota", "body": "One"}, None, key="draft:Drafts:7:4", key_fingerprint=fp)

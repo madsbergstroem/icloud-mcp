@@ -575,7 +575,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         src = external_src()
         try:
             if src is None:
-                raise LookupError("There is no added file here to remove.")
+                raise LookupError("There is no added file here to remove: the message was sent, discarded or has expired.")
             q, info = await asyncio.to_thread(src.remove_file, request.path_params["item_id"], int(str(form.get("index", "-1"))))
         except (LookupError, ValueError, RuntimeError) as e:
             return err(str(e).strip("'\""), 409)

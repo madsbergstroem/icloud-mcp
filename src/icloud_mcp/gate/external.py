@@ -439,14 +439,14 @@ class ExternalApprovals(ApprovalSource):
             except LookupError:
                 continue
             return self._file_version(q, reg, type_id, new), info
-        raise LookupError("No file is waiting here.")
+        raise LookupError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
 
     def remove_file(self, item_id: str, index: int) -> tuple[QueuedMessage, dict[str, Any]]:
         """Take a file the owner or an upload added back out of a waiting request: its place waits for a file again."""
         q = next((x for x in self.box.pending() if x.id == item_id), None)
         reg, type_id, params = self._entry(q) if q is not None else (None, "", {})
         if reg is None or reg.files is None:
-            raise LookupError("There is no added file here to remove.")
+            raise LookupError("There is no added file here to remove: the message was sent, discarded or has expired.")
         new, info = reg.files.remove(params, index)
         return self._file_version(q, reg, type_id, new), info
 
@@ -509,10 +509,13 @@ class ExternalApprovals(ApprovalSource):
             return
         self._check_people(reg, list(dict.fromkeys(p for p in people if p)))
 
-    def queue_external(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None) -> QueuedMessage:
+    def queue_external(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None,
+                       key_fingerprint: str | None = None) -> QueuedMessage:
         """Queue a request for the owner's approval, or return the entry already waiting for the same bytes or the same key.
         Raises ExternalError for an unknown type, parameters that do not fit, a recipient the owner did not allow or a full
-        queue, and ExternalConflict for a key that was used for a different request. Nothing is carried out here."""
+        queue, and ExternalConflict for a key that was used for a different request. Nothing is carried out here.
+        key_fingerprint: what the key stands for, when the caller decides it (package 6b: a mail's key names one saved draft,
+        whose Date or Message-ID may be made afresh each time it is asked for); else the parameters without what may change."""
         reg = self.registry.get(action_type_id)
         if reg is None:
             raise A.ExternalError(f"Unknown action type {action_type_id!r}.", "unknown_action", "action")
@@ -522,10 +525,10 @@ class ExternalApprovals(ApprovalSource):
         raw = A.canonical(reg.action_type.id, plain)
         if len(raw) > A.MAX_RAW_BYTES:
             raise A.ExternalError(f"The request is larger than {A.MAX_RAW_BYTES} bytes.", "schema", "params")
-        if key is not None and (old := next((x for x in self.box.pending() if x.key == key), None)) is not None \
+        if key is not None and key_fingerprint is None and (old := next((x for x in self.box.pending() if x.key == key), None)) is not None \
                 and not self._same_request(old, reg.action_type, plain):
             raise A.ExternalConflict("This key was already used for a different request. Use a new key, or ask with the same parameters.")
-        extra = {"key_fingerprint": self.key_fingerprint(reg.action_type, plain)} if getattr(self.box, "keeps_keys", False) else {}
+        extra = {"key_fingerprint": key_fingerprint or self.key_fingerprint(reg.action_type, plain)} if getattr(self.box, "keeps_keys", False) else {}
         try:
             return self.box.add(raw, people, None, key=key, approval_page="the dashboard's Approvals page",
                                 requested_by=requested_by, action_type=reg.action_type.id, **extra)
