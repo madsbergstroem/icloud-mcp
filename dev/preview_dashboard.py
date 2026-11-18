@@ -179,8 +179,8 @@ mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
 mail = d.sources["mail"].mail
-cal = d.sources["calendar"].cal
 ext = d.sources["external"]
+cal = ext.registry.get("calendar.invite").executor.svc         # the server's own CalendarService (package 5b: five action types)
 from icloud_mcp.imessage import ACTION_ID as IMESSAGE, params_of  # noqa: E402
 im_service = ext.registry.get(IMESSAGE).recheck.__self__        # the server's own IMessageService (package 4b: an action type)
 
@@ -219,8 +219,8 @@ im_service.bridge = PreviewMac()
 
 
 # -- calendar changes: a made-up iCloud calendar server, steered by a word in the summary ---------------------------------------
-# The real approve() runs (package 5a; every ending is a state of the approval store); only the CalDAV server is made up
-# (tests/caldav_fakes.py, which honours If-Match). [unclear]: the write times out after it left. [gone]: the event is deleted
+# The real recheck and executor of the calendar types run (package 5b; every ending is a state of the approval store); only the
+# CalDAV server is made up (tests/caldav_fakes.py, which honours If-Match). [unclear]: the write times out after it left. [gone]: the event is deleted
 # in the calendar before the owner approves.
 import caldav_fakes  # noqa: E402
 import niquests  # noqa: E402
@@ -301,6 +301,10 @@ cal.create_event(summary="Board meeting [unclear]", start="2026-11-26T09:00", en
                  attendees=["jana@example.org"])
 seed("fair", "Autumn fair", org="lead@example.org", guests=("alex.morgan@example.org",))
 cal.rsvp("fair", "accepted")
+seed("choir", "Choir practice", guests=("sam@example.org",), start="20261203T180000Z", end="20261203T193000Z")
+cal_server.events["home"]["choir.ics"] = (cal_server.events["home"]["choir.ics"][0].replace("SUMMARY:", "RRULE:FREQ=WEEKLY;COUNT=6\r\nSUMMARY:"),
+                                          '"seed-choir"')
+cal.delete_event("choir", occurrence_start="2026-12-10T18:00:00+00:00")   # one occurrence: the fifth type, calendar.cancel
 
 if args.beeper in ("ok", "no-key", "refused"):              # a Beeper message to a made-up chat, through the real tool
     asyncio.run(mcp.call_tool("messages_send_request", {"chat_id": "beeper:!single:beeper.test", "text": "See you at the north gate at nine."}))
@@ -321,7 +325,7 @@ taken_back = mail.send(to=["jordan.lee@example.org"], subject="Offer for the del
 asyncio.run(mcp.call_tool("approval_withdraw", {"id": taken_back, "reason": "mistake"}))
 if args.nothing_waits:                                       # Home with nothing waiting: the queues emptied, one mail sent today
     for src in d.sources.values():
-        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
+        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(src, "box", None)
         for q in src.pending():
             box.claim(q.id)
     d.audit.record("approval.sent", actor="owner", via="password", summary="Approved email “Re: Invoice for October”",
