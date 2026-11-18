@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 to 4, 5a, 5b and 6a are built; the others are not.
+shows. Packages 0 to 4, 5a, 5b, 6a and 6b are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
@@ -970,6 +970,30 @@ Needs a mock with variants before it is built: A, the type's title with the subj
 subject as the title, through a field only `builtin` types may use (as 5b's variant B). Both show From, To, Cc and Bcc, the folded
 quote, the attachments and the 2d form. Package 10 asks the same mock whether a mail with an attachment may go without a look.
 
+The owner chose the card on 2026-11-18 from a mock with two variants (variant A, Artifact "Sendgate 6b Mailkarte"): the title is the
+type's own ("Email", "Email reply", "Forward"), and the subject goes on the line under it and in the list, through the `subject`
+field 5b built ("Email reply · Re: Invoice 2291 · to accounts@example.org"). No parameter becomes a title. The card keeps From with
+the account tag, To, Cc, Bcc, the folded quote ("Show the quoted mail"), the attachments with their preview, a missing file with
+"Choose file" and Send off until it is there, and "In reply to" with the original's subject and sender. Edit opens the 2d form with
+Subject, To, Cc, Bcc and the text; someone the owner types in who is not on the list may get that mail only, `MAX_RECIPIENTS` is
+never waived, and a changed subject keeps `In-Reply-To` and `References`. For package 10 the owner answered no: a mail with an
+attachment never goes without a look.
+
+| On the screen | Today | After 6b |
+|---------------|-------|----------|
+| List, first line | Re: Invoice 2291 | Email reply |
+| List, second line | Mail · to accounts@example.org | Email reply · Re: Invoice 2291 · to accounts@example.org |
+| Card title and line under it | Re: Invoice 2291 / Email reply · asked by … | Email reply / Re: Invoice 2291 · to accounts@example.org · asked by … |
+| Rows | From with the account tag, To, Cc, Bcc, "Sent to" when it differs | From with the account tag, To, Cc, Bcc (the envelope is To, Cc and Bcc) |
+| Text | the new text, the quote folded under "Show the quoted mail" | unchanged, through `text_style` "mail" |
+| Attachments, missing file | Attached (with preview); Missing with "Choose file", Send off | unchanged, from the type's `files` |
+| The mail it answers | only in the warning box | a line "In reply to “Invoice 2291” from accounts@example.org" (a forward: "Forwards …"); a saved draft has none |
+| Edit | text only, "The recipients and the subject stay the same." | the 2d form: Subject, To, Cc, Bcc, Text, with "At most 25 recipients." |
+| Note under the card | In reply to, Attachments, Waiting for | "Approving sends it once from your account." |
+| Sidebar "Waiting by kind" | Mail | Email, Email reply, Forward (the types' badges) |
+| Push note | "An email is waiting for your approval." | unchanged (the type's `status_kind`) |
+| Activity | Approved email “Re: Invoice 2291” | Approved email “Email” (the type's title, as 4b and 5b) |
+
 Start-up moves every row of source `mail` to source `external` once, as in 4b and 5b: same id, state, versions and expiry, the
 parameters in the canonical form of the type, a new hash and one `approval.migrated` line per waiting row. The type comes from the
 stored message: `In-Reply-To` with a `followup` flag `\Answered` is `mail.reply`, `$Forwarded` is `mail.forward`, anything else
@@ -1003,6 +1027,24 @@ Acceptance criteria:
    and no module under `gate/` imports `mail` or `textedit`.
 6. Rollback: the export, then 6a, shows the same waiting mail, and approving one sends it with the same `Message-ID`.
 
+### As built (6b)
+
+`mail.register_types` registers `mail.send`, `.reply` and `.forward` (`builtin`, `allowed` `["*"]`, `status_kind` "mail", one shared
+context); `MailService.recheck` gives the `not_allowed` ending and `MailService.deliver`, behind `MailExecutor`, the other endings of
+6a; `approve()`, the mail store's queue path, `MailApprovals`, the file routes of `dashboard.py`, the mail page of `/outbox` and the
+mail parts of `textedit.py` are gone. The gate gained, for its own types: `subject_field`, `blocked`, `row_tags`, `blobs`,
+`edit_note`, `text_limit`, `people_rows` and text style "mail" on `ActionType`; `recheck_owner_allowed` (the recheck gets the
+version's `owner_allowed`, also when the owner saves, and may raise `Rechecked` with its own words), `allows`, `files`, `context`
+and `status_kind` on the registration. Blobs live in `approvals.db` (`blob`, `blob_ref` by version, staged blobs kept an hour);
+the body is a blob above 64 KiB. Key tombstones are kept for the mail types only (`Store(tombstones=types)`) and move with the
+rows. The file routes keep their paths and answers in `dashboard_api.py`. `TextLocked`, `TextInvalid` and `clean` moved to
+`gate/text.py`, so no module under `gate/` imports `textedit`. `gate/export_queue.mail_message` puts a mail back together for the
+export and for the send. Mail now shares the external store's `OUTBOX_MAX` with every other action (before, mail had a queue of its own); not decided by the owner. D6-7: the steering warning and agent-added addresses are read through the type's context when the card is
+shown, as before 6b, and need the second confirmation; the mock does not show them, so D6-7 stays open. Tests:
+`tests/test_mail_release.py` (the 6a endings on the external source, the types, blobs, the form, the start-up move, the rollback
+run against 6a from git), `tests/test_mail_answers.py` (criterion 4 against a golden file from 6a), `tests/test_action_mail_fields.py`,
+and `tests/test_provenance.py` (criterion 5).
+
 ### Decisions for package 6
 
 | # | Question | Recommended | Why |
@@ -1013,7 +1055,7 @@ Acceptance criteria:
 | D6-4 | One type, or one per kind? | `mail.send`, `mail.reply`, `mail.forward` (owner, 2026-11-18) | Badge fixed per type, and a forward or a draft no longer reads as a reply |
 | D6-5 | The whole message in one parameter, or the editable headers apart? | apart: `to`, `cc`, `bcc`, `subject` as fields, the rest in `message`, attachments as blobs (owner, 2026-11-18) | 2d edits fields of the parameters, and the canonical JSON cannot hold 5 MiB. Open: whether the blob table belongs in the gate or in mail's own part of the store |
 | D6-6 | The success note | keep "Sent to …", add the refused addresses (owner, 2026-11-18) | For mail, "sent" means accepted by the SMTP server, as every mail program uses it; 5a changed the calendar's note because iCloud, not this server, sends the invitations |
-| D6-7 | The steering warning and agent-added addresses after 6b | open (owner, 2026-11-18) | Today they are read from the mailbox when the card is shown (`mail.py:1959-1983`). Storing them at queue time freezes them; reading them needs a context hook the type does not have. Needs the mock and one more look |
+| D6-7 | The steering warning and agent-added addresses after 6b | open (owner, 2026-11-18); built as before: read through the type's context when the card is shown (6b) | Today they are read from the mailbox when the card is shown (`mail.py:1959-1983`). Storing them at queue time freezes them; reading them needs a context hook, which 6b added. The mock does not show them, so the choice is still the owner's |
 | D6-8 | `approval_status` `kind` for mail after 6b | `mail`, with `action_type` (owner, 2026-11-18) | iMessage and calendar answer `external` since 4b and 5b (`gate/status.py:89-92`); mail has upstream's agents, which read `kind` |
 
 Open questions, not decided above:
@@ -1132,8 +1174,8 @@ it later, once they can name one person for a one-to-one chat and refuse groups;
 cannot opt in, because it has no way to say who a chat id is. `gate.trust` itself never opts in.
 
 The calendar becomes an action type in 5b and mail in 6, so the order is 5b, 6, then 10. Mail keeps the rules it has today on top
-(`SEND_ALLOWLIST`, `MAX_RECIPIENTS`): a rule only skips the wait. Whether a mail with an attachment may go without a look is
-a question for the mock of package 6.
+(`SEND_ALLOWLIST`, `MAX_RECIPIENTS`): a rule only skips the wait. A mail with an attachment never goes without a look, whatever
+rules exist (the owner, 2026-11-18, on the mock of package 6).
 
 ### Out of scope for package 10
 
