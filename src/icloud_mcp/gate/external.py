@@ -80,11 +80,12 @@ class ExternalApprovals(ApprovalSource):
         return list(dict.fromkeys(t.badge for t in self.registry.types()))
 
     def contexts(self, items, prune=True):
-        """What the cards need beyond the parameters, by request id: each type with a context (package 6b: the mail a reply answers)
-        is asked once for its requests. Best effort: a context that cannot be read leaves the card as the parameters make it."""
+        """What the cards need beyond the parameters, by request id: each context (package 6b: the mail a reply answers) is asked
+        once for all the requests of the types that share it, so mail reads each folder once for a page. Best effort: a context that
+        cannot be read leaves the card as the parameters make it."""
         out: dict[str, Any] = {}
-        groups: dict[str, list[A.ActionRequest]] = {}
-        regs: dict[str, A.Registration] = {}
+        groups: dict[int, list[A.ActionRequest]] = {}
+        readers: dict[int, Any] = {}
         for q in items:
             try:
                 reg, type_id, params = self._entry(q)
@@ -92,13 +93,13 @@ class ExternalApprovals(ApprovalSource):
                 continue
             if reg is None or reg.context is None:
                 continue
-            regs[type_id] = reg
-            groups.setdefault(type_id, []).append(A.ActionRequest(q.id, type_id, params, q.requested_by, q.key))
-        for type_id, requests in groups.items():
+            readers[id(reg.context)] = reg.context
+            groups.setdefault(id(reg.context), []).append(A.ActionRequest(q.id, type_id, params, q.requested_by, q.key))
+        for key, requests in groups.items():
             try:
-                got = regs[type_id].context(requests) or {}
+                got = readers[key](requests) or {}
             except Exception as e:  # noqa: BLE001
-                log.warning("The context of %s raised %s", type_id, type(e).__name__)
+                log.warning("The context of %s raised %s", requests[0].action_type, type(e).__name__)
                 continue
             out.update({k: dict(v) for k, v in got.items() if isinstance(v, Mapping)})
         return out
@@ -217,8 +218,9 @@ class ExternalApprovals(ApprovalSource):
             at = self._entry(q)[0].action_type
         except (A.ExternalError, AttributeError):                 # unreadable, or a type that is not registered any more
             return self.text_limit
+        limit = at.text_limit or self.text_limit                  # a type of the server's own may allow more (a mail, package 6b)
         cap = ((at.params_schema.get("properties") or {}).get(at.text_field) or {}).get("maxLength") if at.text_field else None
-        return min(self.text_limit, cap) if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else self.text_limit
+        return min(limit, cap) if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else limit
 
     def text_block(self, q):
         try:
@@ -245,7 +247,8 @@ class ExternalApprovals(ApprovalSource):
         return str(params.get(reg.action_type.text_field) or "")
 
     def clean_text(self, text):
-        return T.clean(text, allow_empty=True, limit=self.text_limit)           # the schema decides whether empty is acceptable
+        # the schema decides whether empty is acceptable; the longest any type allows here, each request's own in with_text
+        return T.clean(text, allow_empty=True, limit=max([self.text_limit] + [t.text_limit for t in self.registry.types()]))
 
     def with_text(self, q, text):
         reg, type_id, params = self._entry(q)
@@ -253,6 +256,8 @@ class ExternalApprovals(ApprovalSource):
             raise T.TextLocked(self.text_block(q))
         if reason := self.text_block(q):
             raise T.TextLocked(reason)
+        if len(text) > (limit := reg.action_type.text_limit or self.text_limit):     # the schema's own maxLength says it below
+            raise T.TextInvalid(f"The text is longer than {limit:,} characters.")
         if reg.action_type.with_text is not None:                # the text lives inside text_field: the type writes it back
             try:
                 changed = dict(reg.action_type.with_text(params, text))
@@ -341,7 +346,8 @@ class ExternalApprovals(ApprovalSource):
         text = None
         for name, value in changes.items():
             if isinstance(value, str):
-                value = T.clean(value, allow_empty=True, limit=self.text_limit, strip=name != at.text_field)
+                value = T.clean(value, allow_empty=True, limit=self.text_limit_of(q) if name == at.text_field else self.text_limit,
+                                strip=name != at.text_field)
             if name == at.text_field and at.with_text is not None:    # a text inside another parameter: written back below
                 text = value if isinstance(value, str) else ""
             elif value == "" and name not in (at.params_schema.get("required") or []):

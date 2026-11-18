@@ -158,6 +158,7 @@ class ActionType:
     row_tags: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None
     blobs: Callable[[Mapping[str, Any]], Iterable[str]] | None = None
     edit_note: str = ""
+    text_limit: int = 0                        # the most characters its text may have, when not the general 10,000 (a mail's MAX_BODY_CHARS)
     # its rows may use the labels reserved for who a request reaches (a mail's To, Cc and Bcc); the log then names whom it reached
     # from `recipients` only (D4-2), never from a row
     people_rows: bool = False
@@ -369,7 +370,7 @@ class ActionRegistry:
         if action_type.subject is not None and not builtin:      # the agent's words next to the title: the server's own types only
             raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have a subject.")
         own = {"subject_field": action_type.subject_field, "blocked": action_type.blocked, "row_tags": action_type.row_tags,
-               "blobs": action_type.blobs, "people_rows": action_type.people_rows or None, "recheck_owner_allowed": recheck_owner_allowed or None, "allows": allows, "files": files,
+               "blobs": action_type.blobs, "people_rows": action_type.people_rows or None, "text_limit": action_type.text_limit or None, "recheck_owner_allowed": recheck_owner_allowed or None, "allows": allows, "files": files,
                "context": context, "status_kind": status_kind}
         if not builtin and (used := [k for k, v in own.items() if v is not None]):     # package 6b: the server's own types only
             raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have {used[0]}.")

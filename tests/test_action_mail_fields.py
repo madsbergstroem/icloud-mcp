@@ -194,6 +194,25 @@ def test_a_context_adds_cautions_a_second_confirmation_and_what_the_request_answ
     assert "original" not in src.describe(a) and src.describe(a)["needs_override"] is False
 
 
+def test_types_that_share_a_context_are_asked_together(tmp_path):
+    """protects=one read per page for mail: a reply and a forward share mail's context, which reads each folder once for both;
+    fails_when=the context is asked once per type; no_claim=none."""
+    import dataclasses
+    seen = []
+
+    def context(requests):
+        seen.append(sorted(r.action_type for r in requests))
+        return {}
+    reg = A.ActionRegistry()
+    for type_id in ("test.letter", "test.reply"):
+        reg.register(dataclasses.replace(letter_type(), id=type_id), Executor(), ["*"], builtin=True, context=context)
+    src = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)
+    a = src.queue_external("test.letter", {"to": "jana@example.org", "subject": "A", "body": "a"}, None)
+    b = src.queue_external("test.reply", {"to": "tom@example.net", "subject": "B", "body": "b"}, None)
+    src.contexts([a, b])
+    assert seen == [["test.letter", "test.reply"]]
+
+
 def test_a_row_may_carry_a_tag(tmp_path):
     """protects=the account tag on a mail's From row; fails_when=the tag is lost or one that raises breaks the card;
     no_claim=how the tag looks."""
@@ -354,3 +373,24 @@ def test_a_key_may_stand_for_what_its_caller_says(tmp_path):
     src.box.claim(a.id, "discarded")
     with pytest.raises(A.AlreadyDecided):
         src.queue_external("test.letter", {"to": "jana@example.org", "subject": "Rota", "body": "One"}, None, key="draft:Drafts:7:4", key_fingerprint=fp)
+
+
+def test_a_type_of_the_servers_own_may_allow_a_longer_text(tmp_path):
+    """protects=a mail's text keeps its MAX_BODY_CHARS (30,000 by default) when it is edited as an action, while every other
+    type keeps the general 10,000; fails_when=a long mail text cannot be saved, or another type's limit grows; no_claim=none."""
+    import dataclasses
+    reg = A.ActionRegistry()
+    reg.register(letter_type(text_limit=30000), Executor(), ["*"], builtin=True)
+    reg.register(dataclasses.replace(letter_type(), id="test.short", subject=None, subject_field=None, blocked=None, blobs=None,
+                                     editable_fields=("to",)), Executor(), ["*"])
+    src = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)
+    long_ = src.queue_external("test.letter", {"to": "jana@example.org", "subject": "A", "body": "a"}, None)
+    short = src.queue_external("test.short", {"to": "jana@example.org", "subject": "A", "body": "a"}, None)
+    assert (src.text_limit_of(long_), src.text_limit_of(short)) == (30000, 10000)
+    text = src.clean_text("x" * 20000)
+    assert json.loads(src.with_text(long_, text)[0])["params"]["body"] == text
+    with pytest.raises(ValueError, match="longer than 10,000"):
+        src.with_text(short, text)
+    with pytest.raises(ValueError, match="only a type the server registers itself may have text_limit"):
+        A.ActionRegistry().register(dataclasses.replace(letter_type(text_limit=30000), subject=None, subject_field=None, blocked=None,
+                                                        blobs=None, editable_fields=("to",)), Executor(), ["*"])
