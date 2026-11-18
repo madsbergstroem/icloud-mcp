@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import copy
 import email
 import errno
 import functools
@@ -18,6 +19,7 @@ import hashlib
 import hmac
 import html as html_lib
 import imaplib
+import io
 import json
 import logging
 import mimetypes
@@ -32,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email import policy
 from email.errors import HeaderParseError
+from email.generator import BytesGenerator
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses, make_msgid, parsedate_to_datetime
@@ -88,6 +91,71 @@ OWNER_DRAFT_NOTICE = (
 
 class MailError(Exception):
     """Raised for user-facing mail failures (bad input, refused by server, ...)."""
+
+
+class SmtpFailed(MailError):
+    """An SMTP send that failed, with the same text as before. maybe_sent: the message was being handed over (DATA) when it failed,
+    so it may have gone out and is never sent again; False when the failure proves it never left (docs/SENDGATE.md, package 6a:
+    the connection never opened, MAIL FROM or RCPT failed, or the server answered DATA with an error code, D6-2)."""
+
+    def __init__(self, text: str, maybe_sent: bool, reason: str = ""):
+        super().__init__(text)
+        self.maybe_sent, self.reason = maybe_sent, reason
+
+
+# The action type of a mail, which the approval store writes into the row so it outlasts the content (docs/SENDGATE.md, package 6).
+def mail_type_of(q: Any) -> str:
+    """mail.reply for an answer (In-Reply-To, and the original is to be marked answered), mail.forward for a forward, else mail.send."""
+    flag = (q.followup or {}).get("flag")
+    if flag == "$Forwarded":
+        return "mail.forward"
+    if flag == ANSWERED and email.message_from_bytes(q.raw.split(b"\r\n\r\n", 1)[0], policy=policy.default)["In-Reply-To"]:
+        return "mail.reply"
+    return "mail.send"
+
+
+def _smtp_transfer(conn: smtplib.SMTP, msg: EmailMessage, from_addr: str, to_addrs: list[str], step: list[str]) -> dict[str, Any]:
+    """MAIL FROM, RCPT and DATA one at a time, as smtplib's send_message does them, so a failure names its step (step[0]). The
+    bytes on the wire are send_message's: the message without Bcc and Resent-Bcc; the stored message, and the copy for Sent,
+    keep its Bcc. Returns the recipients the server refused while it took the others, as send_message does."""
+    wire = copy.copy(msg)
+    del wire["Bcc"]
+    del wire["Resent-Bcc"]
+    options: list[str] = []
+    try:
+        "".join([from_addr, *to_addrs]).encode("ascii")
+        international = False
+    except UnicodeEncodeError:
+        if not conn.has_extn("smtputf8"):
+            raise smtplib.SMTPNotSupportedError("One or more source or delivery addresses require internationalized email "
+                                                "support, but the server does not advertise the required SMTPUTF8 capability")
+        international = True
+    with io.BytesIO() as out:
+        (BytesGenerator(out, policy=msg.policy.clone(utf8=True)) if international else BytesGenerator(out)).flatten(wire, linesep="\r\n")
+        flat = out.getvalue()
+    if international:
+        options += ["SMTPUTF8", "BODY=8BITMIME"]
+    if conn.does_esmtp and conn.has_extn("size"):
+        options.insert(0, f"size={len(flat)}")
+    step[0] = "mail"
+    code, resp = conn.mail(from_addr, options)
+    if code != 250:
+        raise smtplib.SMTPSenderRefused(code, resp, from_addr)
+    step[0] = "rcpt"
+    refused: dict[str, Any] = {}
+    for a in to_addrs:
+        code, resp = conn.rcpt(a)
+        if code not in (250, 251):
+            refused[a] = (code, resp)
+        if code == 421:
+            raise smtplib.SMTPRecipientsRefused(refused)
+    if len(refused) == len(to_addrs):
+        raise smtplib.SMTPRecipientsRefused(refused)
+    step[0] = "data"
+    code, resp = conn.data(flat)
+    if code != 250:
+        raise smtplib.SMTPDataError(code, resp)
+    return refused
 
 
 # ---------------------------------------------------------------------------
@@ -773,10 +841,11 @@ _retrying = callctx.retry_once_if_safe(_mail_transport)
 
 
 class MailService:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, outbox: Any = None):
+        """outbox: where mail waits for the owner; the server passes the approval store (package 6a), else the JSON queue."""
         self.s = settings
         self._folder_cache: dict[str, str] = {}
-        self.outbox = Outbox(settings.data_dir, settings.outbox_ttl, settings.outbox_max)
+        self.outbox = outbox if outbox is not None else Outbox(settings.data_dir, settings.outbox_ttl, settings.outbox_max)
         self._people_lock = threading.Lock()
         self._people_cache: dict[bool, tuple[float, dict[str, dict[str, Any]], dict[str, int]]] = {}
         self._pool_lock = threading.Lock()
@@ -1805,7 +1874,8 @@ class MailService:
         """Hand one message to the SMTP server. The logged-in connection is kept for a minute and checked with NOOP before
         reuse, which saves a TLS handshake and login per send. Every gate (approval, allowlist, recipient cap) is checked by the
         caller before this runs, per message, whatever connection carries it. A send that fails is never retried here: the
-        server may have accepted it."""
+        server may have accepted it. A failure raises SmtpFailed, which says whether the message may have gone out."""
+        step = ["open"]
         with self._smtp_lock:
             try:
                 if self._smtp is not None:
@@ -1821,21 +1891,29 @@ class MailService:
                 if self._smtp is None:
                     self._smtp = (self._smtp_open(), time.monotonic())
                 conn = self._smtp[0]
-                refused = conn.send_message(msg, from_addr=self.s.email_address, to_addrs=recipients)
+                refused = _smtp_transfer(conn, msg, self.s.email_address, recipients, step)
                 self._smtp = (conn, time.monotonic())
                 return refused
             except smtplib.SMTPAuthenticationError as e:
                 self._smtp_drop()
-                raise MailError(f"SMTP authentication failed ({e.smtp_code}). Check ICLOUD_USERNAME and the app-specific password. Run icloud_check_health to see which service is failing.") from e
+                raise SmtpFailed(f"SMTP authentication failed ({e.smtp_code}). Check ICLOUD_USERNAME and the app-specific password. Run icloud_check_health to see which service is failing.",
+                                 False, "the mail server refused the sign-in; check ICLOUD_USERNAME and the app-specific password") from e
             except smtplib.SMTPRecipientsRefused as e:
                 self._smtp_drop()
-                raise MailError(f"All recipients were refused by the server: {e.recipients}. Check the addresses; nothing was sent.") from e
+                raise SmtpFailed(f"All recipients were refused by the server: {e.recipients}. Check the addresses; nothing was sent.", False,
+                                 "the mail server refused every recipient: " + ", ".join(e.recipients)) from e
             except smtplib.SMTPSenderRefused as e:
                 self._smtp_drop()
-                raise MailError(f"Sender address refused ({e.smtp_code}): the From address must be your iCloud address or one of its aliases.") from e
+                raise SmtpFailed(f"Sender address refused ({e.smtp_code}): the From address must be your iCloud address or one of its aliases.",
+                                 False, f"the mail server refused the sender address ({e.smtp_code})") from e
             except (smtplib.SMTPException, OSError) as e:
                 self._smtp_drop(quit=False)                  # a dead or broken connection: QUIT would only wait
-                raise MailError(f"SMTP send failed: {e}. Check Sent before trying again: the message may have gone out. Run icloud_check_health to see which service is failing.") from e
+                # only a failure while the message was handed over may have reached the server; an error code to it did not (D6-2)
+                maybe = step[0] == "data" and not isinstance(e, smtplib.SMTPDataError)
+                why = (f"the mail server refused the message ({e.smtp_code})" if isinstance(e, smtplib.SMTPDataError)
+                       else f"the mail server could not be reached ({type(e).__name__})")
+                raise SmtpFailed(f"SMTP send failed: {e}. Check Sent before trying again: the message may have gone out. Run icloud_check_health to see which service is failing.",
+                                 maybe, why) from e
 
     def _summary_of(self, msg: EmailMessage) -> dict[str, Any]:
         return {
@@ -1847,8 +1925,10 @@ class MailService:
 
     def _queue_checked(self, msg: EmailMessage, followup: dict[str, Any] | None = None, key: str | None = None) -> dict[str, Any]:
         """Queue a message for the owner's approval, after the same gates as a send (ALLOW_SEND, recipient cap, allowlist).
-        key: what the message was built from (a saved draft), so a repeat returns the entry already waiting.
+        key: what the message was built from (a saved draft), so a repeat returns the entry already waiting, and, in the approval
+        store, the mail it became once that ended: nothing is queued again (D6-3).
         Takes no IMAP connection: nothing here reads or writes the mailbox."""
+        from .gate.store import AlreadyDecided, StoreUnavailable
         if not self.s.allow_send:
             raise MailError("Sending is disabled on this server (ALLOW_SEND=false). Use draft=true to save a draft instead.")
         recipients = self._check_recipients(msg)
@@ -1857,6 +1937,13 @@ class MailService:
             q = self.outbox.add(msg.as_bytes(policy=policy.SMTP), recipients, followup, key=key)
         except OutboxFull as e:
             raise MailError(str(e)) from e
+        except StoreUnavailable as e:
+            raise MailError(str(e)) from e
+        except AlreadyDecided as e:              # this draft became a mail that was decided: its outcome, and nothing queued
+            status = "waiting" if e.state == "executing" else e.state
+            return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
+                    "notice": "Nothing was queued: this draft was already queued once and that mail was decided. Do not send it again; "
+                              "approval_status with the outbox_id says more, and the owner can send the draft from Mail."}
         again = q.created_at < asked             # the entry already waiting: describe what the owner will actually see
         queued = email.message_from_bytes(q.raw, policy=policy.default) if again else msg
         waiting = pending_files(queued)
@@ -1898,11 +1985,14 @@ class MailService:
         return self._send_and_file(c, msg, raw, recipients, followup, base, selected=selected)
 
     def _send_and_file(self, c: IMAPClient, msg: EmailMessage, raw: bytes, recipients: list[str], followup: dict[str, Any] | None,
-                       base: dict[str, Any], *, selected: tuple[str, int | None] | None = None) -> dict[str, Any]:
+                       base: dict[str, Any], *, selected: tuple[str, int | None] | None = None, sent: list[Any] | None = None) -> dict[str, Any]:
         """The only place mail actually leaves: SMTP send, Sent copy, and flagging of the original. The original's folder is
         selected again unless `selected` says this call already opened exactly that folder and uidvalidity read-write on c
-        (the Sent lookup, APPEND and SMTP in between never change the open folder)."""
+        (the Sent lookup, APPEND and SMTP in between never change the open folder). sent: a list that gets an entry once the
+        SMTP server took the message, so a caller can tell a failure after the send from one before it."""
         refused = self._smtp_send(msg, recipients)
+        if sent is not None:
+            sent.append(refused)
         result: dict[str, Any] = {"status": "sent", "recipients": recipients, **base}
         if refused:
             result["refused"] = {k: list(v) for k, v in refused.items()}
@@ -2132,6 +2222,88 @@ class MailService:
         with self._contexts_lock:
             self._contexts.pop(self._context_key(q), None)
         return new
+
+    def approve(self, item_id: str, sha256: str | None = None) -> dict[str, Any]:
+        """The owner approved a waiting mail: send exactly what was stored, at most once. Called only from the owner's approval
+        pages (the dashboard, /outbox), never from a tool. sha256: the version the owner looked at; another one is not sent.
+
+        How it ends (docs/SENDGATE.md, package 6a): a file still missing -> nothing is claimed; another version than the one the
+        owner looked at -> waits again; sending off, a recipient the lists no longer allow or too many -> discarded (not_allowed),
+        raised as Rechecked; the mailbox cannot be opened, or SMTP fails before the message is handed over or answers it with an
+        error code -> waits again (failed), raised as MailError; the connection drops or times out while the message is handed
+        over -> unclear, never sent again; the server takes it -> sent, also when it refused some recipients or the copy in Sent,
+        the flag on the original or the draft's move to Trash failed (the note says which). Returns the send's result with
+        `status` (sent or unclear) and `note`, the line for the owner."""
+        from .gate.actions import Rechecked
+        gone = "That message is no longer waiting (already released, discarded or expired)."
+        ahead = next((x for x in self.outbox.pending() if x.id == item_id), None)
+        if ahead is None:
+            raise MailError(gone)
+        if waiting := pending_files(email.message_from_bytes(ahead.raw, policy=policy.default)):   # nothing is claimed
+            raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
+        q = self.outbox.claim(item_id, "executing")
+        if q is None:
+            raise MailError(gone)
+        with self._contexts_lock:
+            self._contexts.pop(self._context_key(q), None)
+        msg = email.message_from_bytes(q.raw, policy=policy.default)
+        if (sha256 is not None and q.sha256 != sha256) or pending_files(msg):      # changed between the owner's look and the click
+            self.outbox.restore(q)
+            raise MailError("The message changed just now (a file was added or the text edited). Nothing was sent; look at it again.")
+        try:
+            if not self.s.allow_send:
+                raise MailError("Sending is disabled on this server (ALLOW_SEND=false).")
+            recipients = self._check_recipients(msg)  # the lists as they are now, the same check as when the agent asked
+        except MailError as e:
+            self.outbox.finish(q.id, "discarded", "not_allowed")
+            raise Rechecked("not_allowed", f"Not sent: {e}") from e
+        raw = q.raw
+        if added := [p for p in iter_attachment_parts(msg) if p.get(ADDED_HEADER)]:
+            for p in added:                           # what the owner approved, without the server's own bookkeeping
+                del p[ADDED_HEADER]
+            raw = msg.as_bytes(policy=policy.SMTP)
+        opened, sent = False, []
+        try:
+            with self.imap() as c:                    # the mailbox first: one that cannot be opened sends nothing
+                opened = True
+                result = self._send_and_file(c, msg, raw, recipients, q.followup, self._summary_of(msg), sent=sent)
+        except SmtpFailed as e:
+            if e.maybe_sent:
+                return self._unclear(q, recipients, e.__cause__ or e)
+            self.outbox.restore(q)
+            raise MailError(f"Not sent, it still waits: {e.reason or e}.") from e
+        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the server took it
+            if sent:                                  # it went out; only the filing after it failed
+                self.outbox.finish(q.id, "sent")
+                return self._sent_note({"status": "sent", "recipients": recipients, "refused": {k: list(v) for k, v in sent[0].items()},
+                                        "warning": f"Sent, but filing it afterwards failed: {e}"})
+            if not opened:
+                self.outbox.restore(q)
+                raise MailError(f"Not sent, it still waits: the mailbox could not be opened ({e}).") from e
+            return self._unclear(q, recipients, e)
+        self.outbox.finish(q.id, "sent")
+        return self._sent_note(result)
+
+    def _unclear(self, q: QueuedMessage, recipients: list[str], e: BaseException) -> dict[str, Any]:
+        self.outbox.finish(q.id, "unclear")
+        return {"status": "unclear", "recipients": recipients,
+                "note": f"The mail server did not confirm the mail ({type(e).__name__}), so it may or may not have gone out. It is not "
+                        "sent again; ask a recipient before sending it once more."}
+
+    @staticmethod
+    def _sent_note(result: dict[str, Any]) -> dict[str, Any]:
+        """The owner's line for a sent mail: whom the server took it for (D6-6), whom it refused, and what is missing afterwards."""
+        refused = list((result.get("refused") or {}).keys())
+        took = [r for r in result.get("recipients", []) if r not in refused]
+        note = f"Sent to {', '.join(took)}."
+        if refused:
+            note += f" The mail server refused {len(refused)}: {', '.join(refused)}."
+        for k in ("warning", "draft_left_in_place"):
+            if result.get(k):
+                note += f" {result[k]}"
+        if result.get("original_flag_skipped"):
+            note += f" The original was not marked: {result['original_flag_skipped']}"
+        return {**result, "status": "sent", "note": note}
 
     def release(self, item_id: str) -> dict[str, Any]:
         """Send a queued message. Called only from the owner's approval pages (the dashboard, /outbox), never from an MCP tool."""

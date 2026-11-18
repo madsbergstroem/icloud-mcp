@@ -510,11 +510,20 @@ class FakeSMTP:
             raise smtplib.SMTPServerDisconnected("gone")
         return (250, b"OK")
 
-    def send_message(self, msg, from_addr=None, to_addrs=None):
+    does_esmtp = True
+
+    def has_extn(self, name):
+        return False
+
+    def mail(self, sender, options=()):                # package 6a sends MAIL, RCPT and DATA one at a time
+        return (250, b"OK")
+
+    def rcpt(self, recip, options=()):
+        return (250, b"OK")
+
+    def data(self, msg):
         self.calls.append("send")
-        if self.refuse:
-            raise smtplib.SMTPDataError(554, b"rejected")
-        return {}
+        return (554, b"rejected") if self.refuse else (250, b"OK")
 
     def quit(self):
         self.calls.append("quit")
