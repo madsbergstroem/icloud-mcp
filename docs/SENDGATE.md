@@ -2,7 +2,7 @@
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
 shows. Packages 0 to 4 and 5a are built; the others are not.
-"Current state" was read at commit `330c82f` (branch `mb/ionic-ui`), which left upstream at `184ffa8`.
+"Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
 
