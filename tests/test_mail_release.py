@@ -219,7 +219,7 @@ def test_a_mailbox_that_cannot_be_opened_keeps_it_waiting(env):
     mail, server, _, imap = env
     item = queue(mail)
     imap["imap_down"] = True
-    with pytest.raises(MailError, match="still waits"):
+    with pytest.raises(MailError, match="mailbox could not be opened"):
         mail.approve(item)
     assert state(mail, item) == ("waiting", None) and server.connections == 0
     imap["imap_down"] = False
@@ -256,7 +256,7 @@ def test_a_failure_before_the_message_is_handed_over_keeps_it_waiting(env, monke
     else:
         step, what = how.split("_")
         server.fault = ({"after": "after"}.get(step, step), int(what) if what.isdigit() else what)
-    with pytest.raises(MailError, match="still waits"):
+    with pytest.raises(MailError, match="The mail server"):
         mail.approve(item)
     assert state(mail, item) == ("waiting", None)
     assert server.data_reached == (1 if how in ("data_451", "after_554") else 0)

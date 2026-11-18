@@ -99,6 +99,7 @@ class SmtpFailed(MailError):
     the connection never opened, MAIL FROM or RCPT failed, or the server answered DATA with an error code, D6-2)."""
 
     def __init__(self, text: str, maybe_sent: bool, reason: str = ""):
+        """reason: the same failure in a sentence for the owner, where the text for agents would mislead them."""
         super().__init__(text)
         self.maybe_sent, self.reason = maybe_sent, reason
 
@@ -1897,21 +1898,21 @@ class MailService:
             except smtplib.SMTPAuthenticationError as e:
                 self._smtp_drop()
                 raise SmtpFailed(f"SMTP authentication failed ({e.smtp_code}). Check ICLOUD_USERNAME and the app-specific password. Run icloud_check_health to see which service is failing.",
-                                 False, "the mail server refused the sign-in; check ICLOUD_USERNAME and the app-specific password") from e
+                                 False, "The mail server refused the sign-in. Check ICLOUD_USERNAME and the app-specific password.") from e
             except smtplib.SMTPRecipientsRefused as e:
                 self._smtp_drop()
                 raise SmtpFailed(f"All recipients were refused by the server: {e.recipients}. Check the addresses; nothing was sent.", False,
-                                 "the mail server refused every recipient: " + ", ".join(e.recipients)) from e
+                                 "The mail server refused every recipient: " + ", ".join(e.recipients) + ".") from e
             except smtplib.SMTPSenderRefused as e:
                 self._smtp_drop()
                 raise SmtpFailed(f"Sender address refused ({e.smtp_code}): the From address must be your iCloud address or one of its aliases.",
-                                 False, f"the mail server refused the sender address ({e.smtp_code})") from e
+                                 False, f"The mail server refused the sender address ({e.smtp_code}).") from e
             except (smtplib.SMTPException, OSError) as e:
                 self._smtp_drop(quit=False)                  # a dead or broken connection: QUIT would only wait
                 # only a failure while the message was handed over may have reached the server; an error code to it did not (D6-2)
                 maybe = step[0] == "data" and not isinstance(e, smtplib.SMTPDataError)
-                why = (f"the mail server refused the message ({e.smtp_code})" if isinstance(e, smtplib.SMTPDataError)
-                       else f"the mail server could not be reached ({type(e).__name__})")
+                why = (f"The mail server refused the message ({e.smtp_code})." if isinstance(e, smtplib.SMTPDataError)
+                       else f"The mail server could not be reached ({type(e).__name__}).")
                 raise SmtpFailed(f"SMTP send failed: {e}. Check Sent before trying again: the message may have gone out. Run icloud_check_health to see which service is failing.",
                                  maybe, why) from e
 
@@ -2271,7 +2272,7 @@ class MailService:
             if e.maybe_sent:
                 return self._unclear(q, recipients, e.__cause__ or e)
             self.outbox.restore(q)
-            raise MailError(f"Not sent, it still waits: {e.reason or e}.") from e
+            raise MailError(e.reason or str(e)) from e         # the pages say it was not sent and still waits
         except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the server took it
             if sent:                                  # it went out; only the filing after it failed
                 self.outbox.finish(q.id, "sent")
@@ -2279,7 +2280,7 @@ class MailService:
                                         "warning": f"Sent, but filing it afterwards failed: {e}"})
             if not opened:
                 self.outbox.restore(q)
-                raise MailError(f"Not sent, it still waits: the mailbox could not be opened ({e}).") from e
+                raise MailError(f"The mailbox could not be opened: {e}") from e
             return self._unclear(q, recipients, e)
         self.outbox.finish(q.id, "sent")
         return self._sent_note(result)
