@@ -1830,32 +1830,6 @@ class CalendarService:
     def _reason(e: BaseException) -> str:
         return str(e) if isinstance(e, CalendarError) else f"the calendar server could not be reached ({type(e).__name__})."
 
-    def release(self, q: Any) -> str:
-        """The owner approved a held change: write exactly what was stored, conditional on the version it was based on."""
-        m = q.followup or {}
-        body = q.raw.decode()
-        with self._principal() as p:
-            client = p.client
-            self._tl.mutated = True
-            if m["op"] == "create":
-                url = f"{m['calendar_url'].rstrip('/')}/{quote(m['uid'], safe='@')}.ics"
-                resp = client.request(url, "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"})
-            elif m["op"] == "delete":
-                resp = client.request(m["href"], "DELETE", "", {"If-Match": m["etag"]})
-            else:
-                resp = client.request(m["href"], "PUT", body, {"Content-Type": "text/calendar; charset=utf-8", "If-Match": m["etag"]})
-            status = int(getattr(resp, "status", 0) or 0)
-            self._uid_cache.pop(m["uid"], None)
-            if status == 412:
-                raise CalendarError("The event changed in the calendar after the agent asked, so nothing was written. "
-                                    "Discard this and ask again if it is still wanted.")
-            if not 200 <= status < 300 and not (m["op"] == "delete" and status == 404):
-                raise CalendarError(f"The calendar server refused the change (HTTP {status}). Nothing was written.")
-        verb = {"create": "Added", "update": "Updated", "delete": "Deleted", "cancel": "Cancelled one occurrence of",
-                "reply": "Answered"}.get(m["op"], "Changed")
-        tail = (f" iCloud now emails {', '.join(q.recipients)}." if q.recipients else "")
-        return f"{verb} “{m.get('summary') or 'the event'}”.{tail}"
-
     def _default_calendar(self, cals: list[Any]) -> Any:
         """Where new events go when no calendar is named: DEFAULT_CALENDAR, else 'Calendar' / 'Home', else the first."""
         prefs = ([self.s.default_calendar.strip().lower()] if self.s.default_calendar.strip() else []) + ["calendar", "home"]
