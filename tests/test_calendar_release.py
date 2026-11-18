@@ -368,3 +368,75 @@ def test_the_five_calendar_types_are_the_servers_own_with_the_badge_button_and_t
     item = invite(cal)
     v = cal.external.describe(next(q for q in cal.external.box.pending() if q.id == item))
     assert (v["title"], v["subject"], v["label"]) == ("Invitation", "Autumn fair", "jana@example.org")
+
+
+ROLLBACK = """
+import json, sys
+sys.path[:0] = [{src!r}, {tests!r}]
+import caldav_fakes
+import icloud_mcp.cal as cal_mod
+from icloud_mcp.cal import CalendarService, calendar_type_of
+from icloud_mcp.config import Settings
+from icloud_mcp.gate.store import Store
+
+class NoTicker:
+    def add(self, fn):
+        pass
+
+cal_mod.TICKER = NoTicker()
+s = Settings.from_env()
+server = caldav_fakes.Server(password=s.app_password)
+
+class Client(cal_mod.caldav.DAVClient):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.session.request = server
+
+cal_mod.caldav.DAVClient = Client
+cal = CalendarService(s)
+cal.outbox = Store({data!r}, "calendar", 3600, 20, legacy="calendar-outbox.json", type_of=calendar_type_of)
+waiting = [(q.id, q.action_type, (q.followup or {{}}).get("op")) for q in cal.outbox.pending()]
+r = cal.approve(cal.outbox, {item!r})
+print(json.dumps({{"waiting": waiting, "status": r["status"], "events": [v[0] for v in server.events["home"].values()]}}))
+"""
+
+
+def test_the_export_then_5a_shows_the_same_waiting_changes_and_writes_one_when_approved(env, tmp_path):
+    """protects=package 5b criterion 5: after the export, the version before 5b (package 5a, commit fc5b8e8, run from git in its
+    own process) reads every waiting calendar change in from calendar-outbox.json with its id and operation, and approving one
+    writes the event to iCloud; the external file keeps only other actions; fails_when=a change is lost, lands in the external
+    file, cannot be read in (an id still held by a row of the store), or 5a cannot write it; no_claim=5a's other endings (its own
+    tests at that commit), or the hash: it changes again, as the spec says."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from icloud_mcp.gate import export_queue as E
+    from icloud_mcp.gate import store as S
+    cal, server = env
+    item = invite(cal, description="Bring a cake")
+    upd = seeded_update(cal, server)
+    other = cal.external.box.add(A.canonical("test.ping", {}), [], action_type="test.ping")
+    os.close(S._locks.pop(str(tmp_path.resolve())))                    # as if the server stopped: the command opens DATA_DIR again
+    assert E.main(["export_queue", str(tmp_path)]) == 0
+    back = json.loads((tmp_path / "calendar-outbox.json").read_text())["items"]
+    assert sorted(x["id"] for x in back) == sorted([item, upd])
+    assert [x["id"] for x in json.loads((tmp_path / "external-outbox.json").read_text())["items"]] == [other.id]
+    root = Path(__file__).resolve().parents[1]
+    old = tmp_path / "v5a"
+    old.mkdir()
+    try:
+        tar = subprocess.run(["git", "-C", str(root), "archive", "fc5b8e8", "src", "tests/caldav_fakes.py"], capture_output=True, check=True,
+                             timeout=60).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("not a git checkout with the 5a commit")
+    subprocess.run(["tar", "-x", "-C", str(old)], input=tar, check=True, timeout=60)
+    os.close(S._locks.pop(str(tmp_path.resolve()), os.open(os.devnull, os.O_RDONLY)))   # the export's own hold on DATA_DIR
+    code = ROLLBACK.format(src=str(old / "src"), tests=str(old / "tests"), data=str(tmp_path), item=item)
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, cwd=str(old))
+    assert run.returncode == 0, run.stderr[-2000:]
+    got = json.loads(run.stdout.strip().splitlines()[-1])
+    assert sorted(map(tuple, got["waiting"])) == sorted([(item, "calendar.invite", "create"), (upd, "calendar.update", "update")])
+    assert got["status"] == "sent" and any("Autumn fair" in e and "Bring a cake" in e for e in got["events"])

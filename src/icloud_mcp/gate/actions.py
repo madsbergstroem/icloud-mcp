@@ -270,8 +270,8 @@ class Registration:
     # whether approving is off right now (blocked) or needs a note, read every time; called with approving=True just before a
     # release, so a type may check again then (the gateway connector probes when its last look is old)
     hold: Callable[[bool], Hold | None] | None = None
-    # registered by the server itself (iMessage, calendar changes), not from a connector file or a plugin: its recipients come from the service,
-    # not from an agent's parameters, so the log may name them (D4-2)
+    # registered by the server itself (iMessage, calendar changes), not from a connector file or a plugin: its recipients come
+    # from the service, not from an agent's parameters, so the log may name them (D4-2)
     builtin: bool = False
 
     def hold_now(self, approving: bool = False) -> Hold | None:

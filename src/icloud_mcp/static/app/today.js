@@ -4,7 +4,7 @@ import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, sectio
 import { app } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
-const KINDS = { mail: "Mail", calendar: "Calendar" };
+const KINDS = { mail: "Mail" };
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
 
 function greeting() {
@@ -28,8 +28,7 @@ const about = (w) => [w.subject ? esc(w.subject) : "", w.to ? `to ${esc(w.to)}` 
 // The line under a request in the list: its kind, its tags, who it goes to
 function itemSub(w) {
   const to = w.to ? `to ${esc(w.to)}` : "";
-  const text = w.kind === "mail" ? to : w.kind === "external" && w.to_shown ? about(w)
-    : w.kind === "calendar" ? [esc(w.badge), to && esc(w.to)].filter(Boolean).join(" · ") : "";
+  const text = w.kind === "mail" ? to : w.kind === "external" && w.to_shown ? about(w) : "";
   const extra = w.blocked ? "a file is missing" : w.held ? "cannot be approved yet" : w.warning && !isGroup(w) ? "check this first" : "";
   const by = w.by ? `from ${esc(w.by)}` : "";
   const tags = [...(w.group ? ["Group"] : []), ...(w.tags || [])].filter((t, i, all) => all.indexOf(t) === i);
@@ -242,8 +241,7 @@ class Item extends HTMLElement {
     const more = ext && !it.to_shown ? it.rows.slice(1).map(dd).join("") : "";
     // an empty text has no block, for every kind (package 5b); the caption and the edit button stay where the type names a caption
     const text = !own ? "" : chat ? `<div class="bubble" data-text>${esc(own)}</div>` : `<div class="body${long ? " short" : ""}" data-text>${esc(own)}</div>`;
-    const caption = it.text_caption ? esc(it.text_caption) : it.kind === "calendar" ? "The description exactly as it will be saved."
-      : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
+    const caption = it.text_caption ? esc(it.text_caption) : chat ? "Exactly as it will be sent. Formatting stays as typed." : "Exactly as it will be sent.";
     const edit = it.edit || { allowed: false, reason: "" };
     const form = !!(edit.fields && edit.fields.length);          // package 2d: the fields the owner may change, edited as one form
     return `<div class="msg">${rows ? `<dl>${rows}</dl>` : ""}${text}

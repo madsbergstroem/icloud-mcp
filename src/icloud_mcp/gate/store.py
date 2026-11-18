@@ -569,12 +569,15 @@ class Store:
                 "SELECT * FROM request WHERE source = ? AND state = 'waiting' ORDER BY created_at", (self.source,))]
         return [q for q in rows if (only is None or q.action_type in only) and q.action_type not in skip]
 
-    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False) -> dict[str, int]:
+    def export_waiting(self, legacy: str, only: Any = None, skip: Any = (), as_params: bool = False, as_object: Any = None) -> dict[str, int]:
         """Write the waiting requests back to the JSON queue file, for a rollback to a version without the store, and end them
         here in the same step (discarded, reason exported, key freed), so the file is their only copy: a later upgrade reads the
         file in again and never revives a request the old version already sent. Refused while a request is being carried out.
         only/skip pick action types; as_params writes an action's parameters as its bytes, the form a source had before it became
-        an action type (package 4b: iMessage back to 4a), with the hash of those bytes.
+        an action type (package 4b: iMessage back to 4a), with the hash of those bytes; as_object(type, params) -> (bytes,
+        metadata) writes the bytes and metadata a source kept before (package 5b: a calendar change back to 5a). A request
+        written in another source's form is removed here instead of ended: the previous version reads it in under its own source
+        with the same id, which a row left here would hold.
         Returns how many were written and how many ended requests (and unclear ones) a rollback loses."""
         path = self.dir / legacy
         with self._lock:
@@ -583,6 +586,9 @@ class Store:
             if as_params:
                 waiting = [dc_replace(q, raw=(b := json.dumps(json.loads(q.raw.decode())["params"], ensure_ascii=False).encode()),
                                       sha256=hashlib.sha256(b).hexdigest(), action_type=None) for q in waiting]
+            elif as_object is not None:
+                waiting = [dc_replace(q, raw=raw, followup=meta, sha256=hashlib.sha256(raw).hexdigest())
+                           for q in waiting for raw, meta in [as_object(q.action_type, json.loads(q.raw.decode())["params"])]]
             ended = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state != 'waiting'", (self.source,)).fetchone()[0]
             unclear = self._db.execute("SELECT COUNT(*) FROM request WHERE source = ? AND state = 'unclear'", (self.source,)).fetchone()[0]
             tmp = path.with_suffix(".tmp")
@@ -591,6 +597,10 @@ class Store:
                 json.dump({"items": [q.to_json() for q in waiting]}, f)
             with self._tx():
                 for q in waiting:
+                    if as_params or as_object is not None:                 # read in again under the source it came from
+                        self._db.execute("DELETE FROM request WHERE id = ?", (q.id,))
+                        self._db.execute("DELETE FROM version WHERE request_id = ?", (q.id,))
+                        continue
                     self._end(q.id, "discarded", "exported")
                     self._db.execute("UPDATE request SET key = NULL WHERE id = ?", (q.id,))
             os.replace(tmp, path)

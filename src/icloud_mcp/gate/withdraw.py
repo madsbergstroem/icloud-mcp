@@ -43,9 +43,6 @@ DEFAULT_REASON = "no_longer_needed"
 REASON_WORDS = {"mistake": "queued by mistake", "duplicate": "a duplicate", "superseded": "replaced by something newer",
                 "no_longer_needed": "no longer needed"}
 
-_CALENDAR_BADGES = {"create": "invitation", "update": "event update", "delete": "cancellation", "cancel": "cancellation", "reply": "reply"}
-
-
 def describe(kind: str, q: Any, external: Any = None) -> tuple[str, str]:
     """(badge, title) of a queued request the way the dashboard words its approval lines ('email', 'Re: Invoice 2291'), from
     the stored entry alone: nothing here reads a mailbox. ('', '') for a kind this does not know or an entry it cannot read."""
@@ -53,12 +50,9 @@ def describe(kind: str, q: Any, external: Any = None) -> tuple[str, str]:
         if kind == "mail":
             msg = email.message_from_bytes(q.raw, policy=policy.default)
             return ("email reply" if msg["In-Reply-To"] else "email"), str(msg["Subject"] or "") or "(no subject)"
-        if kind == "calendar":
-            m = q.followup or {}
-            return _CALENDAR_BADGES.get(m.get("op"), "calendar"), str(m.get("summary") or "") or "(no title)"
         if kind == "external" and external is not None:           # the action type's own title, never a parameter
             reg = external.registry.get(read_action(q.raw)[0])
-            if reg is not None and reg.builtin:                   # a type of the server's own is named by its badge ('imessage')
+            if reg is not None and reg.builtin:                   # a type of the server's own is named by its badge ('invitation')
                 return reg.action_type.badge.lower(), reg.action_type.title
             return ("action", reg.action_type.title) if reg is not None else ("action", "")
     except Exception:  # noqa: BLE001  -- a title is a nicety: an entry that cannot be read is still withdrawn
@@ -99,7 +93,7 @@ class Withdrawals:
             return self._not_withdrawn(item_id)
         badge, title = describe(kind, claimed, self.external)
         # the first recipient, as approval.sent records it, so Home can say whom it was for; never the text
-        rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind in ("mail", "calendar") or self._builtin(claimed) else []
+        rcpt = [str(r) for r in (getattr(claimed, "recipients", None) or [])[:1]] if kind == "mail" or self._builtin(claimed) else []
         self.ledger.audit.record("approval.withdrawn", actor="assistant", via=client,
                                  summary=f"Withdrew {badge} “{title}”" if title else f"Withdrew a queued {kind} request",
                                  kind=kind, outbox_id=item_id, reason=reason, action_type=getattr(claimed, "action_type", None),

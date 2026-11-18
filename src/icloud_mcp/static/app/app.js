@@ -7,7 +7,7 @@ import "./today.js";
 import { SECTIONS } from "./settings.js";
 import { serviceEntries } from "./services.js";
 
-const KIND_NAMES = { mail: "Mail", calendar: "Calendar" };
+const KIND_NAMES = { mail: "Mail" };
 // a request of the external source counts under its action type's badge ("external:Beeper"); an unknown type under "Other"
 const kindName = (k) => (k.startsWith("external:") ? k.slice(9) || "Other" : KIND_NAMES[k] || k);
 
@@ -16,8 +16,9 @@ let lastV = null, timer = null;
 
 function itemFromHash() {
   const m = /^#\/item\/([a-z]+:[A-Za-z0-9_-]+)$/.exec(location.hash);
-  // links sent before package 4b name an iMessage "imessage:<id>"; the same request is "external:<id>" now
-  return m ? m[1].replace(/^imessage:/, "external:") : null;
+  // links sent before packages 4b and 5b name an iMessage "imessage:<id>" and a calendar change "calendar:<id>"; the same request
+  // is "external:<id>" now
+  return m ? m[1].replace(/^(imessage|calendar):/, "external:") : null;
 }
 
 function signin() {
