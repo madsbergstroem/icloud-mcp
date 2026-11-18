@@ -121,7 +121,7 @@ Rules every package keeps:
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
 | 8 | Signed checkpoints of the log, export | gate | 3 | later |
 | 9 | Webhook as a way in and as a notice of status changes | gate | 3 | later |
-| 10 | Standing approval: the owner names people a type may reach without waiting, through a request the owner approves | gate | 3, 5b | yes |
+| 10 | Standing approval: the owner names people a type may reach without waiting, through a request the owner approves | gate | 3, 5b, 6 | yes |
 
 ```
 0 Line ─┬─> 1 Actions ─┬─> 2 Gateway connector
@@ -129,7 +129,7 @@ Rules every package keeps:
         └─> 3 Store ───┼─> 4 iMessage ─> 5 Calendar ─> 6 Mail
                        ├─> 8 Log checkpoints
                        ├─> 9 Webhook
-                       └─> 10 Standing approval (first use after 5b)
+                       └─> 10 Standing approval (after 5b and 6)
 ```
 
 Package 0 moves files and changes no behaviour, so it is the cheapest point to agree on the line with upstream.
@@ -826,11 +826,12 @@ What the owner sees: Activity marks the line "without approval" and names the ru
 ### Which types may use it
 
 A type opts in by having `standing_identity`. Package 10 gives it to the five calendar types (guests and organizer are email
-addresses). iMessage and Beeper get it later, once they can name one person for a one-to-one chat and refuse groups; until then
-they always wait. Mail gets it with package 6. A connector file cannot opt in, because it has no way to say who a chat id is.
-`gate.trust` itself never opts in.
+addresses) and to mail (every address in To, Cc and Bcc; a mail to several people needs a rule for each). iMessage and Beeper get
+it later, once they can name one person for a one-to-one chat and refuse groups; until then they always wait. A connector file
+cannot opt in, because it has no way to say who a chat id is. `gate.trust` itself never opts in.
 
-Before 5b the calendar is not an action type, so package 10 needs 5b.
+The calendar becomes an action type in 5b and mail in 6, so the order is 5b, 6, then 10. Mail keeps the rules it has today on top
+(`SEND_ALLOWLIST`, `MAX_RECIPIENTS`, no HTML part or attachment from someone else without a look): a rule only skips the wait.
 
 ### Out of scope for package 10
 
