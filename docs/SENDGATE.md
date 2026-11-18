@@ -120,7 +120,7 @@ Rules every package keeps:
 | 6 | Mail on the same | connector | 1, 3 | yes (6a, 6b) |
 | 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
 | 8 | Signed checkpoints of the log, export | gate | 3 | later |
-| 9 | Webhook as a way in and as a notice of status changes | gate | 3 | later |
+| 9 | Notices of decisions: a status ledger (9a), then webhook delivery (9b); MCP events once the SDK has them | gate | 3 | yes (9a, 9b) |
 | 10 | Standing approval: the owner names people a type may reach without waiting, through a request the owner approves | gate | 3, 5b, 6 | yes |
 
 ```
@@ -1090,6 +1090,322 @@ five points, taken in as requirements here; the decisions they touch stay open u
 Effort, estimated and not measured: 6a about 330 min of work (store and migration 90, the stepwise send and its endings 90, key
 tombstones 30, tests with the made-up SMTP server 120) and 45 min of review; 6b about 540 min of work after the mock (types and
 parameters 90, blobs with references 120, the card's new fields 120, migration and export 90, tests 120), plus 60 min of review.
+
+## Package 9: notices of decisions (webhook, later MCP events)
+
+An agent that queued a request learns how it ended only by asking: `approval_status(id=...)` or `approval_status(since=...)`
+(`gate/status.py:175-204`). An agent that runs on a schedule asks too late, one that runs unattended asks in a loop, and one that
+stopped never learns. The upstream author named this one of the two events he would subscribe to: "the owner approving or
+discarding something an agent queued, so the agent learns the outcome"
+([discussion #104](https://github.com/epinethrone/icloud-mcp/discussions/104)).
+
+Package 9 sends a signed notice to a receiver the owner names each time a request changes state. The notice carries the same
+fields `approval_status` gives today, and no more. The agent, or whatever runs it, reacts to the notice and reads anything else
+through its normal tools.
+
+### Scope
+
+| In package 9 | Later |
+|--------------|-------|
+| Notices of status changes, for every request `approval_status` can answer about | A way in: an outside system queuing a request by webhook (D9-1) |
+| Receivers the owner configures, on a host list | Receivers an agent subscribes itself (MCP events, below) |
+| Delivery by webhook, signed per Standard Webhooks | Poll and push through MCP events, once the Python SDK has them |
+| `approval_status(since=...)` reading the same notices | "Reply arrived" for mail and iMessage (below) |
+
+`approval_status` answers about every request on the instance, whoever queued it (`gate/status.py:180-204` filters by nothing).
+Notices cover the same set. The owner is the only one who decides where they go, so nothing reaches a receiver that an agent on
+this server could not already read.
+
+### What a notice says
+
+One event type, `approval.status`. Its `status` uses the words of `approval_status` (`gate/status.py:35`), so a new status needs
+no new event type and an agent treats an unknown one as "not sent", as the tool already tells it.
+
+| Change in the store | `status` | `reason` |
+|---------------------|----------|----------|
+| Queued (`Store.add`) | `waiting` | `queued` |
+| A recheck found new values at the service; a new version waits (package 2c) | `waiting` | `target_changed` |
+| The executor answered `sent` | `sent` | none |
+| The executor answered `unclear`, raised, or the server started and found it in `executing` | `unclear` | none, or `interrupted` |
+| The owner discarded it | `discarded` | none |
+| The server discarded it at approval | `discarded` | `target_changed` or `not_allowed` (`gate/status.py:43-44`) |
+| The agent took it back | `withdrawn` | none |
+| Nobody approved in time | `expired` | none |
+
+A release that answered `failed` puts the request back to `waiting` with no change an agent can act on, so it sends no notice. The
+owner's edits send none either; `edited` on the next notice says whether the owner changed the content.
+
+Body, minified JSON, at most 2 KiB:
+
+```json
+{
+  "type": "approval.status",
+  "timestamp": "2026-11-18T09:30:00.000Z",
+  "data": {
+    "id": "Qm9vaz2kX1pLr0aZ",
+    "kind": "external",
+    "action_type": "market.reply",
+    "status": "sent",
+    "reason": null,
+    "edited": true,
+    "sha256": "<hash of the version that went out>",
+    "requested_by": "planner",
+    "cursor": "e1042"
+  }
+}
+```
+
+- `type`, `timestamp` and `data` follow the payload structure Standard Webhooks recommends (spec, "Payload structure").
+- `data` holds only: id, kind, action type, status, reason code, edited, hash, the agent's label and the cursor. Never a
+  parameter, a text, a title, a recipient or a chat id. This is the rule "Log, push and anything sent outward carry the kind, the
+  id, the outcome, the time and the hash" from the target design, applied to a body that leaves the server.
+- The body is built from these fields by name, never copied from a log line. Log lines carry more than the rule allows: the
+  summary of an approval names the request's title (`dashboard_api.py:471`, `:499`) and `approval.sent` carries `recipients`
+  (`dashboard_api.py:502-503`; `audit.py:4-5` says the log records "names and addresses").
+- `requested_by` is the name the agent's client gave itself. It lets a receiver route the notice to that agent. It proves nothing
+  (`gate/withdraw.py:13-15`), and a receiver must not treat it as identity (D9-6).
+- `sha256` is the hash already in the log. It identifies a version; it does not reveal it except to someone who can guess the
+  whole canonical JSON, recipients included.
+
+### Who receives it
+
+The owner adds receivers in Settings, section "Notices". A receiver is an `https` URL, a filter (kinds, action types, statuses;
+empty means all) and a signing secret. An agent cannot add, change or read a receiver: there is no tool for it.
+
+| Setting | Kind | `loosens` |
+|---------|------|-----------|
+| `NOTICE_HOSTS` | list of host names a receiver URL may use; empty means none | `_adds_entry` (`settings.py:105-107`): adding a host loosens, so it needs a recent sign-in |
+| `NOTICE_PRIVATE_HOSTS` | list of hosts that may resolve to a private address (a receiver on the owner's own network) | `_adds_entry` |
+| Receivers | URL, filter, secret; stored in `DATA_DIR/notices.json`, mode 600, like `push.json` (`gate/push.py:12`) | adding one or widening its filter loosens |
+
+Empty `NOTICE_HOSTS` means no notice leaves the server, unlike `SEND_ALLOWLIST`, where empty means anyone (`settings.py:77-81`).
+At most 5 receivers.
+
+### Delivery
+
+| Part | What it does |
+|------|--------------|
+| Notice table | `notice` (seq, event id, request id, created, body) in `approvals.db`. The row is written in the same SQLite transaction as the state change, inside `Store.add`, `_end`, `_recover` and `revise` (`gate/store.py:326-379`, `:238-242`, `:287-294`, `:457`). Every ending of every source passes `_end`: mail (`mail.py:2245-2289`), external (`gate/external.py:394`, `:405`), withdrawal (`gate/withdraw.py:91`) |
+| Delivery table | `notice_delivery` (seq, receiver, state `pending` / `delivered` / `refused` / `dead`, attempts, next try, last HTTP status or error code) |
+| Worker | One background thread. It sends what is due, at most 4 requests at once, and wakes on a new notice or every 30 seconds |
+| Clock | Expiry is lazy today: a request ends `expired` only when something reads the store (`gate/store.py:32-34`, `:297-325`). The worker reads the store once a minute, so an expiry notice goes out without other traffic |
+
+Rules:
+
+- At least once. A notice is `delivered` on a `2xx` answer and on nothing else, as Standard Webhooks defines success ("Delivery
+  success and failure"). A redirect is a failure; the server does not follow it.
+- Retries with backoff and jitter: at once, 5 s, 5 min, 30 min, 2 h, 5 h (7 h 35 min in all). Then the delivery is `dead` (D9-4).
+- A `410` or `413` ends that delivery as `refused`, without retries, and does not switch the receiver off (D9-5). A `429`, `502`,
+  `503` or `504` waits longer, and a `retry-after` header is honoured up to 1 hour.
+- Each notice has one event id (`evt_` and 16 random bytes, base64url). It stays the same on every retry and for every receiver;
+  it is the `webhook-id`, the receiver's idempotency key.
+- Per request and receiver, in order: a notice is not sent while an earlier one for the same request and receiver is pending.
+  Across requests there is no order.
+- A restart loses nothing: pending deliveries are rows, and the worker picks them up. A delivery that was on the wire when the
+  process stopped is sent again; the receiver drops it by `webhook-id`.
+- Ended rows go after `AUDIT_KEEP_DAYS`, as requests and log lines do.
+- The owner sees per receiver: last success, pending count, dead and refused count, and the last error code. A dead notice can be
+  sent again with one click. A receiver that has been failing for 24 hours gets a line on the health page.
+
+### Signing (Standard Webhooks)
+
+Every request carries `webhook-id`, `webhook-timestamp` (Unix seconds) and `webhook-signature`. The signature is
+`v1,` and base64 of HMAC-SHA256 over `webhook-id.webhook-timestamp.body`, keyed with the secret's bytes after `whsec_`
+(spec, "Symmetric signatures" and "Webhook headers"). The body sent is the body signed, byte for byte. Each retry gets a new
+timestamp and signature (SEP-3415 requires this, below).
+
+- One secret per receiver, never shared (spec, "Additional considerations": "Symmetric signing keys must be unique per endpoint").
+- The server generates it: `whsec_` and 32 random bytes. The owner sees it once, when the receiver is added or rotated.
+- Rotation: a new secret signs alongside the old one for 24 hours; the header then carries two signatures, space-separated, as the
+  spec allows for "zero downtime secret rotation". The owner can end the old one early.
+- The secret is never written to the log, the health page, the settings export, an error message or a notice. The log records
+  `notice.receiver_added`, `notice.receiver_rotated` and `notice.receiver_removed` with the host only.
+
+### Catching up
+
+Each notice carries `cursor`: the position up to which this receiver has got, or given up on, every notice. It is a watermark,
+not the notice's own position, so a receiver that stores the newest cursor it saw never skips one that is still being retried.
+That is how SEP-3415 defines the cursor of a webhook delivery (below).
+
+`approval_status(since=...)` accepts this cursor as well as today's log hash. Today's cursor is the hash of a log entry
+(`gate/status.py:184-193`), and it reads nothing when the log is off (`gate/status.py:169-171`). A cursor of the form `e<seq>`
+reads the notice table, which exists whether the log is on or off. A receiver that missed notices, or saw one go `dead`, asks with
+its last cursor and gets every request whose status changed since, in the shape it already knows. Old cursors keep working.
+
+### Egress
+
+The fork's own deployment lets the server reach only the hosts on an outbound list (Apple's services and a few others). A receiver
+host must be added to that list as well as to `NOTICE_HOSTS`, or every delivery fails with a connection error. The server cannot
+change that list; the settings page says so next to the field, and the receiver's status shows `connect_failed` until it is done.
+
+### Security
+
+| Threat | Answer |
+|--------|--------|
+| A notice leaks content | Fields by name, never a log line; a test checks every body against the field list |
+| An agent points notices at itself or elsewhere | Receivers and hosts are owner settings with step-up; no tool can touch them |
+| SSRF: a receiver URL that reaches the server's own network | `https` only. Resolve the host at each delivery, refuse an address that is not globally routable unless the host is on `NOTICE_PRIVATE_HOSTS`, connect to the address that was checked, follow no redirect |
+| A slow receiver blocks the server | 10 s timeout per request (the push code uses 10 s, `gate/push.py:179`), 4 at once, a bounded queue per receiver (10 000 pending; older ones go `dead` and the owner sees it) |
+| A captured notice is replayed | The receiver checks the signature, refuses a `webhook-timestamp` older than 5 minutes and drops a `webhook-id` it has seen |
+| A leaked secret | Rotation with an overlap; removing the receiver ends delivery at once |
+| A large body | Bodies are about 400 bytes; the builder refuses more than 2 KiB |
+| A receiver treats the notice as an instruction | The notice holds codes and ids only; Standard Webhooks and SEP-3415 both say receivers treat payloads as untrusted data |
+
+### D9-1: notices only, or a way in too
+
+Recommended: notices only. A way in (an outside system queuing a request by HTTP) becomes package 9b when someone needs it.
+
+Why: a way in is a second door for asking, with its own threat model: authenticating outside callers, a key per caller, rate
+limits, flooding the owner's queue. Notices change nothing about who can ask. Nobody has asked for a way in; the upstream author
+asked for notices. When it comes, 9b is a thin HTTP front for `approval_request`: same schema check, same refusal codes, same
+lists, a key per caller, and the caller's label as `requested_by`. The target design already allows it ("An agent or an outside
+system can only ask").
+
+### MCP events
+
+The MCP events extension is not part of any released protocol version. Its SEP-3415 is labelled `accepted` and its file says
+"Status: Accepted", but the pull request is still open, its error codes are provisional, and "The reference implementation in an
+official SDK is outstanding" (pull request text, read 2026-11-18). The Python SDK pins `mcp` 2.2.0 here; the latest release is
+2.3.0, and events exist only as an open pull request (`mcp.experimental.events`, python-sdk #3822) and a story marked "Status: not
+yet implemented". Package 9 builds nothing on it.
+
+What package 9 keeps compatible, so a later step only adds a transport:
+
+| SEP-3415 | Package 9 |
+|----------|-----------|
+| Event type `name` | `approval.status` |
+| `payloadSchema` | the `data` object above, published as JSON Schema |
+| `inputSchema` (subscription arguments) | the receiver's filter: `kinds`, `action_types`, `statuses` |
+| `eventId`, used for deduplication | the notice's event id, the same value as `webhook-id` |
+| `cursor`, a watermark in webhook mode | `e<seq>`, the same watermark |
+| `truncated: true` when events were skipped | set when a cursor is older than the notice table |
+| Webhook delivery: Standard Webhooks headers, `v1,` HMAC-SHA256, new timestamp per retry, `https` only | the same |
+| `X-MCP-Subscription-Id` header | the receiver's id, sent from the start so a receiver can pick its secret |
+
+Once the SDK has events, the server adds the extension with `delivery: ["poll"]` first: `events/poll` reads the notice table, so
+an agent subscribes to what `approval_status(since=...)` already gives it. Webhook mode comes after, with one difference from
+package 9: in MCP the client supplies the URL and the secret. The server then accepts only a URL whose host is on `NOTICE_HOSTS`,
+which SEP-3415 counts as one of the four ways to confirm a receiver ("The URL matching a server-configured allowlist").
+
+### Reply arrived
+
+Not in package 9. A later package may add `reply.arrived` for a mail or iMessage that answers something sent through the gate
+(the server already tracks this for `mail_list_awaiting_reply`).
+
+Why separate:
+
+- Privacy: a decision notice is about the owner's own request; a reply is a third person's message. Even its sender and subject
+  are that person's data, and a subject is text an outsider wrote, which can carry instructions into an unattended run.
+- Volume and source: decisions are a few a day and come from the store. Replies come from IMAP and the Mac helper, need their own
+  watcher, and can be many.
+
+Its shape when it comes: metadata only, as the upstream author proposed. Recommended narrower than his list: the id of the
+request it answers, the kind, a message id and the time, and no subject and no address. Only for senders on the same list the
+request was allowed to reach, so a notice never names someone the owner did not already allow. The agent reads the message with a
+normal tool call.
+
+### Decisions for package 9
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D9-1 | A way in as well as notices? | Notices only; a way in is 9b | Different threat model, nobody asked for it, notices change nothing about who can ask |
+| D9-2 | Where notices are made | In the store's transaction (`add`, `_end`, `_recover`, `revise`), not from the log | One place covers every source; a log that is off or a log write that fails (`audit.py:67-91` swallows errors) would lose notices |
+| D9-3 | One event type or one per status | One, `approval.status` | Same vocabulary as `approval_status`; a new status needs no new type; filters are subscription arguments |
+| D9-4 | Retry span | 6 attempts over 7 h 35 min, then `dead`, visible and resendable | Standard Webhooks recommends days, SEP-3415 recommends 3 to 5 attempts within 10 to 15 minutes. A queued request lives 24 hours by default (`config.py:355`), so hours fit; the cursor covers the rest |
+| D9-5 | `410` from a receiver | Ends that delivery, keeps the receiver | Standard Webhooks says disable the endpoint, SEP-3415 says non-retryable for that delivery only. A receiver bug must not silently stop every later notice; the owner switches receivers off |
+| D9-6 | Send `requested_by` | Yes, marked as a label | A receiver serving several agents needs it to route; it is no parameter. It proves nothing, and the docs say so |
+| D9-7 | Who makes the secret | The server, shown once | Standard Webhooks leaves it open; SEP-3415 has the client supply it because the client subscribes. Here the owner subscribes in the dashboard |
+| D9-8 | Schema version | New tables only, `PRAGMA user_version` stays 2 | A newer version stops the previous one from starting (`gate/store.py:43`); with additive tables a rollback is "start the previous version", as package 10 plans |
+
+### Out of scope for package 9
+
+- An agent choosing where notices go, or reading a receiver's settings.
+- Content in a notice, on request or as an option. "Full payloads" in Standard Webhooks terms are not offered.
+- Notices for the owner's edits, file uploads or settings changes.
+- Asymmetric signatures (`v1a`, ed25519). Standard Webhooks prefers them; with one owner and a handful of receivers the HMAC is
+  enough, and they can be added beside `v1` later without breaking receivers.
+
+### Rollback
+
+Stop the server and start the previous version on the same `DATA_DIR`. It ignores `notice`, `notice_delivery` and
+`notices.json`; nothing is sent from them. Pending notices are lost to receivers; `approval_status(id=...)` still answers.
+
+Acceptance criteria:
+
+1. A made-up receiver (a local HTTPS test server with a test certificate, on `NOTICE_PRIVATE_HOSTS`) gets one notice per row of
+   the status table, each verified with the Standard Webhooks formula against the receiver's secret.
+2. A body with a wrong secret, a changed byte or a timestamp older than 5 minutes fails the test receiver's check; the server's
+   own signature passes on the first and on a retried attempt, with different timestamps and the same `webhook-id`.
+3. A receiver that answers `500` twice and then `200` gets the notice three times with one `webhook-id`; the delivery ends
+   `delivered` with `attempts` 3.
+4. The process killed while a delivery waits for its second try: after the start, the delivery goes out and ends `delivered`; a
+   notice that was on the wire at the kill arrives twice with one `webhook-id`.
+5. A state change whose transaction is rolled back writes no notice; a notice row never exists without its state change.
+6. No body contains a parameter: for one request per action type with known parameter values (made-up names such as Jana, Tom,
+   Sam and addresses at example.org and example.net), no value and no title appears in any body, header or delivery row.
+7. A URL with `http`, a host not on `NOTICE_HOSTS`, a host that resolves to a loopback address, a private address (RFC 1918) or the link-local metadata address, and a
+   receiver that answers with a redirect to such an address: nothing is sent to it.
+8. `410` and `413` end the delivery as `refused` with no retry; the receiver keeps getting later notices.
+9. Two notices for one request reach a receiver in order even when the first needs a retry; a notice for another request is not
+   held up by it.
+10. A receiver that missed three notices asks `approval_status(since=<last cursor>)` and gets those three requests; with the log
+    off the answer is the same; an old log-hash cursor still works.
+11. A request that expires with no other traffic sends its `expired` notice within 2 minutes.
+12. The secret appears in no log line, health answer, settings export or error text (a test greps every output for it).
+13. Adding a host to `NOTICE_HOSTS` or adding a receiver without a recent sign-in is refused with `confirm`.
+14. Rollback: the previous version starts on the `DATA_DIR` and sends nothing.
+
+| Layer | What | Count |
+|-------|------|-------|
+| Unit | Body builder: field list, size, one case per status row | +10 |
+| Unit | Signing against a fixed vector (id, timestamp, body, secret) computed from the spec's formula, rotation with two signatures | +3 |
+| Unit | Retry schedule, `retry-after`, `410`/`413`, dead state | +5 |
+| Unit | URL and address checks | +6 |
+| Integration | Test receiver: delivery, retry after `500`, restart during retry, order per request | +4 |
+| Integration | `approval_status` with the new cursor, log on and off | +2 |
+| Integration | Settings step-up, secret never shown again | +2 |
+
+The settings section and the receiver status need a mock before they are built.
+
+Effort, estimated and not measured: about 630 min of work (notice tables and the writes in the store's transaction 90, worker with
+signing, retries, address checks and pinned connections 150, settings, secret storage and rotation 90, receiver status in the
+dashboard after the mock 60, `approval_status` cursor 45, expiry clock 15, tests 180), plus 75 min of review by the owner, with one
+notice to a receiver on the owner's own network.
+
+### Sources
+
+| Claim | Source |
+|-------|--------|
+| Headers, signed content, `v1,` HMAC-SHA256, `whsec_`, unique key per endpoint, multiple signatures for rotation, `2xx` success, `410`, retry schedule over days, timeout 15 to 30 s, SSRF, payload under 20 KB | Standard Webhooks specification 1.0.0, https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md (read at commit 3d65b18 on 2026-11-18); overview https://www.standardwebhooks.com/ |
+| Event types, `eventId`, cursor as watermark, retries bounded to 3 to 5 attempts in 10 to 15 minutes, new timestamp per retry, 5-minute freshness, `410`/`413` non-retryable, 256 KiB, SSRF, endpoint confirmation by allowlist, payload minimality | SEP-3415 "Events Extension", https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415 (open, file status "Accepted", read 2026-11-18); design sketch "Status: Draft proposal", https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md |
+| Python SDK status | https://github.com/modelcontextprotocol/python-sdk/pull/3822 (open), `examples/stories/events/README.md` on `main` ("not yet implemented") |
+| What the upstream author would subscribe to, metadata only, same allowlists | https://github.com/epinethrone/icloud-mcp/discussions/104 |
+
+Reviewed on 2026-11-18 with a second opinion from Codex (gpt-6-astra). Its five points are taken in as requirements; the
+decisions they touch stay open until the owner answers:
+
+- Split: 9a is a durable status ledger (one immutable sequence of status events in `approvals.db`, written in the store's
+  transaction, read by `approval_status` for both `id` and `since`), 9b is webhook delivery on top of it. 9a alone already ends
+  the two status authorities: today `approval_status(id=...)` reads the log and answers `unknown` when the log is off
+  (`gate/status.py:175`), and a notice could otherwise arrive before the dashboard writes its log line (`dashboard_api.py:483`).
+  The event captures `edited` before `_end` clears `edited_from` (`gate/store.py:238`).
+- Cursor: the event sequence and a receiver's progress are kept apart. A dead delivery is a gap the receiver can see and fetch
+  again with `since`; a later success never moves a cursor past it. Test: two receivers that progress differently, and a dead
+  event 10 followed by a delivered event 11.
+- Fan-out: delivery rows are made from the event sequence by an idempotent step that records its progress, so a crash between
+  the event and its deliveries loses nothing. A receiver has a generation; adding one starts at the current sequence (no
+  backlog), changing its URL is a new generation and needs the step-up, removing one drops its pending deliveries. Tests: a
+  crash during fan-out, and a receiver changed while retries run.
+- `requested_by` is text the client chose (`server.py:189`), not a code, and `approval_status` does not return it or the hash
+  today (`gate/status.py:92`). D9-6 therefore becomes: leave it out, or send an opaque id the owner maps to a client.
+- Rollback: an older version keeps deciding requests without writing events. On the next upgrade the ledger compares each
+  request's state with its last event and writes the missing events, marked `reconciled`. Test: upgrade, downgrade, decide
+  requests, upgrade again.
+
+The owner approved the recommendations on 2026-11-19: 9a (the status ledger) before 9b (delivery); notices only, no way in
+(D9-1); no `requested_by` in a notice (D9-6, as the review advised); retries over about 7.5 hours, then `dead`, with the cursor
+to catch up (D9-4); receivers on the owner's own network allowed through `NOTICE_PRIVATE_HOSTS`; "reply arrived" later, with
+ids and times only, no sender or subject.
 
 ## Package 10: standing approval for named people
 
