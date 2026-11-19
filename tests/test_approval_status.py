@@ -337,14 +337,14 @@ async def test_the_tool_follows_a_mail_from_queue_to_approval_and_never_shows_it
     app, mcp, _p, sent = web()
     q1 = queue(mcp, subject="Secret plan for Thursday", body="Meet at the old mill")
     q2 = queue(mcp, subject="Second one", body="Another body")
-    assert await call(mcp, {"id": q1}) | {"at": 0} == {"id": q1, "kind": "mail", "status": "waiting", "edited": False, "at": 0}
+    assert await call(mcp, {"id": q1}) | {"at": 0} == {"id": q1, "kind": "mail", "status": "waiting", "edited": False, "at": 0, "action_type": "mail.send"}
     start = (await call(mcp, {"since": "now"}))["cursor"]
     async with client(app) as c:
         h = api(await signed_in(c))
         shas = {w["key"]: (await c.get(f"/dashboard/api/items/{w['key']}")).json()["sha"] for w in (await c.get("/dashboard/api/today")).json()["waiting"]}
-        r = await c.post(f"/dashboard/api/items/mail:{q1}/approve", json={"sha": shas[f"mail:{q1}"]}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{q1}/approve", json={"sha": shas[f"external:{q1}"]}, headers=h)
         assert r.status_code == 200 and sent
-        r = await c.post(f"/dashboard/api/items/mail:{q2}/discard", json={"sha": shas[f"mail:{q2}"]}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{q2}/discard", json={"sha": shas[f"external:{q2}"]}, headers=h)
         assert r.status_code == 200
     assert (await call(mcp, {"id": q1}))["status"] == "sent" and (await call(mcp, {"id": q2}))["status"] == "discarded"
     listed = await call(mcp, {"since": start})
@@ -359,7 +359,7 @@ async def test_the_tool_follows_a_mail_from_queue_to_approval_and_never_shows_it
 async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text(web):
     app, mcp, _p, sent = web()
     q = queue(mcp, subject="Plans for Friday", body="Asked-for-words")
-    mail = mcp._icloud_dashboard.sources["mail"]
+    mail = mcp._icloud_dashboard.sources["external"]
     cursor = (await call(mcp, {"since": "now"}))["cursor"]
     seen = []
 
@@ -370,14 +370,14 @@ async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text
     async with client(app) as c:
         h = api(await signed_in(c))
         sha = mail.pending()[0].sha256
-        put = lambda body: c.put(f"/dashboard/api/items/mail:{q}/text", json=body, headers=h)  # noqa: E731
+        put = lambda body: c.put(f"/dashboard/api/items/external:{q}/text", json=body, headers=h)  # noqa: E731
         sha = (await put({"sha": sha, "text": "Owner-written-words"})).json()["sha"]
         assert await ask() is True and seen[-1]["status"] == "waiting"
         sha = (await put({"sha": sha, "restore": True})).json()["sha"]
         assert await ask() is False
         sha = (await put({"sha": sha, "text": "Owner-rewrote-it"})).json()["sha"]
         assert await ask() is True
-        r = await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{q}/approve", json={"sha": sha}, headers=h)
         assert r.status_code == 200 and sent
     assert await ask() is True and seen[-1]["status"] == "sent"
     listed = await call(mcp, {"since": cursor})
@@ -385,7 +385,7 @@ async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text
     text = json.dumps([*seen, listed])
     for secret in ("Plans for Friday", "Asked-for-words", "Owner-written-words", "Owner-rewrote-it", "bob@example.org"):
         assert secret not in text
-    assert all(set(r) == KEYS for r in seen) and set(listed["items"][0]) == KEYS
+    assert all(set(r) == KEYS | {"action_type"} for r in seen) and set(listed["items"][0]) == KEYS | {"action_type"}   # D6-8
     assert "edited_from" not in text and "original" not in text
     assert [e["action"] for e in mcp._icloud_dashboard.audit.entries(20, ("approval.",))].count("approval.edited") == 2
 
@@ -393,15 +393,15 @@ async def test_the_tool_reports_an_edit_made_on_the_dashboard_and_never_the_text
 async def test_the_original_typed_back_by_hand_reads_as_not_edited_waiting_and_sent(web):
     app, mcp, _p, sent = web()
     q = queue(mcp, body="Original words")
-    mail = mcp._icloud_dashboard.sources["mail"]
+    mail = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         h = api(await signed_in(c))
-        put = lambda sha, text: c.put(f"/dashboard/api/items/mail:{q}/text", json={"sha": sha, "text": text}, headers=h)  # noqa: E731
+        put = lambda sha, text: c.put(f"/dashboard/api/items/external:{q}/text", json={"sha": sha, "text": text}, headers=h)  # noqa: E731
         sha = (await put(mail.pending()[0].sha256, "Changed words")).json()["sha"]
         assert (await call(mcp, {"id": q}))["edited"] is True
         sha = (await put(sha, "Original words")).json()["sha"]                  # no "Bring it back": the same words typed in again
-        assert (await call(mcp, {"id": q})) | {"at": 0} == {"id": q, "kind": "mail", "status": "waiting", "edited": False, "at": 0}
-        assert (await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200 and sent
+        assert (await call(mcp, {"id": q})) | {"at": 0} == {"id": q, "kind": "mail", "status": "waiting", "edited": False, "at": 0, "action_type": "mail.send"}
+        assert (await c.post(f"/dashboard/api/items/external:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200 and sent
     got = await call(mcp, {"id": q})
     assert (got["status"], got["edited"]) == ("sent", False)                    # the waiting answer and the sent one agree
 
@@ -416,7 +416,7 @@ async def test_the_tool_refuses_neither_and_both(web):
 async def test_a_request_that_expires_reads_expired_through_the_tool(web):
     _, mcp, *_ = web()
     q = queue(mcp)
-    box = mcp._icloud_outboxes["mail"]
+    box = mcp._icloud_outboxes["external"]
     lapse(box, next(x for x in box.pending() if x.id == q))
     got = await call(mcp, {"id": q})
     assert got["status"] == "expired" and got["kind"] == "mail"

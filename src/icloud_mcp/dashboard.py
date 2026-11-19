@@ -43,19 +43,14 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from . import passkeys as P
 from .gate.source import ApprovalSource
-from .gate.status import Released
-from .approvals import flagged
 from .audit import AuditLog
-from . import textedit as T
 from .config import Settings, owner_password_problem
-from .mail import MailError
 
 log = logging.getLogger(__name__)
 
 SESSIONS_FILE = "sessions.json"
 _ABSOLUTE = 12 * 3600          # a session never lasts longer than this
 _STEP_UP = 300                 # seconds a sign-in counts as recent for sensitive steps
-_BODY_PREVIEW = 20000
 _STATIC = Path(__file__).parent / "static"
 
 _HEADERS = {
@@ -152,68 +147,6 @@ class Sessions:
         with self._lock:
             self._items.clear()
             self._save()
-
-
-class MailApprovals(ApprovalSource):
-    kind, badge, approve_label = "mail", "Email", "Send"
-
-    def __init__(self, mail: Any):
-        self.mail = mail
-
-    def pending(self):
-        return self.mail.outbox.pending()
-
-    def contexts(self, items, prune=True):
-        return self.mail.approval_contexts(items, prune=prune) if items else {}
-
-    def describe(self, q, context=None):
-        d = self.mail.describe_queued(q, context)
-        body = d["body"] if len(d["body"]) <= _BODY_PREVIEW else d["body"][:_BODY_PREVIEW] + "\n\n[... preview truncated; the full message is sent]"
-        rows = [("From", d["from"]), ("To", d["to"]), ("Cc", d["cc"]), ("Bcc", d["bcc"]),
-                ("Will be delivered to", ", ".join(d["envelope_recipients"]))]
-        warnings = list((d.get("original") or {}).get("safety_warnings") or [])
-        if d.get("agent_added_recipients"):
-            warnings.append("A recipient's address was added to a contact by an agent, not by you: "
-                            + ", ".join(d["agent_added_recipients"]))
-        notes = []
-        if orig := d.get("original"):
-            frm = ", ".join(f"{a.get('name', '')} <{a.get('email', '')}>".strip() for a in orig.get("from") or [] if isinstance(a, dict))
-            notes.append("In reply to: " + ("(the original message could not be read)" if orig.get("unavailable")
-                                            else f"{orig.get('subject') or '(no subject)'} from {frm or '?'}"))
-        if d["attachments"]:
-            notes.append("Attachments: " + ", ".join(f"{a.get('filename')} ({a.get('size')} bytes)" for a in d["attachments"]))
-        waiting = [w["filename"] for w in d.get("pending_files") or []]
-        if waiting:
-            notes.append("Waiting for: " + ", ".join(waiting))
-        return {"title": d["subject"] or "(no subject)", "badge": "Email reply" if d.get("original") else "Email",
-                "rows": [(k, v) for k, v in rows if v], "text": body, "notes": notes, "warnings": warnings,
-                "needs_override": bool(flagged(d)), **({"blocked": "Add the file first", "files_link": f"/dashboard#/item/mail:{q.id}"} if waiting else {})}
-
-    @property
-    def box(self):
-        """The approval store (package 6a), so the card lists the versions an edit made (2c)."""
-        return self.mail.outbox
-
-    def release(self, q):
-        """Every ending is a state of the store (package 6a): mail.approve ends it, puts it back, or raises Rechecked."""
-        r = self.mail.approve(q.id, q.sha256)
-        return Released(r["note"], "unconfirmed" if r["status"] == "unclear" else None, len(r.get("refused") or {}))
-
-    def discard(self, q):
-        self.mail.outbox.claim(q.id, "discarded")
-
-    @property
-    def text_limit(self) -> int:
-        return self.mail.s.max_body_chars
-
-    def text_block(self, q):
-        return T.mail_block(q.raw)
-
-    def text_of(self, q):
-        return T.mail_text(q.raw)
-
-    def with_text(self, q, text):
-        return T.mail_with_text(q.raw, text), None
 
 
 _AGENT_HINT = "Run icloud_check_health to see which service is failing."
@@ -407,18 +340,6 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
 
     def to_signin(_: Request) -> Response:
         return JSONResponse({"ok": False, "error": "signed out"}, status_code=401, headers=_HEADERS)
-
-    async def checked_form(request: Request) -> tuple[str, dict[str, Any], Any] | Response:
-        """A POST from a signed-in owner, from this origin, with the session's CSRF token."""
-        got = signed_in(request)
-        if got is None:
-            return to_signin(request)
-        if not d.same_origin(request):
-            return JSONResponse({"ok": False, "error": "This request did not come from this page. Nothing was changed."}, status_code=403, headers=_HEADERS)
-        form = await request.form()
-        if not hmac.compare_digest(str(form.get("csrf", "")).encode(), got[1]["csrf"].encode()):
-            return JSONResponse({"ok": False, "error": "This page has expired. Reload it and try again."}, status_code=403, headers=_HEADERS)
-        return got[0], got[1], form
 
     def recent(rec: dict[str, Any]) -> bool:
         return time.time() - rec.get("auth_at", 0) < _STEP_UP
@@ -615,83 +536,12 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     async def security_get(_: Request) -> Response:
         return to_app("#/settings")
 
-    # -- files a waiting mail needs ------------------------------------------------------------------------------------
-    # An agent can queue a mail with a file it cannot pass itself (mail.py: placeholders). The owner adds it on the attach
-    # page (the link in the agent's result) and approves there; an agent with a shell PUTs it to /files/<token>. That route
-    # is outside /dashboard so a sign-in proxy in front can let it through: the token is its only key.
-    mail_src = d.sources.get("mail")
-
+    # -- files a waiting request needs --------------------------------------------------------------------------------
+    # The attach page of before (the link in an agent's result until package 6b) opens the request in the app; adding, replacing
+    # and removing a file, and an agent's upload to /files/<token>, are the gate's (dashboard_api.py, package 6b).
     @mcp.custom_route("/dashboard/attach/{item_id}", methods=["GET"])
     async def attach_get(request: Request) -> Response:
         return to_app(item_fragment("mail:" + request.path_params["item_id"]))
-
-    @mcp.custom_route("/dashboard/attach/{item_id}/file", methods=["POST"])
-    async def attach_post(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        item_id = request.path_params["item_id"]
-        up = form.get("file")
-
-        async def failed(note: str, code: int) -> Response:
-            return JSONResponse({"ok": False, "error": note}, status_code=code, headers=_HEADERS)
-
-        if mail_src is None or not hasattr(up, "read"):
-            return await failed("Choose a file first.", 400)
-        data = await up.read(d.s.max_attachment_bytes + 1)
-        try:
-            q, info = await asyncio.to_thread(mail_src.mail.add_file, data, filename=up.filename, content_type=up.content_type,
-                                              item_id=item_id, index=int(str(form.get("index", "-1"))))
-        except (MailError, ValueError) as e:
-            return await failed(str(e), 409)
-        audit.record("approval.file_added", actor="owner", via=rec.get("via", ""), kind="mail",
-                     summary=f"Added {info['filename']} to a waiting mail")
-        return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "filename": info["filename"], "size": info["size"], "asked": info["asked"],
-                             "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]},
-                            headers=_HEADERS)
-
-    @mcp.custom_route("/dashboard/attach/{item_id}/remove", methods=["POST"])
-    async def attach_remove(request: Request) -> Response:
-        got = await checked_form(request)
-        if isinstance(got, Response):
-            return got
-        _, rec, form = got
-        item_id = request.path_params["item_id"]
-        try:
-            if mail_src is None:
-                raise MailError("Mail is off on this server.")
-            q, info = await asyncio.to_thread(mail_src.mail.remove_file, item_id, int(str(form.get("index", "-1"))))
-        except (MailError, ValueError) as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=409, headers=_HEADERS)
-        audit.record("approval.file_removed", actor="owner", via=rec.get("via", ""), kind="mail",
-                     summary=f"Took the file for {info['asked']} out of a waiting mail")
-        return JSONResponse({"ok": True, "sha": q.sha256, "index": info["index"], "asked": info["asked"],
-                             "waiting": [w["filename"] for w in info["waiting"]]}, headers=_HEADERS)
-
-    @mcp.custom_route("/files/{token}", methods=["PUT"])
-    async def file_put(request: Request) -> Response:
-        """An agent's upload: the raw bytes of one file a waiting mail asked for. The token from the agent's result is the key."""
-        if mail_src is None:
-            return JSONResponse({"ok": False, "error": "Mail is off on this server."}, status_code=404, headers=_HEADERS)
-        limit, body = d.s.max_attachment_bytes, bytearray()
-        async for chunk in request.stream():
-            body += chunk
-            if len(body) > limit:
-                return JSONResponse({"ok": False, "error": f"The file is larger than {limit} bytes (MAX_ATTACHMENT_BYTES)."},
-                                    status_code=413, headers=_HEADERS)
-        try:
-            q, info = await asyncio.to_thread(mail_src.mail.add_file, bytes(body), filename=request.query_params.get("filename"),
-                                              content_type=request.headers.get("content-type"), token=request.path_params["token"])
-        except MailError as e:
-            gone = str(e).startswith("No file is waiting")
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=404 if gone else 400, headers=_HEADERS)
-        audit.record("approval.file_added", actor="agent", kind="mail", summary=f"An upload added {info['filename']} to a waiting mail")
-        d.push.notify("file", f"mail:{q.id}")
-        left = [w["filename"] for w in info["waiting"]]
-        return JSONResponse({"ok": True, "filename": info["filename"], "size": info["size"], "still_waiting": left,
-                             "next": ("Upload the other files too." if left else "The mail now waits for the owner's approval. It is not sent yet.")},
-                            headers=_HEADERS)
 
     # -- activity ------------------------------------------------------------------------------------------------------
     @mcp.custom_route("/dashboard/activity.json", methods=["GET"])
@@ -708,10 +558,17 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
     # Web Push: a note to the owner's devices when something new waits, or a waiting mail got its file (push.py)
     from .push import PushStore
     d.push = PushStore(s.data_dir, s.public_url)
+    def push_kind(src: Any, q: Any) -> str:
+        """Which note a new request gets: its type's own kind where it has one (a mail is still "An email is waiting", package
+        6b), else its source's."""
+        registry = getattr(src, "registry", None)
+        reg = registry.get(getattr(q, "action_type", None) or "") if registry is not None else None
+        return getattr(reg, "status_kind", None) or src.kind
+
     for src in d.sources.values():
-        box = getattr(getattr(src, "mail", None), "outbox", None) or getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
+        box = getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
         if box is not None:
-            box.on_new = (lambda q, kind=src.kind: d.push.notify(kind, f"{kind}:{q.id}"))
+            box.on_new = (lambda q, src=src: d.push.notify(push_kind(src, q), f"{src.kind}:{q.id}"))
     from .dashboard_api import register_api
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
                  record_failure_line=record_failure_line, headers=_HEADERS, for_owner=for_owner,

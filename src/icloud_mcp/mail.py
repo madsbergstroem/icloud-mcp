@@ -38,7 +38,7 @@ from email.generator import BytesGenerator
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses, make_msgid, parsedate_to_datetime
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 import html2text
 from imapclient import IMAPClient, SocketTimeout
@@ -51,7 +51,7 @@ from .safety import HIDDEN_NOTICE, HIDDEN_TEXT_WARNING, compact, confirm_problem
 from .safety import confirm_token as make_confirm_token
 from .mailbulk import bulk_view, uid_chunks, uid_set
 from . import mailparts
-from .outbox import Outbox, OutboxFull, QueuedMessage
+from .outbox import QueuedMessage
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -107,10 +107,15 @@ class SmtpFailed(MailError):
 # The action type of a mail, which the approval store writes into the row so it outlasts the content (docs/SENDGATE.md, package 6).
 def mail_type_of(q: Any) -> str:
     """mail.reply for an answer (In-Reply-To, and the original is to be marked answered), mail.forward for a forward, else mail.send."""
-    flag = (q.followup or {}).get("flag")
+    return type_of_message(email.message_from_bytes(q.raw.split(b"\r\n\r\n", 1)[0], policy=policy.default), q.followup)
+
+
+def type_of_message(msg: Any, followup: dict[str, Any] | None) -> str:
+    """The action type of a mail from its headers and its followup (see mail_type_of)."""
+    flag = (followup or {}).get("flag")
     if flag == "$Forwarded":
         return "mail.forward"
-    if flag == ANSWERED and email.message_from_bytes(q.raw.split(b"\r\n\r\n", 1)[0], policy=policy.default)["In-Reply-To"]:
+    if flag == ANSWERED and msg["In-Reply-To"]:
         return "mail.reply"
     return "mail.send"
 
@@ -842,11 +847,9 @@ _retrying = callctx.retry_once_if_safe(_mail_transport)
 
 
 class MailService:
-    def __init__(self, settings: Settings, outbox: Any = None):
-        """outbox: where mail waits for the owner; the server passes the approval store (package 6a), else the JSON queue."""
+    def __init__(self, settings: Settings):
         self.s = settings
         self._folder_cache: dict[str, str] = {}
-        self.outbox = outbox if outbox is not None else Outbox(settings.data_dir, settings.outbox_ttl, settings.outbox_max)
         self._people_lock = threading.Lock()
         self._people_cache: dict[bool, tuple[float, dict[str, dict[str, Any]], dict[str, int]]] = {}
         self._pool_lock = threading.Lock()
@@ -863,6 +866,8 @@ class MailService:
         self._smtp: tuple[smtplib.SMTP, float] | None = None                     # (logged-in connection, last used)
         self._contexts_lock = threading.Lock()
         self._contexts: dict[tuple[str, str, Any], dict[str, Any]] = {}  # (id, sha256, uidvalidity) -> a queued item's original, memory only
+        # package 6b: the server's external source, where mail that waits for the owner is an action of one of the mail types
+        self.external: Any = None
 
     # -- connections ---------------------------------------------------------
     def _login(self) -> IMAPClient:
@@ -1830,13 +1835,19 @@ class MailService:
 
     # -- sending -----------------------------------------------------------------
     def _check_recipients(self, msg: EmailMessage) -> list[str]:
-        addrs = [a for _, a in parse_addrs([str(v) for h in ("To", "Cc", "Bcc") for v in msg.get_all(h, [])])]
+        return self._check_addresses([a for _, a in parse_addrs([str(v) for h in ("To", "Cc", "Bcc") for v in msg.get_all(h, [])])])
+
+    def _check_addresses(self, addrs: list[str], own: Any = ()) -> list[str]:
+        """The owner's rules for whom a mail may reach (ALLOW_SEND aside): at least one, at most MAX_RECIPIENTS, each allowed by
+        SEND_ALLOWLIST. own: addresses the owner typed in for this mail (package 6b), which the list does not apply to; the count
+        always does."""
         addrs = list(dict.fromkeys(a for a in addrs))
         if not addrs:
             raise MailError("At least one recipient is required.")
         if len(addrs) > self.s.max_recipients:
             raise MailError(f"Too many recipients ({len(addrs)}); limit is MAX_RECIPIENTS={self.s.max_recipients}.")
-        blocked = [a for a in addrs if not recipient_allowed(a, self.s.send_allowlist)]
+        mine = {str(x).strip().casefold() for x in own}
+        blocked = [a for a in addrs if a.casefold() not in mine and not recipient_allowed(a, self.s.send_allowlist)]
         if blocked:
             raise MailError(f"Recipient(s) not permitted by SEND_ALLOWLIST: {', '.join(blocked)}. Tell the user; only the owner can change the list.")
         return addrs
@@ -1925,28 +1936,20 @@ class MailService:
         }
 
     def _queue_checked(self, msg: EmailMessage, followup: dict[str, Any] | None = None, key: str | None = None) -> dict[str, Any]:
-        """Queue a message for the owner's approval, after the same gates as a send (ALLOW_SEND, recipient cap, allowlist).
-        key: what the message was built from (a saved draft), so a repeat returns the entry already waiting, and, in the approval
-        store, the mail it became once that ended: nothing is queued again (D6-3).
+        """Queue a message for the owner's approval, after the same gates as a send (ALLOW_SEND, recipient cap, allowlist), as an
+        action of its mail type on the external source (package 6b). key: what the message was built from (a saved draft), so a
+        repeat returns the mail already waiting, and, once that ended, its outcome: nothing is queued again (D6-3).
         Takes no IMAP connection: nothing here reads or writes the mailbox."""
-        from .gate.store import AlreadyDecided, StoreUnavailable
         if not self.s.allow_send:
             raise MailError("Sending is disabled on this server (ALLOW_SEND=false). Use draft=true to save a draft instead.")
-        recipients = self._check_recipients(msg)
-        asked = time.time()
-        try:
-            q = self.outbox.add(msg.as_bytes(policy=policy.SMTP), recipients, followup, key=key)
-        except OutboxFull as e:
-            raise MailError(str(e)) from e
-        except StoreUnavailable as e:
-            raise MailError(str(e)) from e
-        except AlreadyDecided as e:              # this draft became a mail that was decided: its outcome, and nothing queued
-            status = "waiting" if e.state == "executing" else e.state
-            return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
-                    "notice": "Nothing was queued: this draft was already queued once and that mail was decided. Do not send it again; "
-                              "approval_status with the outbox_id says more, and the owner can send the draft from Mail."}
-        again = q.created_at < asked             # the entry already waiting: describe what the owner will actually see
-        queued = email.message_from_bytes(q.raw, policy=policy.default) if again else msg
+        self._check_recipients(msg)
+        if self.external is None:
+            raise MailError("Nothing can wait for the owner's approval on this server: it has no approval page. Use draft=true to save "
+                            "a draft the owner sends from Mail.")
+        return self._queue_action(msg, followup, key, time.time())
+
+    def _queued(self, q: Any, again: bool, queued: EmailMessage) -> dict[str, Any]:
+        """What a tool answers for a mail that waits (queued, or the one already waiting when `again`)."""
         waiting = pending_files(queued)
         if waiting:
             return {"status": "queued_waiting_for_files", "sent": False, "outbox_id": q.id, "recipients": q.recipients,
@@ -1957,6 +1960,183 @@ class MailService:
                 "expires_in_seconds": max(0, int(q.expires_at - time.time())) if again else self.s.outbox_ttl,
                 "approve_at": self.s.approval_link("mail", q.id), **({"already_queued": True} if again else {}),
                 "notice": OWNER_APPROVAL_NOTICE, **self._summary_of(queued)}
+
+    # -- mail as actions on the external source (docs/SENDGATE.md, package 6b) ----------------------------------------------
+    def _queue_action(self, msg: EmailMessage, followup: dict[str, Any] | None, key: str | None, asked: float) -> dict[str, Any]:
+        """Queue a mail as an action of its type. The tool's answer is the one it gave before 6b, byte for byte."""
+        from .gate import actions as A
+        from .gate.store import fingerprint
+        try:
+            params = self.params_of(msg, followup)
+            # a key names one saved draft, whatever Date or Message-ID it is given each time: asking again finds that mail (6a)
+            q = self.external.queue_external(type_of_message(msg, followup), params, None, key=key,
+                                             key_fingerprint=fingerprint({"key": key}) if key is not None else None)
+        except A.AlreadyDecided as e:            # this draft became a mail that was decided: its outcome, and nothing queued
+            status = "waiting" if e.state == "executing" else e.state
+            return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
+                    "notice": "Nothing was queued: this draft was already queued once and that mail was decided. Do not send it again; "
+                              "approval_status with the outbox_id says more, and the owner can send the draft from Mail."}
+        except A.ExternalError as e:
+            raise MailError(str(e)) from None
+        again = q.created_at < asked
+        return self._queued(q, again, self.message_of(q) if again else msg)
+
+    def _blob(self, sha: str) -> bytes | None:
+        return self.external.box.blob(sha) if self.external is not None else None
+
+    def _stage(self, data: bytes) -> str:
+        return self.external.box.stage(data)
+
+    def params_of(self, msg: EmailMessage, followup: dict[str, Any] | None, old: Any = None) -> dict[str, Any]:
+        """A mail as the parameters of its action (D6-5): the five headers the owner may change, the rest of the message with
+        each attachment's bytes staged as a blob, or that rest as a blob of its own when it is large, the files, and the followup.
+        old: the parameters this mail had, whose files keep their sizes."""
+        from .gate.export_queue import BLOB_HEADER, MAIL_HEADERS
+        rest = copy.deepcopy(msg)
+        heads = {field: ", ".join(str(v) for v in rest.get_all(name, [])) for name, field in MAIL_HEADERS}
+        for name, _ in MAIL_HEADERS:
+            del rest[name]
+        known = {f.get("sha256"): f for f in (old or {}).get("files") or [] if isinstance(f, dict) and f.get("sha256")}
+        files: list[dict[str, Any]] = []
+        for part in iter_attachment_parts(rest):
+            name, ctype = part.get_filename() or "attachment", part.get_content_type()
+            if part.get(PENDING_HEADER):                      # a place that waits for a file: small, it stays in the message
+                files.append({"name": name, "type": ctype, "pending": True})
+                continue
+            if part.get(BLOB_HEADER):                         # already kept apart (an edit of a mail that waits)
+                sha = str(part[BLOB_HEADER]).strip()
+                files.append(known.get(sha) or {"name": name, "type": ctype, "size": len(self._blob(sha) or b""), "sha256": sha})
+                continue
+            data = attachment_bytes(part)
+            sha = self._stage(data)
+            if ctype == "message/rfc822":
+                part.set_payload([EmailMessage()])
+            else:
+                del part["Content-Transfer-Encoding"]
+                part.set_payload("")
+            part[BLOB_HEADER] = sha
+            files.append({"name": name, "type": ctype, "size": len(data), "sha256": sha})
+        body = rest.as_bytes(policy=policy.SMTP)
+        out = {**heads, "files": files, "followup": followup}
+        if len(body) > _INLINE_BODY:
+            return {**out, "message": "", "message_blob": self._stage(body)}
+        return {**out, "message": body.decode("latin-1")}
+
+    def message_of(self, q_or_params: Any) -> EmailMessage:
+        """The message a mail action stands for, as it goes out (its parameters, or a waiting request of a mail type)."""
+        from .gate.actions import read
+        from .gate.export_queue import mail_message
+        p = q_or_params if isinstance(q_or_params, dict) else read(q_or_params.raw)[1]
+        return email.message_from_bytes(mail_message(p, self._blob), policy=policy.default)
+
+    def rest_of(self, p: Mapping[str, Any]) -> EmailMessage:
+        """The rest of a mail action (its text and the places of its files), without the five headers and the files' bytes."""
+        rest = self._blob(p["message_blob"]) if p.get("message_blob") else str(p.get("message") or "").encode("latin-1")
+        if rest is None:
+            raise MailError("The body of this mail is missing from the approval store.")
+        return email.message_from_bytes(rest, policy=policy.default)
+
+    def recheck(self, p: Mapping[str, Any], own: Any = ()) -> None:
+        """The type's look just before the send (package 6b, the not_allowed row of 6a): sending is off, a recipient is no longer
+        allowed by SEND_ALLOWLIST (unless the owner typed it in for this mail), there are none or more than MAX_RECIPIENTS, or an
+        address does not parse: it ends not_allowed in mail's own words, never waits again. Also checks an owner's edit before
+        it is saved. The same check as when the agent asked."""
+        from .gate.actions import Rechecked
+        if not self.s.allow_send:
+            raise Rechecked("not_allowed", "Not sent: Sending is disabled on this server (ALLOW_SEND=false).")
+        try:
+            addrs = [a for field in ("to", "cc", "bcc") for _, a in parse_recipients(p.get(field) or "", field)]
+            self._check_addresses(addrs, own)
+        except MailError as e:
+            raise Rechecked("not_allowed", f"Not sent: {e}") from None
+        return None
+
+    def deliver(self, p: Mapping[str, Any]) -> Any:
+        """Send an approved mail action exactly as stored, once per approval (package 6b, the endings of 6a after the recheck): the
+        mailbox cannot be opened, or SMTP fails before the message is handed over or answers it with an error code -> failed (it
+        waits again); the connection drops or times out while it is handed over -> unclear, never sent again; the server takes it
+        -> sent, also when it refused some recipients or the copy in Sent, the flag on the original or the draft's move to Trash
+        failed (the line says which)."""
+        from .gate.actions import Result
+        try:
+            msg = self.message_of(dict(p))
+        except (MailError, ValueError) as e:                      # nothing left this server
+            return Result("failed", f"Not sent: {e}")
+        if added := [x for x in iter_attachment_parts(msg) if x.get(ADDED_HEADER)]:
+            for x in added:                               # what the owner approved, without the server's own bookkeeping
+                del x[ADDED_HEADER]
+        raw = msg.as_bytes(policy=policy.SMTP)
+        recipients = list(dict.fromkeys(a for _, a in parse_addrs([str(v) for h in ("To", "Cc", "Bcc") for v in msg.get_all(h, [])])))
+        followup = p.get("followup")
+        opened, sent = False, []
+        try:
+            with self.imap() as c:                        # the mailbox first: one that cannot be opened sends nothing
+                opened = True
+                result = self._send_and_file(c, msg, raw, recipients, followup, self._summary_of(msg), sent=sent)
+        except SmtpFailed as e:
+            if e.maybe_sent:
+                return Result("unclear", self._unclear_note(e.__cause__ or e))
+            return Result("failed", e.reason or str(e))   # the pages say it was not sent and still waits
+        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the server took it
+            if sent:                                      # it went out; only the filing after it failed
+                r = self._sent_note({"status": "sent", "recipients": recipients, "refused": {k: list(v) for k, v in sent[0].items()},
+                                     "warning": f"Sent, but filing it afterwards failed: {e}"})
+                return Result("sent", r["note"], len(sent[0]))
+            if not opened:
+                return Result("failed", f"The mailbox could not be opened: {e}")
+            return Result("unclear", self._unclear_note(e))
+        r = self._sent_note(result)
+        return Result("sent", r["note"], len(r.get("refused") or {}))
+
+    @staticmethod
+    def _unclear_note(e: BaseException) -> str:
+        return (f"The mail server did not confirm the mail ({type(e).__name__}), so it may or may not have gone out. It is not "
+                "sent again; ask a recipient before sending it once more.")
+
+    def action_contexts(self, requests: list[Any]) -> dict[str, dict[str, Any]]:
+        """What the card of a mail action needs beyond its parameters, read when it is shown (as before 6b): the mail a reply
+        answers or a forward passes on (its subject and sender) and the warnings it carried, and any recipient whose address an
+        agent put on a contact. A draft's followup names the draft itself, so a plain mail reads no original."""
+        from types import SimpleNamespace
+        from .gate.store import fingerprint
+        items = []
+        for r in requests:
+            fu = r.params.get("followup") if r.action_type in ("mail.reply", "mail.forward") else None
+            people = [a for _, a in parse_addrs([str(r.params.get(f) or "") for f in ("to", "cc", "bcc")])]
+            items.append(SimpleNamespace(id=r.id, sha256=fingerprint(fu), followup=fu, recipients=list(dict.fromkeys(people))))
+        found = self.approval_contexts(items) if items else {}
+        if self.external is not None:                     # what is kept for mail that no longer waits is dropped
+            live = {q.id for q in self.external.box.pending()}
+            with self._contexts_lock:
+                for k in [k for k in self._contexts if k[0] not in live]:
+                    del self._contexts[k]
+        out: dict[str, dict[str, Any]] = {}
+        for r, q in zip(requests, items):
+            got, ctx = found.get(r.id) or {}, {}
+            orig = got.get("original")
+            warnings = list((orig or {}).get("safety_warnings") or [])
+            if got.get("agent_added_recipients"):
+                warnings.append("A recipient's address was added to a contact by an agent, not by you: " + ", ".join(got["agent_added_recipients"]))
+            if orig:
+                frm = ", ".join(a.get("email", "") for a in orig.get("from") or [] if isinstance(a, dict))
+                ctx["original"] = {"label": "In reply to" if r.action_type == "mail.reply" else "Forwards", "subject": orig.get("subject") or "",
+                                   "from": frm, "unavailable": bool(orig.get("unavailable")), **({"bulk": True} if orig.get("bulk") else {})}
+            if warnings:
+                to = ", ".join(q.recipients) or "the recipients"
+                ctx["warnings"] = warnings
+                ctx["confirm"] = (f"It goes to {to} although the mail it answers looked like an attempt to steer the agent."
+                                  if (orig or {}).get("safety_warnings") else f"It goes to {to}, and an agent, not you, put an address it goes to on a contact.")
+            out[r.id] = ctx
+        return out
+
+    def convert(self, raw: bytes, row: Mapping[str, Any]) -> bytes:
+        """A mail held before 6b (the message as bytes, its followup) in the canonical form of its type, read from the row's
+        action_type (6a wrote it), else from the message (a new hash, D4-1). Its files become blobs of the store it moves into."""
+        from .gate import actions as A
+        msg = email.message_from_bytes(raw, policy=policy.default)
+        fu = row.get("followup")
+        type_id = row.get("action_type") or type_of_message(msg, fu)
+        return A.canonical(type_id, A.check_params(action_type(type_id, self), self.params_of(msg, fu)))
 
     def _deliver(self, c: IMAPClient, msg: EmailMessage, *, draft: bool, followup: dict[str, Any] | None = None,
                  selected: tuple[str, int | None] | None = None, queue_key: str | None = None) -> dict[str, Any]:
@@ -2028,24 +2208,6 @@ class MailService:
             except Exception:
                 pass
         return result
-
-    def describe_queued(self, q: QueuedMessage, context: dict[str, Any] | None = None) -> dict[str, Any]:
-        """What the owner reviews before approving: exactly the stored message, envelope included. context: this item's entry
-        from approval_contexts when the caller already has it (the page reads every item's at once)."""
-        msg = email.message_from_bytes(q.raw, policy=policy.default)
-        text, htm = extract_bodies(msg)
-        body = text if text is not None else (html_to_text(htm) if htm else "")
-        return {
-            "id": q.id, "created_at": q.created_at, "expires_at": q.expires_at,
-            "from": str(msg["From"]), "to": str(msg["To"] or ""), "cc": str(msg["Cc"] or ""), "bcc": str(msg["Bcc"] or ""),
-            "envelope_recipients": q.recipients, "subject": str(msg["Subject"] or ""), "body": body,
-            "attachments": [x for x in list_attachments(msg) if x["index"] not in {w["index"] for w in pending_files(msg)}],
-            "pending_files": pending_files(msg), "added_files": added_files(msg), "is_reply": bool(msg["In-Reply-To"]),
-            **(context if context is not None else self._approval_context(q)),
-        }
-
-    def _approval_context(self, q: QueuedMessage) -> dict[str, Any]:
-        return self.approval_contexts([q])[q.id]
 
     def approval_contexts(self, qs: list[QueuedMessage], *, prune: bool = False) -> dict[str, dict[str, Any]]:
         """What the owner needs to judge an injected message, per queued item id: the message it answers or forwards (its
@@ -2160,136 +2322,6 @@ class MailService:
         if uploads and result.get("files_to_add"):
             result["files_to_add"] = [{"filename": u["filename"], "upload_url": f"{self.s.public_url}/files/{u['token']}"} for u in uploads]
         return result
-
-    def add_file(self, data: bytes, *, filename: str | None = None, content_type: str | None = None, item_id: str | None = None,
-                 index: int | None = None, token: str | None = None) -> tuple[QueuedMessage, dict[str, Any]]:
-        """Put a file into the placeholder waiting for it: the owner's (item_id and attachment index, from the dashboard) or an
-        agent's upload (token). The owner can also replace a file added before. The message is rebuilt with the file and gets
-        a new hash; nothing is sent."""
-        if not data:
-            raise MailError("The file is empty.")
-        if len(data) > self.s.max_attachment_bytes:
-            raise MailError(f"The file is {len(data)} bytes; the limit is {self.s.max_attachment_bytes} (MAX_ATTACHMENT_BYTES).")
-        want = hashlib.sha256(token.encode()).hexdigest() if token else None
-        for q in self.outbox.pending():
-            if item_id is not None and q.id != item_id:
-                continue
-            msg = email.message_from_bytes(q.raw, policy=policy.default)
-            for i, part in enumerate(iter_attachment_parts(msg)):
-                held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
-                held = str(held).strip() if held else None            # Python 3.11 keeps the folded header's leading space
-                if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
-                    continue
-                asked = str(added) if added else part.get_filename() or "attachment"
-                name = safe_filename(filename) or asked
-                ctype = (content_type or "").split(";")[0].strip().lower()
-                if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", ctype) or ctype in ("application/octet-stream", "application/x-www-form-urlencoded"):
-                    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
-                maintype, _, subtype = ctype.partition("/")
-                part.clear_content()
-                del part[PENDING_HEADER], part[ADDED_HEADER]
-                part.set_content(data, maintype=maintype, subtype=subtype, disposition="attachment", filename=name)
-                part[ADDED_HEADER] = asked
-                new = self._store_rebuilt(q, msg)
-                return new, {"index": i, "filename": name, "size": len(data), "content_type": ctype, "asked": asked,
-                             "waiting": pending_files(msg)}
-        raise MailError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
-
-    def remove_file(self, item_id: str, index: int) -> tuple[QueuedMessage, dict[str, Any]]:
-        """Take a file the owner or an upload added back out: its place waits for a file again. The new placeholder gets a
-        fresh token nobody holds, so an agent's old upload link stays used up and only the owner adds the next file."""
-        for q in self.outbox.pending():
-            if q.id != item_id:
-                continue
-            msg = email.message_from_bytes(q.raw, policy=policy.default)
-            parts = iter_attachment_parts(msg)
-            if not 0 <= index < len(parts) or not parts[index].get(ADDED_HEADER):
-                break
-            part = parts[index]
-            asked = str(part[ADDED_HEADER])
-            part.clear_content()
-            del part[ADDED_HEADER]
-            part.set_content(_placeholder_text(asked), maintype="application", subtype="x-icloud-mcp-pending",
-                             disposition="attachment", filename=asked)
-            part[PENDING_HEADER] = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
-            new = self._store_rebuilt(q, msg)
-            return new, {"index": index, "asked": asked, "waiting": pending_files(msg)}
-        raise MailError("There is no added file here to remove: the message was sent, discarded or has expired.")
-
-    def _store_rebuilt(self, q: QueuedMessage, msg: EmailMessage) -> QueuedMessage:
-        new = self.outbox.replace(q.id, q.sha256, msg.as_bytes(policy=policy.SMTP))
-        if new is None:
-            raise MailError("The message changed while the file was added. Reload the page and try again.")
-        with self._contexts_lock:
-            self._contexts.pop(self._context_key(q), None)
-        return new
-
-    def approve(self, item_id: str, sha256: str | None = None) -> dict[str, Any]:
-        """The owner approved a waiting mail: send exactly what was stored, at most once. Called only from the owner's approval
-        pages (the dashboard, /outbox), never from a tool. sha256: the version the owner looked at; another one is not sent.
-
-        How it ends (docs/SENDGATE.md, package 6a): a file still missing -> nothing is claimed; another version than the one the
-        owner looked at -> waits again; sending off, a recipient the lists no longer allow or too many -> discarded (not_allowed),
-        raised as Rechecked; the mailbox cannot be opened, or SMTP fails before the message is handed over or answers it with an
-        error code -> waits again (failed), raised as MailError; the connection drops or times out while the message is handed
-        over -> unclear, never sent again; the server takes it -> sent, also when it refused some recipients or the copy in Sent,
-        the flag on the original or the draft's move to Trash failed (the note says which). Returns the send's result with
-        `status` (sent or unclear) and `note`, the line for the owner."""
-        from .gate.actions import Rechecked
-        gone = "That message is no longer waiting (already released, discarded or expired)."
-        ahead = next((x for x in self.outbox.pending() if x.id == item_id), None)
-        if ahead is None:
-            raise MailError(gone)
-        if waiting := pending_files(email.message_from_bytes(ahead.raw, policy=policy.default)):   # nothing is claimed
-            raise MailError("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first.")
-        q = self.outbox.claim(item_id, "executing")
-        if q is None:
-            raise MailError(gone)
-        with self._contexts_lock:
-            self._contexts.pop(self._context_key(q), None)
-        msg = email.message_from_bytes(q.raw, policy=policy.default)
-        if (sha256 is not None and q.sha256 != sha256) or pending_files(msg):      # changed between the owner's look and the click
-            self.outbox.restore(q)
-            raise MailError("The message changed just now (a file was added or the text edited). Nothing was sent; look at it again.")
-        try:
-            if not self.s.allow_send:
-                raise MailError("Sending is disabled on this server (ALLOW_SEND=false).")
-            recipients = self._check_recipients(msg)  # the lists as they are now, the same check as when the agent asked
-        except MailError as e:
-            self.outbox.finish(q.id, "discarded", "not_allowed")
-            raise Rechecked("not_allowed", f"Not sent: {e}") from e
-        raw = q.raw
-        if added := [p for p in iter_attachment_parts(msg) if p.get(ADDED_HEADER)]:
-            for p in added:                           # what the owner approved, without the server's own bookkeeping
-                del p[ADDED_HEADER]
-            raw = msg.as_bytes(policy=policy.SMTP)
-        opened, sent = False, []
-        try:
-            with self.imap() as c:                    # the mailbox first: one that cannot be opened sends nothing
-                opened = True
-                result = self._send_and_file(c, msg, raw, recipients, q.followup, self._summary_of(msg), sent=sent)
-        except SmtpFailed as e:
-            if e.maybe_sent:
-                return self._unclear(q, recipients, e.__cause__ or e)
-            self.outbox.restore(q)
-            raise MailError(e.reason or str(e)) from e         # the pages say it was not sent and still waits
-        except Exception as e:  # noqa: BLE001  -- how it ends depends on whether the server took it
-            if sent:                                  # it went out; only the filing after it failed
-                self.outbox.finish(q.id, "sent")
-                return self._sent_note({"status": "sent", "recipients": recipients, "refused": {k: list(v) for k, v in sent[0].items()},
-                                        "warning": f"Sent, but filing it afterwards failed: {e}"})
-            if not opened:
-                self.outbox.restore(q)
-                raise MailError(f"The mailbox could not be opened: {e}") from e
-            return self._unclear(q, recipients, e)
-        self.outbox.finish(q.id, "sent")
-        return self._sent_note(result)
-
-    def _unclear(self, q: QueuedMessage, recipients: list[str], e: BaseException) -> dict[str, Any]:
-        self.outbox.finish(q.id, "unclear")
-        return {"status": "unclear", "recipients": recipients,
-                "note": f"The mail server did not confirm the mail ({type(e).__name__}), so it may or may not have gone out. It is not "
-                        "sent again; ask a recipient before sending it once more."}
 
     @staticmethod
     def _sent_note(result: dict[str, Any]) -> dict[str, Any]:
@@ -2681,3 +2713,225 @@ class MailService:
                 raise MailError(f"Could not delete '{exact}': {e}.") from e
         self._forget_folder(exact)
         return {"deleted": True, "folder": exact, **({"messages_moved_to_trash": count} if count else {})}
+
+
+# -- the action types (docs/SENDGATE.md, package 6b) ----------------------------------------------------------------------------
+# One type per thing the owner reads (D6-4): (badge and title, the tool that asks for it). Variant A of the owner's mock: the title
+# is the type's own, and the subject goes on the line under it and in the list (`subject_field`).
+MAIL_TYPES = {"mail.send": ("Email", "mail_send_message"), "mail.reply": ("Email reply", "mail_reply_to_message"),
+              "mail.forward": ("Forward", "mail_forward_message")}
+_INLINE_BODY = 64 * 1024            # the rest of a mail larger than this is a blob of its own (the canonical JSON holds 200,000 bytes)
+_MAIL_NOTE = "Approving sends it once from your account."
+
+MAIL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "cc": {"type": "string"},
+        "bcc": {"type": "string"},
+        "subject": {"type": "string"},
+        "message": {"type": "string"},                                # the rest of the message, as it goes out; "" with message_blob
+        "message_blob": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "files": {"type": "array", "items": {"type": "object"}},     # name, type, size and sha256 of each file, or a place that waits
+        "followup": {"type": ["object", "null"]},
+    },
+    "required": ["from", "to", "cc", "bcc", "subject", "message", "files"],
+    "additionalProperties": False,
+}
+
+
+def mail_addresses(p: Mapping[str, Any]) -> list[str]:
+    """Whom a mail action reaches: every address in To, Cc and Bcc, once each, in that order (as the envelope has them)."""
+    return list(dict.fromkeys(a for _, a in parse_addrs([str(p.get(f) or "") for f in ("to", "cc", "bcc") if p.get(f)])))
+
+
+def _plain_lock(msg: EmailMessage) -> str:
+    """Why the text of this mail cannot be edited here, or "" (the locks mail had before 6b)."""
+    if msg.get_content_type() in ("multipart/signed", "multipart/encrypted"):
+        return "This mail is signed or encrypted, so its text cannot be edited here."
+    if any(p.get_content_type() == "text/html" and p.get_content_disposition() != "attachment" for p in _iter_leaf_parts(msg)):
+        return ("This mail also has an HTML version, and only the plain text can be edited here. Changing one would leave "
+                "the two different.")
+    if msg.get_body(preferencelist=("plain",)) is None:
+        return "This mail has no plain-text part to edit."
+    return ""
+
+
+def _waits_for(svc: "MailService") -> Any:
+    def why(p: Mapping[str, Any]) -> str:
+        """The block of a mail that still waits for a file: nothing is claimed while one is missing (6a)."""
+        waiting = pending_files(svc.rest_of(p))
+        return ("Not sent: this message still waits for " + ", ".join(w["filename"] for w in waiting) + ". Add the file first."
+                if waiting else "")
+    return why
+
+
+def _text_of(svc: "MailService") -> Any:
+    def text(p: Mapping[str, Any]) -> str:
+        """The text the card shows: the plain part, else the HTML as text (as the card before 6b)."""
+        t, h = extract_bodies(svc.rest_of(p))
+        return t if t is not None else (html_to_text(h) if h else "")
+    return text
+
+
+def _with_text(svc: "MailService") -> Any:
+    def write(p: Mapping[str, Any], text: str) -> dict[str, Any]:
+        """The parameters with the plain part replaced; the rest of the message stays as it is."""
+        rest = svc.rest_of(p)
+        if why := _plain_lock(rest):
+            raise ValueError(why)
+        part = rest.get_body(preferencelist=("plain",))
+        part.clear_content()               # the payload and the part's Content-* headers; the other headers stay
+        _set_text(part, text)
+        body = rest.as_bytes(policy=policy.SMTP)
+        out = {k: v for k, v in p.items() if k != "message_blob"}
+        if len(body) > _INLINE_BODY:
+            return {**out, "message": "", "message_blob": svc._stage(body)}
+        return {**out, "message": body.decode("latin-1")}
+    return write
+
+
+def _locked(svc: "MailService") -> Any:
+    def why(p: Mapping[str, Any]) -> str:
+        return _plain_lock(svc.rest_of(p))
+    return why
+
+
+def _blobs(p: Mapping[str, Any]) -> list[str]:
+    return [f["sha256"] for f in p.get("files") or [] if isinstance(f, dict) and f.get("sha256")] + \
+        ([p["message_blob"]] if p.get("message_blob") else [])
+
+
+class MailFiles:
+    """The files of a mail action (the gate's Files, package 6b): its attachments, kept as blobs, and the places that wait for a
+    file an agent could not pass itself. What the owner adds on the card and what an agent uploads land here."""
+    limit_name = "MAX_ATTACHMENT_BYTES"
+
+    def __init__(self, svc: "MailService"):
+        self.svc = svc
+
+    @property
+    def max_bytes(self) -> int:
+        return self.svc.s.max_attachment_bytes
+
+    def listed(self, p: Mapping[str, Any]) -> list[dict[str, Any]]:
+        files = list(p.get("files") or [])
+        out = []
+        for i, part in enumerate(iter_attachment_parts(self.svc.rest_of(p))):
+            if part.get(PENDING_HEADER):
+                continue
+            f = files[i] if i < len(files) and isinstance(files[i], dict) else {}
+            added = part.get(ADDED_HEADER)
+            out.append({"index": i, "filename": part.get_filename() or f.get("name") or f"part-{i}", "size": int(f.get("size") or 0),
+                        "content_type": part.get_content_type(), "added": bool(added), "asked": str(added) if added else ""})
+        return out
+
+    def missing(self, p: Mapping[str, Any]) -> list[dict[str, Any]]:
+        return pending_files(self.svc.rest_of(p))
+
+    def content(self, p: Mapping[str, Any], index: int) -> tuple[bytes, str] | None:
+        files = list(p.get("files") or [])
+        if not 0 <= index < len(files) or not isinstance(files[index], dict) or not files[index].get("sha256"):
+            return None
+        data = self.svc._blob(files[index]["sha256"])
+        return (data, str(files[index].get("type") or "application/octet-stream")) if data is not None else None
+
+    def put(self, p: Mapping[str, Any], data: bytes, *, filename: str | None, content_type: str | None,
+            index: int | None = None, token: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        """A file into the place that waits for it (the owner's index, or an upload's token), or in place of one the owner or an
+        upload added before. The message keeps everything else."""
+        from .gate.export_queue import BLOB_HEADER
+        if not data:
+            raise ValueError("The file is empty.")
+        if len(data) > self.max_bytes:
+            raise ValueError(f"The file is {len(data)} bytes; the limit is {self.max_bytes} (MAX_ATTACHMENT_BYTES).")
+        want = hashlib.sha256(token.encode()).hexdigest() if token else None
+        rest = self.svc.rest_of(p)
+        for i, part in enumerate(iter_attachment_parts(rest)):
+            held, added = part.get(PENDING_HEADER), part.get(ADDED_HEADER)
+            held = str(held).strip() if held else None            # Python 3.11 keeps the folded header's leading space
+            if not (hmac.compare_digest(held, want) if want and held else not want and i == index and (held or added)):
+                continue
+            asked = str(added) if added else part.get_filename() or "attachment"
+            name = safe_filename(filename) or asked
+            ctype = (content_type or "").split(";")[0].strip().lower()
+            if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", ctype) or ctype in ("application/octet-stream", "application/x-www-form-urlencoded"):
+                ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            maintype, _, subtype = ctype.partition("/")
+            part.clear_content()
+            del part[PENDING_HEADER], part[ADDED_HEADER], part[BLOB_HEADER]
+            part.set_content(data, maintype=maintype, subtype=subtype, disposition="attachment", filename=name)
+            part[ADDED_HEADER] = asked
+            new = self._again(p, rest)
+            return new, {"index": i, "filename": name, "size": len(data), "content_type": ctype, "asked": asked,
+                         "waiting": pending_files(rest), "next": "The mail now waits for the owner's approval. It is not sent yet."}
+        raise LookupError("No file is waiting here: it was already added, or the message was sent, discarded or has expired.")
+
+    def remove(self, p: Mapping[str, Any], index: int) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Take a file the owner or an upload added back out: its place waits for a file again, with a fresh token nobody holds, so
+        an agent's old upload link stays used up and only the owner adds the next file."""
+        from .gate.export_queue import BLOB_HEADER
+        rest = self.svc.rest_of(p)
+        parts = iter_attachment_parts(rest)
+        if not 0 <= index < len(parts) or not parts[index].get(ADDED_HEADER):
+            raise LookupError("There is no added file here to remove: the message was sent, discarded or has expired.")
+        part = parts[index]
+        asked = str(part[ADDED_HEADER])
+        part.clear_content()
+        del part[ADDED_HEADER], part[BLOB_HEADER]
+        part.set_content(_placeholder_text(asked), maintype="application", subtype="x-icloud-mcp-pending",
+                         disposition="attachment", filename=asked)
+        part[PENDING_HEADER] = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+        return self._again(p, rest), {"index": index, "asked": asked, "waiting": pending_files(rest)}
+
+    def _again(self, p: Mapping[str, Any], rest: EmailMessage) -> dict[str, Any]:
+        """The parameters with this rest of the message: a new file becomes a blob, the others keep theirs."""
+        whole = copy.deepcopy(rest)
+        for name, field in (("From", "from"), ("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"), ("Subject", "subject")):
+            if p.get(field):
+                whole[name] = p[field]
+        return self.svc.params_of(whole, p.get("followup"), old=p)
+
+
+def action_type(type_id: str, svc: "MailService") -> Any:
+    from .gate import actions as A
+    badge, _ = MAIL_TYPES[type_id]
+    reply = type_id == "mail.reply"
+    return A.ActionType(
+        id=type_id, title=badge, badge=badge, approve_label="Send", params_schema=MAIL_SCHEMA,
+        rows=(("From", "from"), ("To", "to"), ("Cc", "cc"), ("Bcc", "bcc")), people_rows=True,
+        text_field="message", editable_fields=("subject", "to", "cc", "bcc"), recipient_fields=("to", "cc", "bcc"),
+        recipients=mail_addresses, subject_field="subject", subject=lambda p: p.get("subject") or "(no subject)",
+        text_style="mail", note=_MAIL_NOTE, text_of=_text_of(svc), with_text=_with_text(svc), text_locked=_locked(svc),
+        blocked=_waits_for(svc), blobs=_blobs, text_limit=svc.s.max_body_chars,
+        edit_note=f"At most {svc.s.max_recipients} recipients." + (" A changed subject keeps the reply in its thread." if reply else ""))
+
+
+class MailExecutor:
+    """Sends an approved mail action, once per approval, after the type's recheck found the lists as the owner saw them. Called from
+    a worker thread."""
+
+    def __init__(self, service: "MailService"):
+        self.svc = service
+
+    def execute(self, request: Any) -> Any:
+        return self.svc.deliver(request.params)
+
+
+def register_types(registry: Any, service: "MailService", account: Any = None) -> None:
+    """The three mail types on the external source. The owner's list is mail's own (an empty SEND_ALLOWLIST allows everyone, a
+    domain entry the domain), checked by the service when it queues and again in the recheck, which also hears whom the owner
+    typed in; the registry's own list lets everyone through. account(): the name of the provider mail goes out from, for the tag
+    on the From row ('' for none)."""
+    import dataclasses
+    executor, files, context = MailExecutor(service), MailFiles(service), service.action_contexts   # one context: one read for a page
+
+    def tags(p: Mapping[str, Any]) -> dict[str, str]:
+        name = account() if account is not None else ""
+        return {"From": name} if name else {}
+    for type_id, (_, tool) in MAIL_TYPES.items():
+        at = action_type(type_id, service)
+        registry.register(dataclasses.replace(at, row_tags=tags), executor, ["*"], recheck=service.recheck,
+                          recheck_owner_allowed=True, allows=lambda a: recipient_allowed(a, service.s.send_allowlist), files=files,
+                          context=context, status_kind="mail", channel_tool=tool, builtin=True)

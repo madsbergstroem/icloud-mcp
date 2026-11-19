@@ -3,7 +3,7 @@
 import { put } from "./api.js";
 import { esc, toast, fail, ask, titleBlock } from "./ui.js";
 
-const STAYS = { mail: "The recipients and the subject stay the same.", bubble: "The conversation stays the same." };
+const STAYS = { bubble: "The conversation stays the same." };
 
 // The edit view of one request. `rows` is the message card's own rows (already HTML), `sub` the line under the title.
 export function editView(it, rows, sub) {
@@ -38,7 +38,7 @@ function formView(it) {
   const people = f.some((x) => x.recipient);
   return titleBlock(it.title, "Editing")
     + `<div class="cf">${rows}${text}</div>
-      <p class="note">${people ? "Someone you type in who is not on your list is allowed for this request only. " : ""}Your changes become a new version; several in a row count as one. The earlier ones stay in the list.</p>`;
+      <p class="note">${people ? "Someone you type in who is not on your list is allowed for this request only. " : ""}${it.edit_note ? `${esc(it.edit_note)} ` : ""}Your changes become a new version; several in a row count as one. The earlier ones stay in the list.</p>`;
 }
 
 function wireForm(el, key, it, done) {

@@ -65,7 +65,8 @@ def log(mcp, *prefix):
 
 
 def waiting(mcp, kind):
-    return [q.id for q in mcp._icloud_outboxes[kind].pending()]
+    """What waits of a kind; since package 6b a mail waits on the external source (approval_status still says kind mail, D6-8)."""
+    return [q.id for q in mcp._icloud_outboxes["external" if kind == "mail" else kind].pending()]
 
 
 # ------------------------------------------------------------------------------------------------ taking back, every kind
@@ -109,8 +110,8 @@ async def test_a_request_the_owner_approved_first_is_not_taken_back(web):
     q = queue(mcp, subject="Quote", body="Details")
     async with client(app) as c:
         h = api(await signed_in(c))
-        sha = (await c.get(f"/dashboard/api/items/mail:{q}")).json()["sha"]
-        assert (await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200
+        sha = (await c.get(f"/dashboard/api/items/external:{q}")).json()["sha"]
+        assert (await c.post(f"/dashboard/api/items/external:{q}/approve", json={"sha": sha}, headers=h)).status_code == 200
     got = await withdraw(mcp, q)
     assert got == {"id": q, "withdrawn": False, "status": "sent"} and len(sent) == 1
     assert log(mcp, "approval.withdrawn") == []
@@ -121,9 +122,9 @@ async def test_taken_back_first_the_owners_approve_finds_nothing_and_sends_nothi
     q = queue(mcp, subject="Quote", body="Details")
     async with client(app) as c:
         h = api(await signed_in(c))
-        sha = (await c.get(f"/dashboard/api/items/mail:{q}")).json()["sha"]
+        sha = (await c.get(f"/dashboard/api/items/external:{q}")).json()["sha"]
         assert (await withdraw(mcp, q))["withdrawn"] is True
-        r = await c.post(f"/dashboard/api/items/mail:{q}/approve", json={"sha": sha}, headers=h)
+        r = await c.post(f"/dashboard/api/items/external:{q}/approve", json={"sha": sha}, headers=h)
         assert r.status_code == 409 and "no longer waiting" in r.json()["error"]
     assert sent == []
 
@@ -132,7 +133,7 @@ async def test_when_the_claim_is_lost_to_an_approve_nothing_looks_like_success(w
     """The look says waiting; between the look and the claim the owner's Approve claims the entry: the tool's claim finds nothing."""
     app, mcp, _, sent = web()
     q = queue(mcp)
-    box = mcp._icloud_outboxes["mail"]
+    box = mcp._icloud_outboxes["external"]
     real = box.claim
 
     def owner_first(item_id, state=None):              # claim takes how it ends since the store (gate/store.py)
@@ -150,14 +151,14 @@ async def test_an_unknown_an_expired_and_a_discarded_request_each_answer_with_th
     app, mcp, *_ = web()
     assert await withdraw(mcp, "never-queued") == {"id": "never-queued", "withdrawn": False, "status": "unknown"}
     gone = queue(mcp, subject="Old", body="Old")
-    box = mcp._icloud_outboxes["mail"]
+    box = mcp._icloud_outboxes["external"]
     box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 30, gone))   # the approval store since 6a
     assert await withdraw(mcp, gone) == {"id": gone, "withdrawn": False, "status": "expired"}
     no = queue(mcp, subject="No", body="No")
     async with client(app) as c:
         h = api(await signed_in(c))
-        sha = (await c.get(f"/dashboard/api/items/mail:{no}")).json()["sha"]
-        assert (await c.post(f"/dashboard/api/items/mail:{no}/discard", json={"sha": sha}, headers=h)).status_code == 200
+        sha = (await c.get(f"/dashboard/api/items/external:{no}")).json()["sha"]
+        assert (await c.post(f"/dashboard/api/items/external:{no}/discard", json={"sha": sha}, headers=h)).status_code == 200
     assert await withdraw(mcp, no) == {"id": no, "withdrawn": False, "status": "discarded"}
     assert (await withdraw(mcp, no)) == (await withdraw(mcp, no))              # asking again changes nothing
     assert log(mcp, "approval.withdrawn") == []
@@ -183,7 +184,7 @@ async def test_a_request_carries_the_name_of_the_client_that_queued_it_and_only_
     mail = {"to": ["bob@example.org"], "subject": "Lunch", "body": "See you at one"}
     queued = json.loads((await as_client(mcp, "agent-a", "mail_send_message", mail)).content[0].text)
     assert queued["status"] == "queued_for_owner_approval"
-    (q,) = mcp._icloud_outboxes["mail"].pending()
+    (q,) = mcp._icloud_outboxes["external"].pending()
     assert q.requested_by == "agent-a"
     async with client(app) as c:
         await signed_in(c)
@@ -237,7 +238,7 @@ async def test_over_http_the_label_is_the_name_the_app_registered_under_and_only
         a, b = apps["Agent A"], apps["Agent B"]
         bad, text = await a("mail_send_message", {"to": ["bob@example.org"], "subject": "Lunch", "body": "See you at one"})
         assert not bad and json.loads(text)["status"] == "queued_for_owner_approval"
-        (q,) = mcp._icloud_outboxes["mail"].pending()
+        (q,) = mcp._icloud_outboxes["external"].pending()
         assert q.requested_by == "Agent A"
         bad, text = await b("approval_withdraw", {"id": q.id})
         assert bad and "Another client queued this request" in text and waiting(mcp, "mail") == [q.id]
@@ -261,7 +262,7 @@ async def test_a_request_with_no_label_can_be_taken_back_by_any_client(web):
     """Nothing says who queued it (a client that gave no name, or an entry from before labels): there is nothing to compare."""
     app, mcp, *_ = web()
     q = queue(mcp)                                                              # queued with no client behind the call
-    assert mcp._icloud_outboxes["mail"].pending()[0].requested_by is None
+    assert mcp._icloud_outboxes["external"].pending()[0].requested_by is None
     got = await as_client(mcp, "agent-b", "approval_withdraw", {"id": q})
     assert not got.is_error and json.loads(got.content[0].text)["withdrawn"] is True
 
@@ -270,7 +271,7 @@ async def test_a_client_without_a_name_leaves_the_label_empty(web):
     app, mcp, *_ = web()
     mail = {"to": ["bob@example.org"], "subject": "Lunch", "body": "See you at one"}
     await mcp.call_tool("mail_send_message", mail)                              # no handshake behind the call at all
-    assert mcp._icloud_outboxes["mail"].pending()[0].requested_by is None
+    assert mcp._icloud_outboxes["external"].pending()[0].requested_by is None
 
 
 def test_the_label_is_a_short_clean_name_and_empty_when_there_is_none():
@@ -315,13 +316,13 @@ async def test_the_log_line_is_by_the_assistant_and_holds_no_text(web):
         await withdraw(mcp, item_id, "duplicate")
     entries = list(reversed(log(mcp, "approval.withdrawn")))
     assert [(e["actor"], e["details"]["kind"], e["details"]["outbox_id"], e["details"]["reason"]) for e in entries] == [
-        ("assistant", kind, item_id, "duplicate") for kind, item_id in ids]
-    # the title of a type of the server's own is the type's, never the event's name (5b, as the iMessage in 4b)
-    assert [e["summary"] for e in entries] == ["Withdrew email “Invoice 2291”", "Withdrew imessage “iMessage”",
+        ("assistant", "external", item_id, "duplicate") for kind, item_id in ids]      # a mail is an action since package 6b
+    # the title of a type of the server's own is the type's, never the event's name or the subject (5b and 6b, as the iMessage in 4b)
+    assert [e["summary"] for e in entries] == ["Withdrew email “Email”", "Withdrew imessage “iMessage”",
                                                "Withdrew invitation “Invitation”"]
     # a mail and an invitation keep their first recipient, as approval.sent does, so Home can say whom it was for
     # and the hash of exactly what waited (docs/SENDGATE.md, review obligation E-3), never its text
-    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients", "sha256"}),
+    assert [(e["ok"], set(e["details"])) for e in entries] == [(True, {"kind", "outbox_id", "reason", "recipients", "sha256", "action_type"}),
                                                                (True, {"kind", "outbox_id", "reason", "recipients", "sha256", "action_type"}),
                                                                (True, {"kind", "outbox_id", "reason", "recipients", "sha256", "action_type"})]
     assert entries[2]["details"]["recipients"] == ["jana@example.org"] and entries[2]["details"]["action_type"] == "calendar.invite"
@@ -341,7 +342,7 @@ async def test_approval_status_reads_a_withdrawal_as_a_result_by_id_and_in_the_l
     await withdraw(mcp, b, "superseded")
     listed = json.loads((await mcp.call_tool("approval_status", {"since": cursor})).content[0].text)
     assert [(i["id"], i["status"], i["edited"]) for i in listed["items"]] == [(b, "withdrawn", False)] and listed["more"] is False
-    assert set(listed["items"][0]) == {"id", "kind", "status", "edited", "at"}
+    assert set(listed["items"][0]) == {"id", "kind", "status", "edited", "at", "action_type"}       # D6-8: a mail names its type
     assert (await status(mcp, a))["status"] == "waiting" and (await status(mcp, c_))["status"] == "waiting"
     text = json.dumps([listed, await status(mcp, b)])
     for hidden in ("bob@example.org", '"B"', "superseded"):
@@ -351,10 +352,10 @@ async def test_approval_status_reads_a_withdrawal_as_a_result_by_id_and_in_the_l
 async def test_edited_reads_as_before_on_a_request_that_was_withdrawn(web):
     app, mcp, *_ = web()
     one, two = queue(mcp, subject="One", body="Asked-for-words"), queue(mcp, subject="Two", body="Original words")
-    mail = mcp._icloud_dashboard.sources["mail"]
+    mail = mcp._icloud_dashboard.sources["external"]
     async with client(app) as c:
         h = api(await signed_in(c))
-        put = lambda q, sha, body: c.put(f"/dashboard/api/items/mail:{q}/text", json={"sha": sha, **body}, headers=h)  # noqa: E731
+        put = lambda q, sha, body: c.put(f"/dashboard/api/items/external:{q}/text", json={"sha": sha, **body}, headers=h)  # noqa: E731
         sha1 = next(q.sha256 for q in mail.pending() if q.id == one)
         sha2 = next(q.sha256 for q in mail.pending() if q.id == two)
         sha1 = (await put(one, sha1, {"text": "Owner-written-words"})).json()["sha"]
@@ -381,7 +382,7 @@ async def test_activity_shows_a_withdrawal_in_plain_words_with_its_reason_and_a_
             rows = [e for d in days for e in d["entries"] if e["tag"] == "Withdrawn"]
             assert len(rows) == 1, which
             row = rows[0]
-            assert row["who"] == "Your assistant" and row["what"] == "withdrew email “Re: Invoice 2291”" and row["ok"] is True
+            assert row["who"] == "Your assistant" and row["what"] == "withdrew email “Email”" and row["ok"] is True   # the type's title (6b)
             assert row["note"] == "Withdrawn by your assistant: queued by mistake. Nothing was sent."
         assert not [e for d in (await c.get("/dashboard/api/activity?filter=signins")).json()["days"] for e in d["entries"] if e["tag"] == "Withdrawn"]
     # an app that happens to be called "assistant" is still itself in its own lines
@@ -408,10 +409,10 @@ async def test_home_lists_what_was_taken_back_in_the_last_day_and_lets_go_after_
         today = (await c.get("/dashboard/api/today")).json()
         assert len(today["withdrawn"]) == 2 and all(0 <= time.time() - w["t"] < 60 for w in today["withdrawn"])
         # what Activity shows for each, newest first: title, kind, first recipient, the reason; never the text
-        assert [(w["title"], w["what"], w["to"], w["why"]) for w in today["withdrawn"]] == [
-            ("Taken back 1", "Email", "bob@example.org", "A duplicate."), ("Taken back 0", "Email", "bob@example.org", "No longer needed.")]
+        assert [(w["title"], w["what"], w["to"], w["why"]) for w in today["withdrawn"]] == [      # the type's title since 6b
+            ("Email", "Email", "bob@example.org", "A duplicate."), ("Email", "Email", "bob@example.org", "No longer needed.")]
         assert "Secret words" not in json.dumps(today["withdrawn"])
-        assert [w["title"] for w in today["waiting"]] == ["Stays waiting"] and today["waiting"][0]["key"] == f"mail:{keep}"   # waiting entries are untouched
+        assert [w["subject"] for w in today["waiting"]] == ["Stays waiting"] and today["waiting"][0]["key"] == f"external:{keep}"   # waiting entries are untouched
         assert [e["actor"] for e in audit.entries(5, ("approval.withdrawn",))].count("assistant") == 3      # the log keeps all three
         later = time.time() + 24 * 3600 + 120                                       # only the API's clock moves: the sign-in stays valid
         monkeypatch.setattr("icloud_mcp.dashboard_api.time", SimpleNamespace(time=lambda: later, strftime=time.strftime))
@@ -507,7 +508,8 @@ def test_a_withdrawal_by_the_unit_claims_once_and_writes_one_line(tmp_path):
     got = Withdrawals(ledger).withdraw(q.id, "mistake", "agent-a")
     assert got == {"id": q.id, "withdrawn": True, "status": "withdrawn"} and box.pending() == []
     (entry,) = audit.entries(5)
-    assert entry["action"] == "approval.withdrawn" and entry["actor"] == "assistant" and entry["summary"] == "Withdrew email “Hello”"
+    # since package 6b the gate reads no mail: a queue of kind mail (the JSON file of before 6a) is named by its kind only
+    assert entry["action"] == "approval.withdrawn" and entry["actor"] == "assistant" and entry["summary"] == "Withdrew a queued mail request"
     assert Withdrawals(ledger).withdraw(q.id, "mistake", "agent-a")["withdrawn"] is False
     assert len(audit.entries(5)) == 1
 

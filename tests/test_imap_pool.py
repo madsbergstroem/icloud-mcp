@@ -6,6 +6,8 @@ import threading
 
 import pytest
 
+from mail_held import held, pending
+
 import icloud_mcp.mail as mail_mod
 from icloud_mcp import config
 from icloud_mcp.config import Settings
@@ -162,12 +164,13 @@ def test_special_folders_come_from_the_cached_list_at_no_extra_cost(svc):
 def test_a_queued_send_borrows_no_connection_and_keeps_every_gate(svc, monkeypatch):
     monkeypatch.setattr(MailService, "imap", lambda self, **kw: pytest.fail("a queued send opened IMAP"))
     svc.s = dataclasses.replace(svc.s, send_allowlist=("@example.org",), max_recipients=2)
+    held(svc)                                       # package 6b: mail waits as an action on the external source
     with pytest.raises(MailError, match="SEND_ALLOWLIST"):
         svc.send(to="someone@example.com", subject="Hi", body="Hello")
     with pytest.raises(MailError, match="Too many recipients"):
         svc.send(to=["a@example.org", "b@example.org", "c@example.org"], subject="Hi", body="Hello")
     r = svc.send(to="a@example.org", subject="Hi", body="Hello")
-    assert r["status"] == "queued_for_owner_approval" and not r["sent"] and len(svc.outbox.pending()) == 1 and not FakeClient.made
+    assert r["status"] == "queued_for_owner_approval" and not r["sent"] and len(pending(svc)) == 1 and not FakeClient.made
 
 
 def test_a_direct_send_without_approval_keeps_every_gate(svc, monkeypatch):

@@ -148,6 +148,20 @@ class ActionType:
     text_of: Callable[[Mapping[str, Any]], str] | None = None
     with_text: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
     text_locked: Callable[[Mapping[str, Any]], str] | None = None
+    # package 6b, all optional and for a type the server registers itself (ActionRegistry.register): the parameter the line under
+    # the title shows (the mail's subject), which then counts as shown for editable_fields and is offered first in the edit form;
+    # why one request cannot be approved yet ("" when it can: a file it still waits for), which nothing claims past; a short tag
+    # after the value of a row, by the row's label (the account a mail goes out from); the sha256 of every blob the parameters
+    # name (attachments, a large body), which the store keeps as long as a version names them; and a line for the edit form
+    subject_field: str | None = None
+    blocked: Callable[[Mapping[str, Any]], str] | None = None
+    row_tags: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None
+    blobs: Callable[[Mapping[str, Any]], Iterable[str]] | None = None
+    edit_note: str = ""
+    text_limit: int = 0                        # the most characters its text may have, when not the general 10,000 (a mail's MAX_BODY_CHARS)
+    # its rows may use the labels reserved for who a request reaches (a mail's To, Cc and Bcc); the log then names whom it reached
+    # from `recipients` only (D4-2), never from a row
+    people_rows: bool = False
 
     def __post_init__(self) -> None:
         if not ID_PATTERN.match(self.id or ""):
@@ -156,6 +170,8 @@ class ActionType:
             raise ValueError(f"Action type {self.id}: text_style must be one of {', '.join(TEXT_STYLES)}.")
         if (self.text_of is None) != (self.with_text is None) or (self.text_of is not None and self.text_field is None):
             raise ValueError(f"Action type {self.id}: text_of and with_text come together, with the text_field they read.")
+        if self.subject_field is not None and (self.params_schema.get("properties") or {}).get(self.subject_field, {}).get("type") != "string":
+            raise ValueError(f"Action type {self.id}: subject_field {self.subject_field!r} must be a string property of the schema.")
         for field in ("title", "badge", "approve_label"):
             if not str(getattr(self, field)).strip():
                 raise ValueError(f"Action type {self.id}: {field} is empty.")
@@ -168,7 +184,7 @@ class ActionType:
             raise ValueError(f"Action type {self.id}: params_schema must describe an object.")
         props = schema.get("properties") or {}
         for label, name in self.rows:
-            if label in RESERVED_LABELS:
+            if label in RESERVED_LABELS and not self.people_rows:
                 raise ValueError(f"Action type {self.id}: the row label {label!r} is reserved for who a request reaches.")
             if name not in props:
                 raise ValueError(f"Action type {self.id}: row {label!r} shows {name!r}, which is not in the schema.")
@@ -181,14 +197,14 @@ class ActionType:
                 raise ValueError(f"Action type {self.id}: editable field {name!r} must be a property of the schema the agent sets.")
             if spec.get("type") not in EDITABLE_TYPES:
                 raise ValueError(f"Action type {self.id}: editable field {name!r} must be of type string, number, integer or boolean.")
-            if name != self.text_field and name not in shown:
+            if name != self.text_field and name != self.subject_field and name not in shown:
                 raise ValueError(f"Action type {self.id}: editable field {name!r} must be shown in a row, so every change is on the card.")
         if _nested_read_only(schema):
             raise ValueError(f"Action type {self.id}: readOnly is allowed only on top-level properties, where it is enforced.")
 
 
 EDITABLE_TYPES = ("string", "number", "integer", "boolean")
-TEXT_STYLES = ("plain", "bubble")
+TEXT_STYLES = ("plain", "bubble", "mail")          # mail (6b): plain text whose quoted tail is folded on the card
 
 
 def editable(action_type: ActionType) -> tuple[str, ...]:
@@ -216,9 +232,11 @@ def _nested_read_only(node: Any, top: bool = True) -> bool:
 
 @dataclass(frozen=True)
 class Result:
-    """What an executor reports: how it ended and one line for the owner (no text of the request)."""
+    """What an executor reports: how it ended and one line for the owner (no text of the request). refused: how many recipients
+    the service refused while it took the others (a mail, package 6b), for the log line; a count, never who."""
     status: Status
     line: str = ""
+    refused: int = 0
 
     def __post_init__(self) -> None:
         if self.status not in STATUSES:
@@ -273,6 +291,20 @@ class Registration:
     # registered by the server itself (iMessage, calendar changes), not from a connector file or a plugin: its recipients come
     # from the service, not from an agent's parameters, so the log may name them (D4-2)
     builtin: bool = False
+    # package 6b, for a type the server registers itself, all optional:
+    # recheck_owner_allowed: the recheck is called as recheck(params, owner_allowed), with the people the owner typed in for this
+    # version, whom the type's own list does not apply to; it is also called when the owner saves an edit, and a recheck that
+    # raises Rechecked refuses the save with its words (mail: SEND_ALLOWLIST, MAX_RECIPIENTS)
+    recheck_owner_allowed: bool = False
+    # allows(person): the type's own test of one recipient against the owner's list, for a list the gate's exact matching cannot
+    # hold (`allowed` is then ["*"]); the edit form marks whom the owner typed in that it refuses
+    allows: Callable[[str], bool] | None = None
+    # files: the files a request carries (see Files); context(requests): what the card needs beyond the parameters, read when it is
+    # shown (the mail it answers, cautions about it), by request id
+    files: "Files | None" = None
+    context: Callable[[list["ActionRequest"]], Mapping[str, Mapping[str, Any]]] | None = None
+    # what approval_status calls a request of this type ("mail" for mail, D6-8); "external" when not set
+    status_kind: str | None = None
 
     def hold_now(self, approving: bool = False) -> Hold | None:
         """The type's hold as it is now. One that raises blocks: approving must not depend on a function that failed."""
@@ -288,6 +320,30 @@ class Registration:
         return {str(x).strip().casefold() for x in self.allowed()}
 
 
+class Files(Protocol):
+    """The files of a type whose requests carry some (a mail's attachments, package 6b). Every method reads or returns the
+    parameters; new file contents are staged in the store by the type before it returns them."""
+    max_bytes: int
+
+    def listed(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """The files the request carries: index, filename, size, content_type, added (by the owner or an upload), asked (the name
+        the agent gave a file someone added)."""
+
+    def missing(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """The files it still waits for: index, filename."""
+
+    def content(self, params: Mapping[str, Any], index: int) -> tuple[bytes, str] | None:
+        """One file's bytes and type, for the preview; None when there is no such file."""
+
+    def put(self, params: Mapping[str, Any], data: bytes, *, filename: str | None, content_type: str | None,
+            index: int | None = None, token: str | None = None) -> tuple[Mapping[str, Any], dict[str, Any]]:
+        """The parameters with this file in the place `index` (the owner's) or `token` (an upload) names, and what was added.
+        LookupError when no place matches; ValueError for a file that does not fit."""
+
+    def remove(self, params: Mapping[str, Any], index: int) -> tuple[Mapping[str, Any], dict[str, Any]]:
+        """The parameters with an added file taken out again: its place waits for a file. LookupError when there is none."""
+
+
 class ActionRegistry:
     def __init__(self) -> None:
         self._items: dict[str, Registration] = {}
@@ -297,7 +353,9 @@ class ActionRegistry:
                  policy: Callable[[Mapping[str, Any]], str | None] | None = None, *,
                  prepare: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
                  recheck: Callable[[Mapping[str, Any]], str | None] | None = None,
-                 channel_tool: str | None = None, hold: Callable[[bool], "Hold | None"] | None = None, builtin: bool = False) -> None:
+                 channel_tool: str | None = None, hold: Callable[[bool], "Hold | None"] | None = None, builtin: bool = False,
+                 recheck_owner_allowed: bool = False, allows: Callable[[str], bool] | None = None, files: "Files | None" = None,
+                 context: Any = None, status_kind: str | None = None) -> None:
         """allowed_recipients: the people (or places) a request of this type may reach, as a collection or as a function that
         reads the owner's list every time it is asked. A type whose requests name recipients and has none listed cannot queue
         anything: the list is the owner's, and an empty one allows nobody. An entry `*` allows every recipient. policy: further
@@ -311,8 +369,14 @@ class ActionRegistry:
             raise ValueError(f"Action type {action_type.id} has readOnly fields but no prepare to fill them in.")
         if action_type.subject is not None and not builtin:      # the agent's words next to the title: the server's own types only
             raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have a subject.")
+        own = {"subject_field": action_type.subject_field, "blocked": action_type.blocked, "row_tags": action_type.row_tags,
+               "blobs": action_type.blobs, "people_rows": action_type.people_rows or None, "text_limit": action_type.text_limit or None, "recheck_owner_allowed": recheck_owner_allowed or None, "allows": allows, "files": files,
+               "context": context, "status_kind": status_kind}
+        if not builtin and (used := [k for k, v in own.items() if v is not None]):     # package 6b: the server's own types only
+            raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have {used[0]}.")
         allowed =allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)
-        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold, builtin)
+        self._items[action_type.id] = Registration(action_type, executor, allowed, policy, prepare, recheck, channel_tool, hold, builtin,
+                                                   recheck_owner_allowed, allows, files, context, status_kind)
 
     def copy(self) -> "ActionRegistry":
         """Another registry with the same registrations, so a server adds the types its own settings turn on without touching the

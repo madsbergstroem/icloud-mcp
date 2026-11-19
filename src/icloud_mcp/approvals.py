@@ -1,4 +1,4 @@
-"""Owner approval pages for outgoing mail and iMessages queued by the MCP tools.
+"""Owner approval pages for outgoing mail, iMessages and every other action queued by the MCP tools.
 
 An MCP client (possibly steered by injected text in an email) can only *queue* a message. It is delivered only after the
 owner opens /outbox in a browser, types the owner password, reviews the exact message and presses Approve. No page here
@@ -27,12 +27,10 @@ from . import access_sso
 from .auth import OwnerOAuthProvider
 from .config import Settings
 from .gate.actions import Rechecked, Revised
-from .mail import MailService
 
 log = logging.getLogger(__name__)
 
 _TOKEN_TTL = 600        # seconds an Approve/Discard button stays valid after the password was entered
-_BODY_PREVIEW = 20000
 
 _HEADERS = {
     "Cache-Control": "no-store",
@@ -78,21 +76,9 @@ def _row(label: str, value: str) -> str:
     return f"<tr><th>{html.escape(label)}</th><td>{html.escape(value) if value else '<span class=muted>(none)</span>'}</td></tr>" if value or label in ("Cc", "Bcc") else ""
 
 
-def flagged(d: dict[str, Any]) -> str:
-    """The warnings the original message carried: a reply to a message that tried to steer an agent needs a deliberate yes."""
-    found = list((d.get("original") or {}).get("safety_warnings") or [])
-    if d.get("agent_added_recipients"):
-        found.append("A recipient's address was added to a contact by an agent, not by you.")
-    if not found:
-        return ""
-    return ('<p class="warn">The message this answers looked like an attempt to steer the agent:</p><ul>'
-            + "".join(f"<li>{html.escape(w)}</li>" for w in found) + "</ul>")
-
-
-def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Settings, mail: MailService | None,
-                           external: Any = None, audit: Any = None) -> None:
-    """The approval page without the dashboard: mail, and every action waiting on the external source (iMessage since package
-    4b). With the dashboard on, /outbox leads there."""
+def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Settings, external: Any = None, audit: Any = None) -> None:
+    """The approval page without the dashboard: every action waiting on the external source (iMessage since package 4b, calendar
+    changes since 5b, mail since 6b). With the dashboard on, /outbox leads there."""
     if settings.dashboard:
         async def to_dashboard(_: Request) -> Response:
             return RedirectResponse("/dashboard", status_code=303, headers=_HEADERS)
@@ -102,26 +88,10 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
     login = _login_form
     key = secrets.token_bytes(32)  # per-process: buttons issued before a restart simply stop working
     access = access_sso.from_settings(settings)
-    outboxes = {k: o for k, o in (("mail", mail.outbox if mail is not None else None),
-                                  ("external", external.box if external is not None else None)) if o is not None}
+    outboxes = {"external": external.box} if external is not None else {}
 
     def _tok(kind: str, item_id: str, sha: str, action: str, exp: int) -> str:
         return hmac.new(key, f"{kind}|{item_id}|{sha}|{action}|{exp}".encode(), hashlib.sha256).hexdigest()
-
-    def _context_rows(d: dict[str, Any]) -> str:
-        """Where the queued message came from: the original it answers or forwards, and recipients an agent put on a contact."""
-        rows = ""
-        if orig := d.get("original"):
-            if orig.get("unavailable"):
-                rows += _row("In reply to", "(the original message could not be read)")
-            else:
-                frm = ", ".join(f"{a.get('name', '')} <{a.get('email', '')}>".strip() for a in orig.get("from") or [] if isinstance(a, dict))
-                rows += _row("In reply to", f"{orig.get('subject') or '(no subject)'} from {frm or '?'}" + (", bulk mail" if orig.get("bulk") else ""))
-        if added := d.get("agent_added_recipients"):
-            rows += _row("Agent-added address", ", ".join(added) + " (an agent put this address on a contact card recently)")
-        return rows
-
-    _flagged = flagged
 
     def _buttons(kind: str, q: Any, exp: int, send_label: str, override: bool = False, discard_only: bool = False) -> str:
         forms = ""
@@ -141,7 +111,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         return _tok(kind, "*all*", hashlib.sha256(ids.encode()).hexdigest(), "discard_all", exp)
 
     def _discard_all_button(kind: str, qs: list[Any], exp: int) -> str:
-        label = "requests" if kind == "external" else "emails"
+        label = "requests"                       # every kind is an action since package 6b, mail among them
         return (f'<form method="post" action="/outbox/act" style="display:inline"><input type="hidden" name="kind" value="{kind}">'
                 f'<input type="hidden" name="action" value="discard_all"><input type="hidden" name="exp" value="{exp}">'
                 f'<input type="hidden" name="ids" value="{html.escape(",".join(q.id for q in qs))}">'
@@ -151,7 +121,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
     def _queue_page(note: str = "") -> Response:
         """Blocking (the queue file, IMAP for the originals): the routes run it in a worker thread, off the event loop."""
         items = [(k, q) for k, o in outboxes.items() for q in o.pending()]
-        contexts = mail.approval_contexts([q for k, q in items if k == "mail"], prune=True) if mail is not None else {}
+        contexts = external.contexts([q for _, q in items]) if items else {}     # what a card reads when shown (a mail's original)
         exp = int(time.time()) + _TOKEN_TTL
         recent = sum(1 for _, q in items if time.time() - q.created_at < 3600)
         parts = [f'<div class="card"><h1>Outgoing messages waiting for your approval</h1>{note}'
@@ -162,28 +132,26 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
                  + '</div>']
         for kind, q in items:
             mins = max(1, int((q.expires_at - time.time()) / 60))
-            if kind == "external":                 # an action of any registered type: the card its type describes
-                v = external.describe(q)
-                head = f"{v['title']} to {v['label']}" if v.get("label") else v["title"]
-                warn = "".join(f'<p class="warn">{html.escape(w)}</p>' for w in v["warnings"])
-                buttons = _buttons(kind, q, exp, external.approve_label_for(q), override=bool(v["needs_override"])) \
-                    if v.get("approvable") is not False else _buttons(kind, q, exp, "", discard_only=True)
-                parts.append(f"""<div class="card"><h2>{html.escape(head)}</h2><table>
-{"".join(_row(k, val) for k, val in v["rows"])}</table>{warn}
+            v = external.describe(q, contexts.get(q.id))          # an action of any registered type: the card its type describes
+            head = f"{v['title']} to {v['label']}" if v.get("label") else v["title"]
+            warn = "".join(f'<p class="warn">{html.escape(w)}</p>' for w in v["warnings"])
+            buttons = _buttons(kind, q, exp, external.approve_label_for(q), override=bool(v["needs_override"])) \
+                if v.get("approvable") is not False else _buttons(kind, q, exp, "", discard_only=True)
+            # package 6b: what a mail showed here before it became an action: its subject, whom it is delivered to, its files,
+            # the mail it answers, and a file it still waits for
+            rows = (_row("Subject", v["subject"]) if v.get("subject") else "") + "".join(_row(k, val) for k, val in v["rows"])
+            if v.get("log_to") and v.get("label") and any(k == "To" for k, _ in v["rows"]):
+                rows += _row("Will be delivered to", v["label"])
+            if (orig := v.get("original")) and (orig.get("subject") or orig.get("from") or orig.get("unavailable")):
+                rows += _row(orig.get("label") or "In reply to", "(the original message could not be read)" if orig.get("unavailable")
+                             else f"{orig.get('subject') or '(no subject)'} from {orig.get('from') or '?'}" + (", bulk mail" if orig.get("bulk") else ""))
+            files = (external.files_of(q) or {}) if hasattr(external, "files_of") else {}
+            atts = "".join(f"<li>{html.escape(str(f.get('filename')))} ({html.escape(str(f.get('content_type')))}, {f.get('size')} bytes)</li>"
+                           for f in files.get("files") or [])
+            blocked = f'<p class="warn">{html.escape(v["blocked"])}</p>' if v.get("blocked") else ""
+            parts.append(f"""<div class="card"><h2>{html.escape(head)}</h2><table>
+{rows}</table>{('<p class=warn>Attachments:</p><ul>' + atts + '</ul>') if atts else ''}{warn}{blocked}
 <pre>{html.escape(v['text'])}</pre><p class="muted">{html.escape(" ".join(v["notes"]))} Expires in about {mins} min. Approve only if you asked your agent for this.</p>{buttons}</div>""")
-                continue
-            d = mail.describe_queued(q, contexts.get(q.id))
-            atts = "".join(f"<li>{html.escape(str(a.get('filename')))} ({html.escape(str(a.get('content_type')))}, {a.get('size')} bytes)</li>"
-                           for a in d["attachments"]) or ""
-            body = d["body"] if len(d["body"]) <= _BODY_PREVIEW else d["body"][:_BODY_PREVIEW] + "\n\n[... preview truncated; the full message is sent]"
-            flagged = _flagged(d)
-            forms = _buttons(kind, q, exp, "Approve and send", override=bool(flagged))
-            context = _context_rows(d)
-            parts.append(f"""<div class="card"><h2>{html.escape(d['subject'] or '(no subject)')}</h2><table>
-{_row('From', d['from'])}{_row('To', d['to'])}{_row('Cc', d['cc'])}{_row('Bcc', d['bcc'])}
-{_row('Will be delivered to', ', '.join(d['envelope_recipients']))}{context}
-</table>{('<p class=warn>Attachments:</p><ul>' + atts + '</ul>') if atts else ''}{flagged}
-<pre>{html.escape(body)}</pre><p class="muted">Expires in about {mins} min. Approve only if you asked your agent to send this.</p>{forms}</div>""")
         if not items:
             parts.append('<div class="card"><p>Nothing is waiting.</p></div>')
         return _page("Outgoing message approval", "".join(parts))
@@ -209,7 +177,7 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
     @mcp.custom_route("/outbox/act", methods=["POST"])
     async def outbox_act(request: Request) -> Response:
         form = await request.form()
-        item_id, action, kind = str(form.get("id", "")), str(form.get("action", "")), str(form.get("kind", "mail"))
+        item_id, action, kind = str(form.get("id", "")), str(form.get("action", "")), str(form.get("kind", "external"))
         try:
             exp = int(str(form.get("exp", "0")))
         except ValueError:
@@ -250,19 +218,14 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
             if audit is not None:
                 audit.record("approval.discarded", actor="owner", via="password (/outbox)", summary=f"Discarded a queued {kind} message", kind=kind, outbox_id=q.id)
             return await asyncio.to_thread(_queue_page, '<p class="ok-note">Discarded.</p>')
-        ext_v = await asyncio.to_thread(external.describe, q) if kind == "external" else {}
-        if kind == "external" and str(form.get("override", "")) != "1" and ext_v["needs_override"]:
+        ctx = await asyncio.to_thread(external.contexts, [q], False)  # the card's own reading: a mail's original, fresh or kept
+        ext_v = await asyncio.to_thread(external.describe, q, ctx.get(q.id))
+        if str(form.get("override", "")) != "1" and ext_v["needs_override"]:
+            log.info("Approval of %s refused without the override", q.id)
             return await asyncio.to_thread(_queue_page, '<p class="err">Not sent: tick the box under it if you still want it sent despite the '
                                            'warning.</p>')
-        if kind == "mail" and str(form.get("override", "")) != "1":
-            d = await asyncio.to_thread(mail.describe_queued, q)          # the page's own source: the memo, else a fresh read
-            if _flagged(d):
-                log.info("Approval of %s refused without the override: the original carried safety warnings", q.id)
-                return await asyncio.to_thread(_queue_page, '<p class="err">Not sent: this message answers one that looked like an '
-                                               'attempt to steer the agent. Tick the box under it if you still want it sent.</p>')
         try:
-            result = (await asyncio.to_thread(external.release, q) if kind == "external"
-                      else await asyncio.to_thread(mail.approve, q.id, q.sha256))
+            result = await asyncio.to_thread(external.release, q)
         except Revised as e:                     # the people in the conversation changed: a new version waits for a look
             if audit is not None:
                 audit.record("approval.revised", actor="server", summary=f"Did not send a queued {kind} message: the target changed, "
@@ -282,13 +245,9 @@ def register_outbox_routes(mcp: Any, provider: OwnerOAuthProvider, settings: Set
         log.info("Owner approved queued %s %s", kind, q.id)
         if audit is not None:
             audit.record("approval.sent", actor="owner", via="password (/outbox)", summary=f"Approved a queued {kind} message", kind=kind,
-                         outbox_id=q.id, sha256=q.sha256,
-                         delivery=getattr(result, "delivery", None) if kind == "external" else ("unconfirmed" if result["status"] == "unclear" else None),
-                         **({"action_type": q.action_type} if kind == "external" else {}),
-                         **({"refused": len(result["refused"])} if kind == "mail" and result.get("refused") else {}),
-                         recipients=list(result.get("recipients") or []) if isinstance(result, dict) else ([ext_v["label"]] if ext_v.get("log_to") and ext_v.get("label") else []))
-        if kind == "external":
-            return await asyncio.to_thread(_queue_page, f'<p>{html.escape(str(result))}</p>')
-        if result["status"] == "unclear":       # package 6a: it may have gone out, so it is never sent again
-            return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(result["note"])}</p>')
-        return await asyncio.to_thread(_queue_page, f'<p><b>Sent</b>{html.escape(result["note"].removeprefix("Sent"))}</p>')
+                         outbox_id=q.id, sha256=q.sha256, delivery=getattr(result, "delivery", None), action_type=q.action_type,
+                         **({"refused": result.refused} if getattr(result, "refused", 0) else {}),     # package 6a: a count, for mail
+                         recipients=[ext_v["label"]] if ext_v.get("log_to") and ext_v.get("label") else [])
+        if getattr(result, "delivery", None) in ("unconfirmed", "failed"):    # it may have gone out, so it is never sent again
+            return await asyncio.to_thread(_queue_page, f'<p class="err">{html.escape(str(result))}</p>')
+        return await asyncio.to_thread(_queue_page, f'<p>{html.escape(str(result))}</p>')

@@ -570,7 +570,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `READ_ONLY` | false | No sending (not even drafts), moving, deleting, or calendar, contact, reminder, note or file changes |
 | `ALLOW_SEND` | true | false = agents can only save drafts |
 | `SEND_REQUIRES_APPROVAL` | true | Queue outgoing mail for browser approval (locally: save it to Drafts) |
-| `OUTBOX_TTL_SECONDS`, `OUTBOX_MAX` | 86400, 20 | Queue lifetime and size |
+| `OUTBOX_TTL_SECONDS`, `OUTBOX_MAX` | 86400, 50 | Queue lifetime and size (all kinds together) |
 | `ALLOW_CALENDAR_INVITES` | false | Allow attendees (iCloud then emails invitations, updates and cancellations): `true`, or `approve` to hold each such change for you on the dashboard |
 | `SEND_ALLOWLIST` | empty | Only these addresses or domains may receive mail (`@example.org,friend@example.com`) |
 | `MAX_RECIPIENTS` | 25 | Per message |

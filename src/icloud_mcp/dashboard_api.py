@@ -8,7 +8,6 @@ x-csrf header and must come from this origin. A step that changes how the server
 from __future__ import annotations
 
 import asyncio
-import email
 import hmac
 import importlib.metadata
 import logging
@@ -16,7 +15,6 @@ import os
 import re
 import time
 from datetime import datetime, timedelta
-from email import policy
 from typing import Any, Callable
 
 from starlette.requests import Request
@@ -27,7 +25,6 @@ from .approval_withdraw import REASON_WORDS
 from dataclasses import replace as dc_replace
 
 from .gate.actions import Rechecked, Revised
-from .dashboard_accounts import mail_account
 
 log = logging.getLogger(__name__)
 
@@ -276,7 +273,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         """A request the assistant took back, as a row: what Activity shows for it (title, kind, first recipient, reason), no text."""
         det = e.get("details") or {}
         m = re.match(r"Withdrew (.+?) “(.*)”$", str(e.get("summary") or ""))
-        badge = (m.group(1) if m else "") or {"mail": "email"}.get(str(det.get("kind")), "request")
+        badge = (m.group(1) if m else "") or "request"
         why = REASON_WORDS.get(str(det.get("reason")), "")
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "title": m.group(2) if m else "A queued request",
                 "what": badge[:1].upper() + badge[1:], "to": short_names(", ".join(map(str, (det.get("recipients") or [])[:1]))),
@@ -379,9 +376,6 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                         "rows": [[k, val] for k, val in (cur or {}).get("rows", [])], "text": (cur or {}).get("text", "")})
         return out
 
-    def mail_parts(q: Any) -> Any:
-        return email.message_from_bytes(q.raw, policy=policy.default)
-
     @route("/items/{key}", ["GET"])
     async def item(request: Request) -> Response:
         got = reader(request)
@@ -399,51 +393,45 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                "approve_label": label_of(src, q), **({"approvable": False} if v.get("approvable") is False else {}),
                **({"held": v["held"]} if v.get("held") else {}), "files": [], "missing": [], "original": None,
                "edit": await asyncio.to_thread(T.edit_info, src, q),
-               "account": mail_account(s) if src.kind == "mail" else ""}
+               **({"row_tags": v["row_tags"]} if v.get("row_tags") else {}), **({"edit_note": v["edit_note"]} if v.get("edit_note") else {})}
+        if hasattr(src, "files_of") and (f := await asyncio.to_thread(src.files_of, q)) is not None:     # package 6b: a type's files
+            out["files"] = [{**x, "preview": x.get("content_type") in _PREVIEW_TYPES} for x in f["files"]]
+            out["missing"], out["max_bytes"] = f["missing"], f["max_bytes"]
+        if isinstance(v.get("original"), dict):                   # what the request answers, as its type read it (6b)
+            out["original"] = {k: v["original"].get(k) for k in ("label", "subject", "from", "unavailable") if k in v["original"]}
         if versions := await asyncio.to_thread(versions_of, src, q):
             out["versions"] = versions
             if versions[-1]["by"] == "service":
                 out["changed"] = versions[-1]["changes"]
             elif versions[-1]["by"] == "owner":                  # package 2d: the rows the owner changed are marked, without a warning
                 out["edited_rows"] = [c["label"] for c in versions[-1]["changes"] if c["label"] != "Text"]
-        if src.kind == "mail":
-            dq = await asyncio.to_thread(src.mail.describe_queued, q, src.contexts([q], prune=False).get(q.id))
-            added = {x["index"]: x["asked"] for x in dq["added_files"]}
-            out["files"] = [{"index": a["index"], "filename": a["filename"], "size": a["size"], "content_type": a["content_type"],
-                             "added": a["index"] in added, "asked": added.get(a["index"], ""),
-                             "preview": a["content_type"] in _PREVIEW_TYPES} for a in dq["attachments"]]
-            out["missing"] = [{"index": w["index"], "filename": w["filename"]} for w in dq["pending_files"]]
-            out["max_bytes"] = s.max_attachment_bytes
-            if orig := dq.get("original"):
-                frm = ", ".join(a.get("email", "") for a in orig.get("from") or [] if isinstance(a, dict))
-                out["original"] = {"subject": orig.get("subject") or "", "from": frm, "unavailable": bool(orig.get("unavailable"))}
         return ok(out)
 
     @route("/items/{key}/files/{index}", ["GET"])
     async def item_file(request: Request) -> Response:
-        """One attachment of a waiting mail, for the preview. Only images, PDF and plain text are sent, inline, with a CSP
+        """One file of a waiting request (a mail's attachment), for the preview. Only images, PDF and plain text are sent, inline, with a CSP
         that lets nothing in them run; the file never leaves this server for anywhere else."""
         got = reader(request)
         if isinstance(got, Response):
             return got
         kind, _, item_id = request.path_params["key"].partition(":")
-        src = d.sources.get("mail")
-        q = next((x for x in src.pending() if x.id == item_id), None) if src and kind == "mail" else None
+        src = d.sources.get(kind)
+        q = next((x for x in src.pending() if x.id == item_id), None) if src is not None and hasattr(src, "file_content") else None
         if q is None:
             return err("This is no longer waiting.", 404)
-        from .mail import iter_attachment_parts
         try:
             index = int(request.path_params["index"])
         except ValueError:
             return err("No such file.", 404)
-        parts = list(iter_attachment_parts(mail_parts(q)))
-        if not 0 <= index < len(parts):
+        try:                                                     # a type's files (package 6b: a mail's attachments)
+            got = await asyncio.to_thread(src.file_content, q, index)
+        except Exception:  # noqa: BLE001
+            got = None
+        if got is None:
             return err("No such file.", 404)
-        part = parts[index]
-        ctype = part.get_content_type()
+        data, ctype = got
         if ctype not in _PREVIEW_TYPES:
             return err("This kind of file is not shown here.", 415)
-        data = part.get_payload(decode=True) or b""
         return Response(data, media_type=ctype, headers={**headers, "Content-Disposition": "inline",
                                                          "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
                                                          "X-Frame-Options": "SAMEORIGIN",   # the app shows it in its own frame
@@ -499,10 +487,102 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         audit.record("approval.sent", **who, summary=f"Approved {v['badge'].lower()} “{v['title']}”", kind=src.kind,
                      outbox_id=q.id, delivery=getattr(note, "delivery", None), action_type=getattr(q, "action_type", None), sha256=q.sha256,
                      **({"refused": note.refused} if getattr(note, "refused", 0) else {}),       # package 6a: recipients the server refused
-                     recipients=[val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")]
-                     + ([v["label"]] if v.get("log_to") and v.get("label") else []))     # D4-2: a type the server registers itself
+                     # D4-2: a type the server registers itself names whom it reached as its type says it, and only that
+                     recipients=([v["label"]] if v.get("label") else []) if v.get("log_to")
+                     else [val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")])
         # "state" only when the send is not certain; nothing is sent again from here
         return ok({"note": note, **({"state": "unclear"} if getattr(note, "delivery", None) in ("unconfirmed", "failed") else {})})
+
+    # -- the files a waiting request carries (package 6b) -------------------------------------------------------------------
+    # The owner adds a file the request waits for on its card, or replaces or removes one added before; an agent with a shell PUTs
+    # it to /files/<token> (the upload_url of its answer). That route is outside /dashboard, so a sign-in proxy in front can let
+    # it through: the token is its only key. The paths are those mail used before 6b, so links and the app stay as they were.
+    def external_src() -> Any:
+        return d.sources.get("external")
+
+    async def form_writer(request: Request) -> tuple[str, dict[str, Any], Any] | JSONResponse:
+        got = signed_in(request)
+        if got is None:
+            return err("signed out", 401)
+        if not d.same_origin(request):
+            return err("This request did not come from this page. Nothing was changed.", 403)
+        form = await request.form()
+        if not hmac.compare_digest(str(form.get("csrf", "")).encode(), got[1]["csrf"].encode()):
+            return err("This page has expired. Reload it and try again.", 403)
+        return got[0], got[1], form
+
+    def what_of(q: Any) -> str:
+        src = external_src()
+        try:
+            return src.describe(q)["badge"].lower()
+        except Exception:  # noqa: BLE001
+            return "request"
+
+    @mcp.custom_route("/dashboard/attach/{item_id}/file", methods=["POST"])
+    async def attach_file(request: Request) -> Response:
+        got = await form_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, form = got
+        up, src = form.get("file"), external_src()
+        if src is None or not hasattr(up, "read"):
+            return err("Choose a file first.", 400)
+        limit = max([r.files.max_bytes for r in src.registry.registrations() if r.files is not None] or [0])
+        data = await up.read(limit + 1)
+        try:
+            q, info = await asyncio.to_thread(src.put_file, data, filename=up.filename, content_type=up.content_type,
+                                              item_id=request.path_params["item_id"], index=int(str(form.get("index", "-1"))))
+        except (LookupError, ValueError, RuntimeError) as e:
+            return err(str(e).strip("'\""), 409)
+        audit.record("approval.file_added", actor="owner", via=rec.get("via", ""), kind="external", outbox_id=q.id,
+                     action_type=getattr(q, "action_type", None), summary=f"Added {info['filename']} to a waiting {what_of(q)}")
+        return ok({"sha": q.sha256, "index": info["index"], "filename": info["filename"], "size": info["size"], "asked": info["asked"],
+                   "other_name": info["filename"] != info["asked"], "waiting": [w["filename"] for w in info["waiting"]]})
+
+    @mcp.custom_route("/dashboard/attach/{item_id}/remove", methods=["POST"])
+    async def attach_remove(request: Request) -> Response:
+        got = await form_writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, form = got
+        src = external_src()
+        try:
+            if src is None:
+                raise LookupError("There is no added file here to remove: the message was sent, discarded or has expired.")
+            q, info = await asyncio.to_thread(src.remove_file, request.path_params["item_id"], int(str(form.get("index", "-1"))))
+        except (LookupError, ValueError, RuntimeError) as e:
+            return err(str(e).strip("'\""), 409)
+        audit.record("approval.file_removed", actor="owner", via=rec.get("via", ""), kind="external", outbox_id=q.id,
+                     action_type=getattr(q, "action_type", None), summary=f"Took the file for {info['asked']} out of a waiting {what_of(q)}")
+        return ok({"sha": q.sha256, "index": info["index"], "asked": info["asked"], "waiting": [w["filename"] for w in info["waiting"]]})
+
+    @mcp.custom_route("/files/{token}", methods=["PUT"])
+    async def file_put(request: Request) -> Response:
+        """An agent's upload: the raw bytes of one file a waiting request asked for. The token from the agent's result is the key."""
+        src = external_src()
+        kinds = [r.files for r in src.registry.registrations() if r.files is not None] if src is not None else []
+        if not kinds:
+            return err("No file can be added on this server.", 404)
+        limit = max(f.max_bytes for f in kinds)
+        named = next((n for f in kinds if (n := getattr(f, "limit_name", ""))), "")
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > limit:
+                return err(f"The file is larger than {limit} bytes" + (f" ({named})." if named else "."), 413)
+        try:
+            q, info = await asyncio.to_thread(src.put_file, bytes(body), filename=request.query_params.get("filename"),
+                                              content_type=request.headers.get("content-type"), token=request.path_params["token"])
+        except LookupError:
+            return err("No file is waiting here: it was already added, or the message was sent, discarded or has expired.", 404)
+        except (ValueError, RuntimeError) as e:
+            return err(str(e), 400)
+        audit.record("approval.file_added", actor="agent", kind="external", outbox_id=q.id, action_type=getattr(q, "action_type", None),
+                     summary=f"An upload added {info['filename']} to a waiting {what_of(q)}")
+        d.push.notify("file", f"external:{q.id}")
+        left = [w["filename"] for w in info["waiting"]]
+        return ok({"filename": info["filename"], "size": info["size"], "still_waiting": left,
+                   "next": "Upload the other files too." if left else info.get("next") or "It now waits for the owner's approval. It is not sent yet."})
 
     # -- activity ------------------------------------------------------------------------------------------------------
     @route("/activity", ["GET"])

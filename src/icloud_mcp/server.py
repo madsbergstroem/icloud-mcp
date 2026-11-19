@@ -767,27 +767,22 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     warm: dict[str, Any] = {}                   # area -> zero-argument warm-up, run in the background at start (WARMUP_ON_START)
     pools: dict[str, Any] = {}                  # area -> zero-argument view of its kept connections, for the health check
     mcp._icloud_warmups = warm
-    approval = {"mail": None, "imessage": None}   # what the owner's approval pages serve, if anything
+    approval = {"imessage": None}                 # what the owner's approval pages serve, if anything
+    held_mail: MailService | None = None         # the mail service whose mail waits for the owner (package 6b: as actions)
     invites: CalendarService | None = None       # the calendar whose changes that email people wait for the owner (package 5b)
     hub = Hub()                                  # the owner's chats on every channel: backends and senders are added where each one is set up
 
     # ------------------------------------------------------------------ mail
     if s.enable_mail:
         held = s.allow_send and s.writable("mail") and (s.require_approval or s.dashboard) and provider is not None
-        if held:                                                  # package 6a: the approval store; outbox.json is read in once
-            from .gate.store import Store
-            from .mail import mail_type_of
-            mail = MailService(s, outbox=Store(s.data_dir, "mail", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
-                                               legacy="outbox.json", type_of=mail_type_of, tombstones=True, report_type=False))
-        else:
-            mail = MailService(s)
+        mail = MailService(s)                                     # package 6b: held mail waits as actions, once the source is built
         health["mail"] = mail.health
         warm["mail"] = mail.prewarm                               # the pooled logins, the folder list and the special folders
         pools["mail"] = lambda: {"warm": bool(mail._pool), "imap_kept": len(mail._pool), "imap_pool_size": s.imap_pool_size,
                                  "smtp_connected": mail._smtp is not None}
         # with the dashboard on, also without owner approval: a mail waiting for a file is shown and sent there
         if held:
-            approval["mail"] = mail
+            held_mail = mail
 
         @tool(annotations=_READ)
         @_guard
@@ -2965,7 +2960,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 **({"paused": True, "note": PAUSED_MESSAGE} if is_paused() else {}), "areas": results,
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
-                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage", "mail"))) if x)) else {}),
+                    getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
@@ -3046,7 +3041,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     external = None                        # requests of the action types registered in actions.py and by the plugins that send
     senders = [p.capabilities.messages for p in plugins if p.capabilities.messages is not None
                and p.capabilities.messages.action_type is not None and p.capabilities.messages.sending_on(s)]
-    if provider is not None and _audit is not None and (s.dashboard or approval["imessage"] is not None):
+    if provider is not None and _audit is not None and (s.dashboard or approval["imessage"] is not None or held_mail is not None):
         from . import actions
         from .plugins import PluginContext
         registry = actions.REGISTRY.copy()         # this server's own, so what its settings turn on stays with it
@@ -3056,9 +3051,14 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         if invites is not None:                    # so are the calendar changes that email people (package 5b)
             from .cal import register_types as register_calendar
             register_calendar(registry, invites)
-        for m in senders:                          # the core calls the executor once, after approval; list and policy at queue and approval
+        if held_mail is not None:                  # and mail that waits for the owner (package 6b)
+            from .dashboard_accounts import mail_account
+            from .mail import register_types as register_mail
+            register_mail(registry, held_mail, account=lambda: mail_account(s))
+        # the senders' and plugins' types need the dashboard or iMessage, as before 6b; held mail alone brings only its own types
+        for m in (senders if s.dashboard or approval["imessage"] is not None else []):     # the core calls the executor once, after approval; list and policy at queue and approval
             registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s), channel_tool="messages_send_request")
-        for p in plugins:                          # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
+        for p in (plugins if s.dashboard or approval["imessage"] is not None else []):     # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
             ctx = PluginContext(s, p.id)
             for spec in p.actions:
                 try:
@@ -3071,16 +3071,20 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         if registry.types():
             from .external import ExternalApprovals
             from .gate.store import Store
+            from .mail import MAIL_TYPES
             external = ExternalApprovals(Store(s.data_dir, "external", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
-                                              legacy="external-outbox.json"), registry)
+                                              legacy="external-outbox.json",
+                                              tombstones=tuple(MAIL_TYPES) if held_mail is not None else False), registry)
             _adopt_imessages(s, external.box, _audit)
             if invites is not None:
                 _adopt_calendar(s, external.box, _audit, invites)
                 invites.external = external
+            if held_mail is not None:
+                held_mail.external = external         # first: a mail moved over keeps its files as blobs of this store
+                _adopt_mail(s, external.box, _audit, held_mail)
             if approval["imessage"] is not None:
                 hub.add_sender(IMessageSender(approval["imessage"], None, s.public_url, external=external))
-    mcp._icloud_outboxes = {"mail": approval["mail"].outbox if approval["mail"] is not None else None,
-                            **({"external": external.box} if external is not None else {})}                       # counts for the admin API
+    mcp._icloud_outboxes = {**({"external": external.box} if external is not None else {})}                       # counts for the admin API
     global _audit_outboxes
     _audit_outboxes = mcp._icloud_outboxes          # tool.queued names the hash of what it queued (_audit_call)
     # approval_request and approval_list_actions are for the types an agent asks for itself; iMessage, the server's own type, has
@@ -3089,7 +3093,10 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     mcp._icloud_approval_tools = ("on" if asked_for else "off: no action types are set up") if s.dashboard \
         else "off: the dashboard is not enabled"
     if provider is not None and _audit is not None and any(mcp._icloud_outboxes.values()):
-        ledger = ApprovalLedger(mcp._icloud_outboxes, _audit)                        # also logs an entry that times out unanswered
+        def kind_of(type_id: str) -> str | None:             # D6-8: a mail action is still kind mail for approval_status
+            reg = external.registry.get(type_id) if external is not None else None
+            return reg.status_kind if reg is not None else ("mail" if type_id.startswith("mail.") else None)
+        ledger = ApprovalLedger(mcp._icloud_outboxes, _audit, kinds=kind_of)           # also logs an entry that times out unanswered
         register_approval_status(tool, _guard, ledger)
         register_approval_withdraw(tool, _guard, ledger, external)
         if asked_for:                               # approval_list_actions and approval_request (gate/requests.py)
@@ -3127,12 +3134,11 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             Returns: status queued_for_owner_approval (sent=false, outbox_id: tell the owner, do not resend; approval_status(id=outbox_id) says what became of it; approval_withdraw takes it back while it waits), with approve_at and, for iMessage, to (the recipients) or, for Beeper, chat {title, network, group, people}, expires_in_seconds, and already_queued when request_id matched a waiting request. For iMessage also not_sent_needs_owner (show the owner the text), or, where the owner turned approval off, sent (message_id, delivered), failed or unconfirmed (check messages_read_chat before any retry).
             Errors: refusals say nothing was sent and only the owner can change the lists; a chat Beeper does not know, a full queue, a request_id used for a different request, and an offline Mac (check icloud_get_helper_status, do not retry) raise an error."""
             return hub.send_request(text, chat_id=chat_id, handle=handle, reply_to=reply_to, request_id=request_id)
-    if (approval["mail"] or external is not None) and provider is not None:
-        register_outbox_routes(mcp, provider, s, approval["mail"], external=external, audit=_audit)
+    if external is not None and provider is not None:
+        register_outbox_routes(mcp, provider, s, external=external, audit=_audit)
     if s.dashboard and provider is not None and _audit is not None:
-        from .dashboard import MailApprovals, register_dashboard
-        sources = ([MailApprovals(approval["mail"])] if approval["mail"] is not None else []) + \
-                  ([external] if external is not None else [])
+        from .dashboard import register_dashboard
+        sources = [external] if external is not None else []
         mcp._icloud_dashboard = register_dashboard(mcp, provider, s, _audit, sources)
         if s.dashboard_settings != "off":
             from .settings import register_settings
@@ -3166,6 +3172,24 @@ def _adopt_calendar(s: Settings, box: Any, audit: Any, cal: Any) -> None:
     types = {q.id: q.action_type for q in box.pending()}
     for item_id, old, new in moved:
         audit.record("approval.migrated", actor="server", summary=f"A waiting calendar change became a request of type {types.get(item_id)}",
+                     kind="external", outbox_id=item_id, action_type=types.get(item_id), sha256=new, old_sha256=old)
+
+
+def _adopt_mail(s: Settings, box: Any, audit: Any, mail: Any) -> None:
+    """Package 6b: mail held before it (source mail in approvals.db, or the older outbox.json) becomes requests of the mail types,
+    once, with their ids; each takes its type from the row (6a wrote it), its files become blobs, its keys and their tombstones move
+    along, and each waiting one gets a new hash and one log line naming both (D4-1). Runs on every start and finds nothing after
+    the first."""
+    from .gate.store import Store
+    from .mail import mail_type_of
+    if not (Path(s.data_dir) / "outbox.json").exists() and not box.has_source("mail"):
+        return
+    Store(s.data_dir, "mail", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days, legacy="outbox.json", type_of=mail_type_of,
+          tombstones=True, report_type=False)
+    moved = box.adopt("mail", mail.convert)
+    types = {q.id: q.action_type for q in box.pending()}
+    for item_id, old, new in moved:
+        audit.record("approval.migrated", actor="server", summary=f"A waiting mail became a request of type {types.get(item_id)}",
                      kind="external", outbox_id=item_id, action_type=types.get(item_id), sha256=new, old_sha256=old)
 
 

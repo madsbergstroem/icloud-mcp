@@ -79,7 +79,7 @@ def url(item_id):
 
 # -- nothing registered, nothing changes -----------------------------------------------------------------------------------
 async def test_without_a_registered_type_the_server_has_no_external_source(web, hub):
-    app, mcp, *_ = web()
+    app, mcp, *_ = web(READ_ONLY_AREAS="mail")                    # since package 6b held mail registers the mail types
     assert "external" not in mcp._icloud_dashboard.sources and "external" not in mcp._icloud_outboxes
     assert not [t.name for t in mcp._tool_manager.list_tools() if "external" in t.name]
     assert not (Path(mcp._icloud_dashboard.s.data_dir) / "external-outbox.json").exists()
@@ -102,9 +102,9 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 async def test_only_the_beeper_tool_calls_queue_external():
     root = Path(A.__file__).parent.parent             # the icloud_mcp package; actions.py lives in its gate/ package
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    # the contract names it; the Beeper and iMessage senders and the calendar call it (iMessage since package 4b, the calendar
-    # since 5b); approval_request (gate/requests.py) calls it for every other action
-    assert sorted(users) == ["cal.py", "gate/requests.py", "imessage.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
+    # the contract names it; the Beeper and iMessage senders, the calendar and mail call it (iMessage since package 4b, the
+    # calendar since 5b, mail since 6b); approval_request (gate/requests.py) calls it for every other action
+    assert sorted(users) == ["cal.py", "gate/requests.py", "imessage.py", "mail.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
@@ -147,13 +147,12 @@ async def test_a_queued_request_is_the_canonical_json_and_carries_its_type(web, 
     assert again.pending()[0].action_type == "test.echo" and again.pending()[0].raw == want        # survives a restart
 
 
-async def test_the_other_kinds_store_no_action_type_so_their_files_are_as_before(web):
+async def test_a_mail_is_an_action_that_says_its_type(web):
     app, mcp, *_ = web()
     from test_dashboard import queue
     queue(mcp)
-    box = mcp._icloud_dashboard.sources["mail"].mail.outbox             # the approval store since package 6a: the type stays in the row
-    assert [q.action_type for q in box.pending()] == [None]
-    assert all("action_type" not in q.to_json() for q in box.pending())
+    box = mcp._icloud_dashboard.sources["external"].box                 # since package 6b mail waits as an action of its type (D6-8)
+    assert [q.action_type for q in box.pending()] == ["mail.send"]
 
 
 async def test_parameters_are_checked_against_the_schema(web, hub):
@@ -230,7 +229,7 @@ async def test_the_list_and_the_card_come_from_the_type(web, hub, monkeypatch):
         assert it["rows"] == [["Reaches", "anna@example.org"], ["Times", "2"]] and it["text"] == "Please send the money"
         assert it["approve_label"] == "Send echo" and it["warnings"] == ["The message mentions money."] and it["needs_override"] is False
         assert it["edit"] == {"allowed": True, "reason": "", "text": "Please send the money", "limit": 200, "edited": False, "original": None}
-        assert it["account"] == "" and it["files"] == [] and it["missing"] == [] and it["action_type"] == "test.echo"
+        assert "account" not in it and it["files"] == [] and it["missing"] == [] and it["action_type"] == "test.echo"   # 6b: row_tags instead
 
 
 async def test_a_card_whose_own_functions_fail_still_opens(web, hub):

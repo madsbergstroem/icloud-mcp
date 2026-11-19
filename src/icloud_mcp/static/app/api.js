@@ -68,7 +68,7 @@ export function postNow(path, body) {
     headers: { "content-type": "application/json", "x-csrf": csrf }, body: JSON.stringify(body || {}) });
 }
 
-// A file for a waiting mail goes through the existing multipart route
+// A file for a waiting request (a mail's attachment) goes through the multipart route the gate serves (package 6b)
 export async function upload(itemId, index, file) {
   const form = new FormData();
   form.append("csrf", csrf);

@@ -291,7 +291,8 @@ async def ask(mcp, chat_id=SINGLE, text=WORDS, **kw):
 async def test_without_the_gateway_settings_there_is_no_tool_and_no_source(web, hub):
     app, mcp, *_ = web()
     assert "messages_send_request" not in [t.name for t in mcp._tool_manager.list_tools()]
-    assert "external" not in mcp._icloud_dashboard.sources
+    src = mcp._icloud_dashboard.sources.get("external")              # since package 6b held mail has its own types there
+    assert src is None or not [t.id for t in src.registry.types() if not t.id.startswith("mail.")]
 
 
 @pytest.mark.parametrize("missing", ["BEEPER_GATEWAY_URL", "BEEPER_EXEC_KEY"])
