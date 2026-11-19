@@ -14,7 +14,7 @@ Update the Mac helper before the server whenever its version changes.
   file or a long mail fits. Held mail moves over once at the first start with its ids and a new hash, logged as
   `approval.migrated`; links to `#/item/mail:…` still open it. The mail tools, `approval_status` (still kind "mail", now with the
   type) and `approval_withdraw` answer as before. One queue now holds every kind, so `OUTBOX_MAX` counts mail and the other
-  actions together. `python -m icloud_mcp.gate.export_queue` writes waiting mail back to `outbox.json` for a rollback.
+  actions together, and its default rises from 20 to 50. `python -m icloud_mcp.gate.export_queue` writes waiting mail back to `outbox.json` for a rollback.
 
 - **Mail approvals keep their state (fork).** A mail waiting for your approval now waits in the approval store (`approvals.db`);
   `outbox.json` is read in once at the first start, with ids, hashes and everything else unchanged. Approving sends exactly the

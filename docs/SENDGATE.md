@@ -1039,7 +1039,7 @@ and `status_kind` on the registration. Blobs live in `approvals.db` (`blob`, `bl
 the body is a blob above 64 KiB. Key tombstones are kept for the mail types only (`Store(tombstones=types)`) and move with the
 rows. The file routes keep their paths and answers in `dashboard_api.py`. `TextLocked`, `TextInvalid` and `clean` moved to
 `gate/text.py`, so no module under `gate/` imports `textedit`. `gate/export_queue.mail_message` puts a mail back together for the
-export and for the send. Mail now shares the external store's `OUTBOX_MAX` with every other action (before, mail had a queue of its own); not decided by the owner. D6-7: the steering warning and agent-added addresses are read through the type's context when the card is
+export and for the send. Mail now shares the external store's `OUTBOX_MAX` with every other action (before, mail had a queue of its own); the owner set its default to 50 on 2026-11-19. D6-7: the steering warning and agent-added addresses are read through the type's context when the card is
 shown, as before 6b, and need the second confirmation; the mock does not show them, so D6-7 stays open. Tests:
 `tests/test_mail_release.py` (the 6a endings on the external source, the types, blobs, the form, the start-up move, the rollback
 run against 6a from git), `tests/test_mail_answers.py` (criterion 4 against a golden file from 6a), `tests/test_action_mail_fields.py`,
