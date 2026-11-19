@@ -156,7 +156,7 @@ CORE_GROUPS: list[Group] = [
         Spec("SAVE_SENT_COPY", "Keep a copy in Sent", default="true", section="Sending"),
         Spec("OUTBOX_TTL_SECONDS", "Waits for approval", "int", "After this long an unapproved message is dropped, never sent.",
              default="86400", unit=3600, unit_label="hours", min=1, max=720, section="Approval queue"),
-        Spec("OUTBOX_MAX", "Messages waiting at most", "int", default="20", min=1, max=500, loosens=_higher, section="Approval queue"),
+        Spec("OUTBOX_MAX", "Messages waiting at most", "int", default="50", min=1, max=500, loosens=_higher, section="Approval queue"),
         Spec("MAX_ATTACHMENT_BYTES", "Largest attachment", "int", default=str(5 * 1024 * 1024), unit=1024 * 1024, unit_label="MiB",
              min=1, max=100, loosens=_higher, section="Reading and cleanup"),
         Spec("MAIL_MAX_AGE_DAYS", "Only mail from the last", "int", "0 means the whole mailbox.", default="0", min=0, max=36500,

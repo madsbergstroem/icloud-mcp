@@ -353,7 +353,7 @@ class Settings:
             allow_send=_bool("ALLOW_SEND", True) and not read_only,   # READ_ONLY means no sending and no drafts either
             require_approval=_bool("SEND_REQUIRES_APPROVAL", True),
             outbox_ttl=_int("OUTBOX_TTL_SECONDS", 24 * 3600),
-            outbox_max=_int("OUTBOX_MAX", 20),
+            outbox_max=_int("OUTBOX_MAX", 50),
             allow_calendar_invites=_bool("ALLOW_CALENDAR_INVITES", False) or _str("ALLOW_CALENDAR_INVITES").lower() == "approve",
             public_url=_str("MCP_PUBLIC_URL").rstrip("/"),
             owner_password=overrides.get("owner_password") or _str("MCP_OWNER_PASSWORD"),
