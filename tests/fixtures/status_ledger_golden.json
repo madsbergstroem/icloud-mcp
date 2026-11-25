@@ -1,0 +1,584 @@
+{
+ "ids": {
+  "ada": "Rq00000000000001",
+  "ben": "Rq00000000000002",
+  "cleo": "Rq00000000000003",
+  "dan": "Rq00000000000004",
+  "eva": "Rq00000000000005",
+  "finn": "Rq00000000000006",
+  "gus": "Rq00000000000007",
+  "hana": "Rq00000000000008",
+  "ivo": "Rq00000000000009",
+  "jana": "Rq00000000000010",
+  "kai": "Rq00000000000011",
+  "lea": "Rq00000000000012",
+  "mo": "Rq00000000000013",
+  "nia": "Rq00000000000014",
+  "ole": "Rq00000000000015",
+  "pia": "Rq00000000000016",
+  "rex": "Rq00000000000017"
+ },
+ "never": {
+  "at": null,
+  "edited": false,
+  "id": "never-queued",
+  "kind": null,
+  "status": "unknown"
+ },
+ "pages": [
+  {
+   "cursor": "0e79ee87d1f104bb8fc8a7e170d1a51681cb7385d2258aba154b634ede49d17d",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:15Z",
+     "edited": false,
+     "id": "Rq00000000000002",
+     "kind": "external",
+     "status": "sent"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:25Z",
+     "edited": false,
+     "id": "Rq00000000000003",
+     "kind": "external",
+     "status": "unclear"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:35Z",
+     "edited": false,
+     "id": "Rq00000000000004",
+     "kind": "external",
+     "status": "discarded"
+    }
+   ],
+   "more": true
+  },
+  {
+   "cursor": "3ba4af358e4ae852b0bf55ac8c8562bac284c0f57d720058e929fbed25bf68c9",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:45Z",
+     "edited": false,
+     "id": "Rq00000000000005",
+     "kind": "external",
+     "note": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it.",
+     "reason": "target_changed",
+     "status": "discarded"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:55Z",
+     "edited": false,
+     "id": "Rq00000000000006",
+     "kind": "external",
+     "note": "The owner's lists no longer allow someone it would reach, so it was not sent. Only the owner can change the lists.",
+     "reason": "not_allowed",
+     "status": "discarded"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:01:05Z",
+     "edited": false,
+     "id": "Rq00000000000007",
+     "kind": "external",
+     "status": "withdrawn"
+    }
+   ],
+   "more": true
+  },
+  {
+   "cursor": "5343f61ac4b3f5e0108f2aedd9db1179bb4521a5591c1f606f40e4bbcb09c417",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:00:40Z",
+     "edited": false,
+     "id": "Rq00000000000008",
+     "kind": "external",
+     "status": "expired"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:01:30Z",
+     "edited": false,
+     "id": "Rq00000000000009",
+     "kind": "external",
+     "status": "sent"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:01:45Z",
+     "edited": false,
+     "id": "Rq00000000000010",
+     "kind": "external",
+     "status": "discarded"
+    }
+   ],
+   "more": true
+  },
+  {
+   "cursor": "51ce3d53ee7442f482c95ad53a73f4d9c548029b5670f11386012cf68eff3877",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:01:55Z",
+     "edited": true,
+     "id": "Rq00000000000011",
+     "kind": "external",
+     "status": "sent"
+    },
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:02:05Z",
+     "edited": false,
+     "id": "Rq00000000000012",
+     "kind": "external",
+     "status": "sent"
+    },
+    {
+     "action_type": "mail.send",
+     "at": "2027-01-15T08:02:15Z",
+     "edited": false,
+     "id": "Rq00000000000013",
+     "kind": "mail",
+     "status": "sent"
+    }
+   ],
+   "more": true
+  },
+  {
+   "cursor": "3318a9303b7c08b504577c0722519f83072c82dec4c862ccb0119976c3e618d1",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:01:50Z",
+     "edited": true,
+     "id": "Rq00000000000014",
+     "kind": "external",
+     "status": "expired"
+    },
+    {
+     "at": "2027-01-15T08:02:40Z",
+     "edited": false,
+     "id": "Rq00000000000015",
+     "kind": "external",
+     "status": "discarded"
+    },
+    {
+     "at": "2027-01-15T08:02:40Z",
+     "edited": false,
+     "id": "Rq00000000000016",
+     "kind": "external",
+     "status": "discarded"
+    }
+   ],
+   "more": true
+  },
+  {
+   "cursor": "b543dcc3ab4bc3e11f3b4f9b62ca042dccf328855395d1bc8360f233afe8b3c8",
+   "items": [
+    {
+     "action_type": "t.echo",
+     "at": "2027-01-15T08:02:50Z",
+     "edited": false,
+     "id": "Rq00000000000017",
+     "kind": "external",
+     "status": "unclear"
+    }
+   ],
+   "more": false
+  }
+ ],
+ "since_mid": {
+  "cursor": "b543dcc3ab4bc3e11f3b4f9b62ca042dccf328855395d1bc8360f233afe8b3c8",
+  "items": [
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:45Z",
+    "edited": false,
+    "id": "Rq00000000000005",
+    "kind": "external",
+    "note": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it.",
+    "reason": "target_changed",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:55Z",
+    "edited": false,
+    "id": "Rq00000000000006",
+    "kind": "external",
+    "note": "The owner's lists no longer allow someone it would reach, so it was not sent. Only the owner can change the lists.",
+    "reason": "not_allowed",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:05Z",
+    "edited": false,
+    "id": "Rq00000000000007",
+    "kind": "external",
+    "status": "withdrawn"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:40Z",
+    "edited": false,
+    "id": "Rq00000000000008",
+    "kind": "external",
+    "status": "expired"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:30Z",
+    "edited": false,
+    "id": "Rq00000000000009",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:45Z",
+    "edited": false,
+    "id": "Rq00000000000010",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:55Z",
+    "edited": true,
+    "id": "Rq00000000000011",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:02:05Z",
+    "edited": false,
+    "id": "Rq00000000000012",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "mail.send",
+    "at": "2027-01-15T08:02:15Z",
+    "edited": false,
+    "id": "Rq00000000000013",
+    "kind": "mail",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:50Z",
+    "edited": true,
+    "id": "Rq00000000000014",
+    "kind": "external",
+    "status": "expired"
+   },
+   {
+    "at": "2027-01-15T08:02:40Z",
+    "edited": false,
+    "id": "Rq00000000000015",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "at": "2027-01-15T08:02:40Z",
+    "edited": false,
+    "id": "Rq00000000000016",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:02:50Z",
+    "edited": false,
+    "id": "Rq00000000000017",
+    "kind": "external",
+    "status": "unclear"
+   }
+  ],
+  "more": false
+ },
+ "since_start": {
+  "cursor": "b543dcc3ab4bc3e11f3b4f9b62ca042dccf328855395d1bc8360f233afe8b3c8",
+  "items": [
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:15Z",
+    "edited": false,
+    "id": "Rq00000000000002",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:25Z",
+    "edited": false,
+    "id": "Rq00000000000003",
+    "kind": "external",
+    "status": "unclear"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:35Z",
+    "edited": false,
+    "id": "Rq00000000000004",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:45Z",
+    "edited": false,
+    "id": "Rq00000000000005",
+    "kind": "external",
+    "note": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it.",
+    "reason": "target_changed",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:55Z",
+    "edited": false,
+    "id": "Rq00000000000006",
+    "kind": "external",
+    "note": "The owner's lists no longer allow someone it would reach, so it was not sent. Only the owner can change the lists.",
+    "reason": "not_allowed",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:05Z",
+    "edited": false,
+    "id": "Rq00000000000007",
+    "kind": "external",
+    "status": "withdrawn"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:00:40Z",
+    "edited": false,
+    "id": "Rq00000000000008",
+    "kind": "external",
+    "status": "expired"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:30Z",
+    "edited": false,
+    "id": "Rq00000000000009",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:45Z",
+    "edited": false,
+    "id": "Rq00000000000010",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:55Z",
+    "edited": true,
+    "id": "Rq00000000000011",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:02:05Z",
+    "edited": false,
+    "id": "Rq00000000000012",
+    "kind": "external",
+    "status": "sent"
+   },
+   {
+    "action_type": "mail.send",
+    "at": "2027-01-15T08:02:15Z",
+    "edited": false,
+    "id": "Rq00000000000013",
+    "kind": "mail",
+    "status": "sent"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:01:50Z",
+    "edited": true,
+    "id": "Rq00000000000014",
+    "kind": "external",
+    "status": "expired"
+   },
+   {
+    "at": "2027-01-15T08:02:40Z",
+    "edited": false,
+    "id": "Rq00000000000015",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "at": "2027-01-15T08:02:40Z",
+    "edited": false,
+    "id": "Rq00000000000016",
+    "kind": "external",
+    "status": "discarded"
+   },
+   {
+    "action_type": "t.echo",
+    "at": "2027-01-15T08:02:50Z",
+    "edited": false,
+    "id": "Rq00000000000017",
+    "kind": "external",
+    "status": "unclear"
+   }
+  ],
+  "more": false
+ },
+ "status": {
+  "ada": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:05Z",
+   "edited": false,
+   "id": "Rq00000000000001",
+   "kind": "external",
+   "status": "waiting"
+  },
+  "ben": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:15Z",
+   "edited": false,
+   "id": "Rq00000000000002",
+   "kind": "external",
+   "status": "sent"
+  },
+  "cleo": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:25Z",
+   "edited": false,
+   "id": "Rq00000000000003",
+   "kind": "external",
+   "status": "unclear"
+  },
+  "dan": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:35Z",
+   "edited": false,
+   "id": "Rq00000000000004",
+   "kind": "external",
+   "status": "discarded"
+  },
+  "eva": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:45Z",
+   "edited": false,
+   "id": "Rq00000000000005",
+   "kind": "external",
+   "note": "The owner did not see this target: it changed after they looked. Ask again only if the owner still wants it.",
+   "reason": "target_changed",
+   "status": "discarded"
+  },
+  "finn": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:55Z",
+   "edited": false,
+   "id": "Rq00000000000006",
+   "kind": "external",
+   "note": "The owner's lists no longer allow someone it would reach, so it was not sent. Only the owner can change the lists.",
+   "reason": "not_allowed",
+   "status": "discarded"
+  },
+  "gus": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:01:05Z",
+   "edited": false,
+   "id": "Rq00000000000007",
+   "kind": "external",
+   "status": "withdrawn"
+  },
+  "hana": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:00:40Z",
+   "edited": false,
+   "id": "Rq00000000000008",
+   "kind": "external",
+   "status": "expired"
+  },
+  "ivo": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:01:30Z",
+   "edited": false,
+   "id": "Rq00000000000009",
+   "kind": "external",
+   "status": "sent"
+  },
+  "jana": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:01:45Z",
+   "edited": false,
+   "id": "Rq00000000000010",
+   "kind": "external",
+   "status": "discarded"
+  },
+  "kai": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:01:55Z",
+   "edited": true,
+   "id": "Rq00000000000011",
+   "kind": "external",
+   "status": "sent"
+  },
+  "lea": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:02:05Z",
+   "edited": false,
+   "id": "Rq00000000000012",
+   "kind": "external",
+   "status": "sent"
+  },
+  "mo": {
+   "action_type": "mail.send",
+   "at": "2027-01-15T08:02:15Z",
+   "edited": false,
+   "id": "Rq00000000000013",
+   "kind": "mail",
+   "status": "sent"
+  },
+  "nia": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:01:50Z",
+   "edited": true,
+   "id": "Rq00000000000014",
+   "kind": "external",
+   "status": "expired"
+  },
+  "ole": {
+   "at": "2027-01-15T08:02:40Z",
+   "edited": false,
+   "id": "Rq00000000000015",
+   "kind": "external",
+   "status": "discarded"
+  },
+  "pia": {
+   "at": "2027-01-15T08:02:40Z",
+   "edited": false,
+   "id": "Rq00000000000016",
+   "kind": "external",
+   "status": "discarded"
+  },
+  "rex": {
+   "action_type": "t.echo",
+   "at": "2027-01-15T08:02:50Z",
+   "edited": false,
+   "id": "Rq00000000000017",
+   "kind": "external",
+   "status": "unclear"
+  }
+ }
+}

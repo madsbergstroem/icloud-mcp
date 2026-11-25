@@ -44,6 +44,15 @@ What else holds:
   store works out from the version's bytes (refs_of, set by the external source). A blob goes, in the same transaction, once
   nothing names it any more: its last version ended, was dropped or was written over. A staged blob nothing named within an hour
   goes too.
+- The status ledger (package 9a): every change of a request's status is a row of `status_event` (seq, request, kind, action
+  type, status, reason code, edited, time, reconciled), written in the transaction that makes the change, so a change that is
+  rolled back leaves no event and no event exists without its change. The statuses are approval_status's words: waiting (reason
+  queued, or target_changed after a recheck, package 2c), sent, unclear (reason interrupted after a crash), discarded (reason
+  target_changed, not_allowed or exported), withdrawn, expired. Claiming a request for execution, a release that failed and the
+  owner's edits change no status and write none. An event holds metadata only, never content or the agent's label, and never
+  changes. An expiry's event is written when the store notices it (the lazy expiry above) and carries the time it ran out. A
+  version without the ledger changes states without events (a rollback): the first open compares each request's state with
+  its last event and writes the missing ones, marked reconciled. The table is new beside the others; the store version stays 2.
 - The database and its WAL files are mode 600; a database file others can read stops the start, and so does one written by a
   newer version (PRAGMA user_version).
 - On first start the source's JSON queue file is read into the table and renamed `<name>.migrated`, row by row: an id already
@@ -129,6 +138,20 @@ CREATE TABLE IF NOT EXISTS key_tombstone (
   decided_at      REAL,
   PRIMARY KEY (source, key)
 );
+CREATE TABLE IF NOT EXISTS status_event (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  action_type TEXT,
+  status      TEXT NOT NULL CHECK (status IN ('waiting','sent','unclear','discarded','withdrawn','expired')),
+  reason      TEXT,
+  edited      INTEGER NOT NULL DEFAULT 0,
+  at          REAL NOT NULL,
+  reconciled  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS status_event_request ON status_event (request_id, seq);
+CREATE TRIGGER IF NOT EXISTS status_event_unchanged BEFORE UPDATE ON status_event
+BEGIN SELECT RAISE(ABORT, 'a status event never changes'); END;
 """
 # what keeps a key bound after its request ended; anything else frees it
 _FREEING = "state = 'expired' OR (state = 'discarded' AND outcome_reason IN ('target_changed', 'exported'))"
@@ -209,6 +232,7 @@ class Store:
         first = _hold_lock(self.dir)
         self._db = self._open()
         if first:
+            self._reconcile()                # before the recovery, which writes its own events
             self._recover()
         if legacy:
             self._migrate(self.dir / legacy)
@@ -259,9 +283,14 @@ class Store:
             return (r["state"], r["outcome_reason"]) if r is not None else None
 
     def _end(self, item_id: str, state: str, reason: str | None = None) -> None:
-        """Inside a transaction: end a request, keep what says what it was, drop its content."""
+        """Inside a transaction: end a request, keep what says what it was, drop its content, and write its status event (edited
+        is read before edited_from goes; an expiry carries the time it ran out)."""
+        r = self._db.execute("SELECT source, action_type, expires_at, edited_from FROM request WHERE id = ?", (item_id,)).fetchone()
+        now = time.time()
         self._db.execute("UPDATE request SET state = ?, decided_at = ?, outcome_reason = ?, raw = NULL, recipients = NULL, "
-                         "followup = NULL, edited_from = NULL WHERE id = ?", (state, time.time(), reason, item_id))
+                         "followup = NULL, edited_from = NULL WHERE id = ?", (state, now, reason, item_id))
+        if r is not None:
+            self._event(item_id, state, reason, edited=r["edited_from"] is not None, at=r["expires_at"] if state == "expired" else now, r=r)
         self._db.execute("UPDATE version SET raw = NULL WHERE request_id = ?", (item_id,))
         self._unref(item_id)
 
@@ -272,6 +301,57 @@ class Store:
                          (item_id, n, time.time(), author, sha, raw))
         self._ref(item_id, n, raw)
         return n
+
+    # -- the status ledger (package 9a) ------------------------------------------------------------------------------------
+    def _event(self, item_id: str, status: str, reason: str | None = None, *, edited: bool = False, at: float | None = None,
+               reconciled: bool = False, r: Any = None) -> None:
+        """Inside a transaction: add a status event for a request. r: its row (source and action_type), when the caller has it."""
+        if r is None:
+            r = self._db.execute("SELECT source, action_type FROM request WHERE id = ?", (item_id,)).fetchone()
+        self._db.execute("INSERT INTO status_event (request_id, kind, action_type, status, reason, edited, at, reconciled) "
+                         "VALUES (?,?,?,?,?,?,?,?)", (item_id, r["source"], r["action_type"] if self.report_type else None, status, reason,
+                                                      int(bool(edited)), time.time() if at is None else at, int(reconciled)))
+
+    def _reconcile(self) -> None:
+        """A version without the ledger (before 9a, or one a rollback went back to) changed states and wrote no events: give each
+        request whose last event does not say its state the event it lacks, marked reconciled. edited of an ending is read from the
+        versions (the owner's is newer than the agent's), since the row no longer keeps edited_from."""
+        with self._lock, self._tx():
+            rows = self._db.execute("SELECT r.*, (SELECT status FROM status_event WHERE request_id = r.id ORDER BY seq DESC LIMIT 1) "
+                                    "AS last FROM request r").fetchall()
+            n = 0
+            for r in rows:
+                status = "waiting" if r["state"] in ("waiting", "executing") else r["state"]
+                if r["last"] == status:
+                    continue
+                if status == "waiting":
+                    self._event(r["id"], status, edited=r["edited_from"] is not None, at=r["created_at"], reconciled=True, r=r)
+                else:
+                    owner, agent = self._db.execute("SELECT MAX(CASE WHEN author = 'owner' THEN n END), MAX(CASE WHEN author = 'assistant' "
+                                                    "THEN n END) FROM version WHERE request_id = ?", (r["id"],)).fetchone()
+                    self._event(r["id"], status, r["outcome_reason"], edited=owner is not None and owner > (agent or 0),
+                                at=r["expires_at"] if status == "expired" else (r["decided_at"] or time.time()), reconciled=True, r=r)
+                n += 1
+        if n:
+            log.info("approval store: %d status event(s) written for changes made without the ledger", n)
+
+    def last_event(self, item_id: str) -> dict[str, Any] | None:
+        """The newest status event of a request, or None when it has none."""
+        with self._lock:
+            r = self._db.execute("SELECT * FROM status_event WHERE request_id = ? ORDER BY seq DESC LIMIT 1", (item_id,)).fetchone()
+        return dict(r) if r is not None else None
+
+    def events_after(self, seq: int, upto: int, decided: bool = True) -> list[dict[str, Any]]:
+        """The status events after seq up to upto, oldest first; decided: only those that end a request."""
+        with self._lock:
+            return [dict(r) for r in self._db.execute("SELECT * FROM status_event WHERE seq > ? AND seq <= ?"
+                                                      + (" AND status != 'waiting'" if decided else "") + " ORDER BY seq", (seq, upto))]
+
+    def event_head(self) -> int:
+        """The newest event's seq, 0 before the first (a seq is never used twice, also after its event was dropped)."""
+        with self._lock:
+            r = self._db.execute("SELECT seq FROM sqlite_sequence WHERE name = 'status_event'").fetchone()
+        return int(r[0]) if r is not None else 0
 
     # -- blobs (package 6b) -----------------------------------------------------------------------------------------------
     def stage(self, data: bytes) -> str:
@@ -397,6 +477,7 @@ class Store:
                                          (self.source, now - self.keep_days * 86400))
                         self._db.execute("DELETE FROM version WHERE request_id NOT IN (SELECT id FROM request)")
                         self._db.execute("DELETE FROM blob_ref WHERE request_id NOT IN (SELECT id FROM request)")
+                        self._db.execute("DELETE FROM status_event WHERE request_id NOT IN (SELECT id FROM request)")
                         self._gc()
         except sqlite3.OperationalError as e:
             log.warning("approval store: expiry skipped this time (%s)", type(e).__name__)
@@ -450,6 +531,7 @@ class Store:
                                  (q.id, self.source, kind, "waiting", q.created_at, q.expires_at, sha, key, key_fingerprint,
                                   label, raw, json.dumps(recipients), json.dumps(followup) if followup is not None else None))
                 self._version(q.id, sha, raw, "assistant")
+                self._event(q.id, "waiting", "queued", at=q.created_at, r={"source": self.source, "action_type": kind})
         except sqlite3.OperationalError as e:
             log.warning("the approval store could not take a request (%s)", type(e).__name__)
             raise StoreUnavailable("The approval store cannot take a request right now. Nothing was queued.") from None
@@ -555,6 +637,7 @@ class Store:
                 self._db.execute("UPDATE request SET state = 'waiting', raw = ?, sha256 = ?, key_fingerprint = COALESCE(?, key_fingerprint) "
                                  "WHERE id = ?", (raw, new_sha, key_fingerprint, q.id))
                 self._version(q.id, new_sha, raw, "service")
+                self._event(q.id, "waiting", "target_changed", edited=r["edited_from"] is not None, r=r)
                 out = dc_replace(self._q(r), raw=raw, sha256=new_sha)
         if lapsed:
             self._report("expired")
@@ -599,6 +682,7 @@ class Store:
                                      (*values, q.id, self.source))
                 if not self._db.execute("SELECT 1 FROM version WHERE request_id = ? AND sha256 = ?", (q.id, q.sha256)).fetchone():
                     self._version(q.id, q.sha256, q.raw, "assistant")
+                self._event(q.id, "waiting", "queued", edited=q.edited_from is not None, at=q.created_at)
                 read_in += 1
         os.replace(legacy, legacy.with_name(f"{legacy.name}.migrated"))
         log.info("approval store: %d %s request(s) read in from %s", read_in, self.source, legacy.name)
