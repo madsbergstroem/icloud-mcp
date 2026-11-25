@@ -1431,7 +1431,8 @@ the read-in of a JSON queue (waiting, `queued`). A claim for execution, a releas
 - `approval_status(since)`: `since="now"` returns `e<seq>`, the ledger's newest seq (`e0` before the first event). With such a
   cursor the answer lists the requests whose newest ending came after it, in that order, 50 at a time; the next cursor is the seq
   of the last one listed, or the newest seq. The head is read before the queue, so an approval that ends during the call is listed
-  by the next one, never skipped. Waiting events (queued, revised) are in the ledger and are not listed, as before. An
+  by the next one, never skipped. Each item is answered as of the ending selected for it, at or below the head. Waiting events
+  (queued, revised) and an export's discard are in the ledger and are not listed, as before. An
   `e` cursor past the newest seq reads `cursor_unknown`. A log-hash cursor works as before while the log is on and hands back log
   cursors; with the log off it reads `cursor_unknown` and comes back with an `e` cursor.
 - One answer changed with the log on: the old `/outbox` page's "discard all" logs several ids in one line without an action type,
