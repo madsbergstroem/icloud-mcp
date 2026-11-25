@@ -872,8 +872,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err(str(e), 400)
         if looser and not recent(rec):
             return need_confirm("Notices go to a new address, or more of them go out.")
+        from .gate.notices import NeedsConfirm
         try:
-            done = await asyncio.to_thread(svc.change, rid, url, filt)
+            done = await asyncio.to_thread(lambda: svc.change(rid, url, filt, may_loosen=recent(rec)))
+        except NeedsConfirm:                   # checked again against the receiver as it is now: another change came first
+            return need_confirm("Notices go to a new address, or more of them go out.")
         except ValueError as e:
             return err(str(e), 400)
         if done is None:

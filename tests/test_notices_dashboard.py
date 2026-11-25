@@ -211,3 +211,29 @@ def test_no_tool_reads_or_sets_a_receiver(web):  # noqa: F811
     tools = mcp._tool_manager.list_tools()
     text = " ".join(f"{t.name} {t.description} {t.parameters}" for t in tools).lower()
     assert tools and not any(w in text for w in ("receiver", "webhook", "notice_host", "notices.json", "whsec_"))
+
+
+async def test_review3_a_stale_change_is_checked_against_the_receiver_as_it_is_when_it_is_made(web, monkeypatch):  # noqa: F811
+    """protects=review finding 3: whether a change lets more through is decided against the receiver as it is when the change is
+    made, not as it was when the request came in; fails_when=two narrowings, each checked against the old filter, add up to a
+    wider one without a recent sign-in; no_claim=none beyond protects."""
+    app, mcp, _, _ = web(**HOSTS)
+    d = mcp._icloud_dashboard
+    svc = quiet(mcp)
+    async with client(app) as c:
+        token = await signed_in(c)
+        r = await c.post("/dashboard/api/notices/add", headers=api(token), json={"url": URL, "filter": {"statuses": ["sent", "waiting"]}})
+        rid = r.json()["receiver"]["id"]
+        stale(d)
+        first = svc.loosens
+        raced = []
+
+        def racing(*a, **k):
+            out = first(*a, **k)
+            if not raced:                                                       # another tab narrows it in the meantime
+                raced.append(svc.change(rid, None, {"statuses": ["sent"]}))
+            return out
+        monkeypatch.setattr(svc, "loosens", racing)
+        r = await c.post(f"/dashboard/api/notices/{rid}/change", headers=api(token), json={"filter": {"statuses": ["waiting"]}})
+        assert r.status_code == 403 and r.json()["confirm"] is True, r.text
+        assert svc.receivers()[0]["filter"]["statuses"] == ["sent"]

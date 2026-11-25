@@ -277,6 +277,16 @@ def filter_wider(old: dict[str, list[str]], new: dict[str, list[str]]) -> bool:
     return False
 
 
+class NeedsConfirm(Exception):
+    """A change lets more through than the receiver as it is now, and the owner has not signed in recently."""
+
+
+def _looser(r: dict[str, Any], url: str | None, filt: Any) -> bool:
+    if url is not None and str(url).strip() != r["url"]:
+        return True
+    return filt is not None and filter_wider(r["filter"], clean_filter(filt))
+
+
 class NoticeService:
     def __init__(self, data_dir: str, boxes: list[Any] | None = None, *, hosts: Any = (), private_hosts: Any = (),
                  keep_days: int = 90, kinds: Callable[[str], str | None] | None = None,
@@ -391,21 +401,21 @@ class NoticeService:
         """Whether a change lets more through: a new URL, or a wider filter."""
         with self._lock:
             r = self._get(rid)
-            if r is None:
-                return False
-            if url is not None and str(url).strip() != r["url"]:
-                return True
-            return filt is not None and filter_wider(r["filter"], clean_filter(filt))
+            return r is not None and _looser(r, url, filt)
 
-    def change(self, rid: str, url: str | None = None, filt: Any = None) -> tuple[dict[str, Any], str | None] | None:
+    def change(self, rid: str, url: str | None = None, filt: Any = None, *,
+               may_loosen: bool = True) -> tuple[dict[str, Any], str | None] | None:
         """A new URL is a new generation with a new secret (returned), starting at the head; the old generation's pending
-        deliveries are dropped. A filter alone keeps the generation. None when there is no such receiver."""
+        deliveries are dropped. A filter alone keeps the generation. None when there is no such receiver. Without may_loosen (no
+        recent sign-in), NeedsConfirm when the change lets more through than the receiver as it is now."""
         new_url = self.check_url(url) if url is not None else None
         new_filt = clean_filter(filt) if filt is not None else None
         with self._lock:
             old = self._get(rid)
             if old is None:
                 return None
+            if not may_loosen and _looser(old, url, filt):
+                raise NeedsConfirm("the change lets more through")
             r, secret = dict(old), None
             if new_url is not None and new_url != r["url"]:
                 secret = new_secret()
