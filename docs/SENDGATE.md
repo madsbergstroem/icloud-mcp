@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 to 4, 5a, 5b, 6a and 6b are built; the others are not.
+shows. Packages 0 to 4, 5a, 5b, 6a, 6b and 9a are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
@@ -1406,6 +1406,38 @@ The owner approved the recommendations on 2026-11-19: 9a (the status ledger) bef
 (D9-1); no `requested_by` in a notice (D9-6, as the review advised); retries over about 7.5 hours, then `dead`, with the cursor
 to catch up (D9-4); receivers on the owner's own network allowed through `NOTICE_PRIVATE_HOSTS`; "reply arrived" later, with
 ids and times only, no sender or subject.
+
+### As built (9a)
+
+The ledger is the table `status_event` in `approvals.db`: seq, request id, kind, action type, status, reason code, edited, time and
+`reconciled`. `gate/store.py` writes a row in the transaction of the change itself: `add` (waiting, `queued`), `revise` (waiting,
+`target_changed`), `_end` (every ending, with the recovery's `interrupted`, the rechecks' codes and the export's `exported`) and
+the read-in of a JSON queue (waiting, `queued`). A claim for execution, a release that failed and the owner's edits write none.
+`_end` reads `edited_from` before it clears it. A trigger refuses any UPDATE of an event. Events go with their request after
+`keep_days`, and a seq is never used twice. An event holds no parameter, text, title, recipient or `requested_by` (D9-6).
+
+- Expiry stays lazy. The store call that notices a request ran out (`approval_status` makes one) ends it and writes `expired` with
+  `expires_at` as its time, so the answer does not depend on when it was noticed. 9b's worker reads the store once a minute and so
+  bounds when the notice leaves.
+- Rollback: a new table, index and trigger; `PRAGMA user_version` stays 2 (D9-8). The first open in a process runs `_reconcile`
+  before the crash recovery. A request whose last event does not say its state (`executing` counts as waiting) gets the missing
+  event, marked `reconciled`; for an ending, `edited` comes from the versions (an owner's version newer than the agent's).
+- `approval_status(id)`: a waiting request answers from the queue as before, an ended one from its last event, with the log on or
+  off. The log still answers where the ledger has nothing (a JSON queue, a request being carried out, one that ended before 9a and
+  left the store) and for a reconciled event whose request the log has an entry for, so answers about earlier history stay as they
+  were. With the log off, only `unknown` carries a note.
+- `approval_status(since)`: `since="now"` returns `e<seq>`, the ledger's newest seq (`e0` before the first event). With such a
+  cursor the answer lists the requests whose newest ending came after it, in that order, 50 at a time; the next cursor is the seq
+  of the last one listed, or the newest seq. Waiting events (queued, revised) are in the ledger and are not listed, as before. An
+  `e` cursor past the newest seq reads `cursor_unknown`. A log-hash cursor works as before while the log is on and hands back log
+  cursors; with the log off it reads `cursor_unknown` and comes back with an `e` cursor.
+- One answer changed with the log on: the old `/outbox` page's "discard all" logs several ids in one line without an action type,
+  so their answers had no `action_type`. They have it now.
+
+Tests: `tests/test_status_ledger.py`. The answers of commit `1f42796` for one request per ending are kept in
+`tests/fixtures/status_ledger_golden.json` and compared as JSON; the same answers with the log off; ledger cursors and paging; one
+event per row of the status table; a rolled-back change; an UPDATE refused; no parameter in any event; retention; reconciling; and
+the previous version, run from `git archive 1f42796` between two starts of this one.
 
 ## Package 10: standing approval for named people
 
