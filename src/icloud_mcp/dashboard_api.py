@@ -867,7 +867,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         try:
             if url is not None:
                 svc.check_url(url)
-            looser = svc.loosens(rid, url, filt)
+            looser = await asyncio.to_thread(svc.loosens, rid, url, filt)   # the service's lock never blocks the event loop
         except ValueError as e:
             return err(str(e), 400)
         if looser and not recent(rec):
@@ -894,14 +894,14 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return got
         svc, rec, _ = got
         rid = request.path_params["rid"]
-        if not any(r["id"] == rid for r in svc.receivers()):
+        if not any(r["id"] == rid for r in await asyncio.to_thread(svc.receivers)):
             return err("There is no such receiver.", 404)
         if not recent(rec):
             return need_confirm("A new signing secret is shown.")
         secret = await asyncio.to_thread(svc.rotate, rid)
         if secret is None:
             return err("There is no such receiver.", 404)
-        host = next(r["host"] for r in svc.receivers() if r["id"] == rid)
+        host = next(r["host"] for r in await asyncio.to_thread(svc.receivers) if r["id"] == rid)
         audit.record("notice.receiver_rotated", actor="owner", via=rec.get("via", ""), summary=f"Made a new secret for notices on {host}", host=host)
         return ok({"secret": secret, "note": "New secret made. The old one signs beside it for 24 hours. Copy it now: it is shown only this once."})
 
@@ -935,7 +935,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return got
         svc, rec, _ = got
         rid = request.path_params["rid"]
-        host = next((r["host"] for r in svc.receivers() if r["id"] == rid), None)
+        host = next((r["host"] for r in await asyncio.to_thread(svc.receivers) if r["id"] == rid), None)
         if host is None:
             return err("There is no such receiver.", 404)
         n = await asyncio.to_thread(svc.resend, rid)

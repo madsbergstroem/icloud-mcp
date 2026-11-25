@@ -237,3 +237,52 @@ async def test_review3_a_stale_change_is_checked_against_the_receiver_as_it_is_w
         r = await c.post(f"/dashboard/api/notices/{rid}/change", headers=api(token), json={"filter": {"statuses": ["waiting"]}})
         assert r.status_code == 403 and r.json()["confirm"] is True, r.text
         assert svc.receivers()[0]["filter"]["statuses"] == ["sent"]
+
+
+async def test_review8_a_notice_route_waiting_for_the_service_never_blocks_the_event_loop(web):  # noqa: F811
+    """protects=second review, point 3: every call into the notice service from an async route runs in a thread, so a fan-out
+    holding the service's lock does not stall the dashboard; fails_when=a heartbeat on the event loop waits while a route waits
+    for the lock; no_claim=how long the route itself takes."""
+    import asyncio
+    import threading
+    import time
+    app, mcp, _, _ = web(**HOSTS)
+    svc = quiet(mcp)
+    async with client(app) as c:
+        token = await signed_in(c)
+        rid = (await c.post("/dashboard/api/notices/add", headers=api(token), json={"url": URL})).json()["receiver"]["id"]
+        for path, body in ((f"/notices/{rid}/rotate", {}), (f"/notices/{rid}/change", {"filter": {"statuses": ["sent"]}}),
+                           (f"/notices/{rid}/resend", {}), ("/notices", None)):
+            held, go = threading.Event(), threading.Event()
+
+            def hold():
+                with svc._lock:                                                 # the worker's fan-out, for 0.4 s
+                    held.set()
+                    go.wait(0.4)
+            t = threading.Thread(target=hold)
+            t.start()
+            held.wait(2)
+            gaps, done = [], asyncio.Event()
+
+            async def beat():
+                last = time.monotonic()
+                while not done.is_set():
+                    await asyncio.sleep(0.01)
+                    now = time.monotonic()
+                    gaps.append(now - last)
+                    last = now
+
+            async def call():
+                try:
+                    if body is None:
+                        return await c.get("/dashboard/api" + path)
+                    return await c.post("/dashboard/api" + path, headers=api(token), json=body)
+                finally:
+                    done.set()
+            ticker = asyncio.create_task(beat())
+            await asyncio.sleep(0.03)                                           # the heartbeat runs before the route starts
+            r = await call()
+            await ticker
+            t.join()
+            assert r.status_code == 200, (path, r.text)
+            assert max(gaps) < 0.2, (path, max(gaps))
