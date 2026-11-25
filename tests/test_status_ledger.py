@@ -554,3 +554,19 @@ def test_an_owner_discard_after_an_export_and_a_rollback_is_reconciled(tmp_path)
     assert said(st, q.id)[-1] == ("discarded", None, 0, 1)
     assert ApprovalLedger({"external": st}, AuditLog(str(tmp_path), enabled=False)).status(q.id)["status"] == "discarded"
 
+
+def test_a_file_the_owner_added_is_no_edit_when_an_ending_is_reconciled(tmp_path):
+    """protects=a reconciled ending says edited as the store's own ending would (Codex review of 9a, finding 3); fails_when=an
+    owner's version without edited_from (a file added on the card) reads as an edit after a rollback, while the same request ended
+    under 9a reads not edited; no_claim=an edit made while the previous version ran (the row no longer says; the log does)."""
+    st = S.Store(str(tmp_path), "external", 3600, 50)
+    done, rolled = add(st, "jana"), add(st, "tom")
+    for q in (done, rolled):
+        st.replace(q.id, q.sha256, raw_of("t.echo", q.recipients[0].split("@")[0], "with a file"))      # author owner, no edited_from
+    st.claim(done.id, "executing")
+    st.finish(done.id, "sent")
+    # the previous version sends the other one, without an event
+    st._db.execute("UPDATE request SET state = 'sent', decided_at = ?, raw = NULL, edited_from = NULL WHERE id = ?", (rolled.created_at + 9, rolled.id))
+    st = reopen(st, tmp_path)
+    assert said(st, done.id)[-1] == ("sent", None, 0, 0)
+    assert said(st, rolled.id)[-1] == ("sent", None, 0, 1)

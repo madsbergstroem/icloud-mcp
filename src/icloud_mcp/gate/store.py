@@ -316,10 +316,10 @@ class Store:
         """A version without the ledger (before 9a, or one a rollback went back to) changed states and wrote no events: give each
         request whose last event does not say its state the event it lacks, marked reconciled. An ending is compared with its
         reason too: an export's discard (reason exported) is not the owner's discard of the same request after a rollback read it in
-        again. edited of an ending is read from the
-        versions (the owner's is newer than the agent's), since the row no longer keeps edited_from."""
+        again. An ending's edited is what the ledger last recorded for the request (edited_from, as _end reads it, is gone from the
+        row by then); an edit made while the previous version ran is not known here, and the log still answers it."""
         with self._lock, self._tx():
-            rows = self._db.execute("SELECT r.*, e.status AS last, e.reason AS last_reason FROM request r LEFT JOIN status_event e ON "
+            rows = self._db.execute("SELECT r.*, e.status AS last, e.reason AS last_reason, e.edited AS last_edited FROM request r LEFT JOIN status_event e ON "
                                     "e.seq = (SELECT MAX(seq) FROM status_event WHERE request_id = r.id)").fetchall()
             n = 0
             for r in rows:
@@ -329,9 +329,7 @@ class Store:
                 if status == "waiting":
                     self._event(r["id"], status, edited=r["edited_from"] is not None, at=r["created_at"], reconciled=True, r=r)
                 else:
-                    owner, agent = self._db.execute("SELECT MAX(CASE WHEN author = 'owner' THEN n END), MAX(CASE WHEN author = 'assistant' "
-                                                    "THEN n END) FROM version WHERE request_id = ?", (r["id"],)).fetchone()
-                    self._event(r["id"], status, r["outcome_reason"], edited=owner is not None and owner > (agent or 0),
+                    self._event(r["id"], status, r["outcome_reason"], edited=r["edited_from"] is not None or bool(r["last_edited"]),
                                 at=r["expires_at"] if status == "expired" else (r["decided_at"] or time.time()), reconciled=True, r=r)
                 n += 1
         if n:
