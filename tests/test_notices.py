@@ -900,3 +900,45 @@ def test_review1_a_crash_around_a_url_change_never_loses_pending_deliveries_or_s
     clock.tick(3600)
     third.run_once()
     assert all(c["host"] == HOST for c in rx.calls)
+
+
+def test_review2_a_receiver_that_trickles_its_answer_is_cut_off_at_the_deadline(tmp_path, monkeypatch):
+    """protects=review finding 2: the timeout is one deadline for the whole attempt after the connection is made, not per read;
+    fails_when=a receiver that sends a byte now and then holds the worker past the deadline; no_claim=the connect's own timeout."""
+    clock, st, _, _ = setup(tmp_path, monkeypatch)
+    cert, key = certificate(tmp_path)
+
+    class Trickle(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["content-length"]))
+            try:
+                self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+                for _ in range(12):                                       # 6 s in all, a line every half second, then it stops
+                    time.sleep(0.5)
+                    self.wfile.write(b"x-slow: 1\r\n")
+                self.wfile.write(b"content-length: 0\r\n\r\n")
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+    server.daemon_threads, server.block_on_close = True, False
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, key)
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(N, "TIMEOUT", 1.0)
+        svc = N.NoticeService(str(tmp_path), [st], hosts=(HOST,), private_hosts=(HOST,), resolve=lambda h, p: ["127.0.0.1"],
+                              ssl_context=ssl.create_default_context(cafile=str(cert)))
+        svc.add(f"https://{HOST}:{server.server_address[1]}/hook")
+        add(st)
+        began = time.monotonic()
+        svc.run_once()
+        took = time.monotonic() - began
+        assert took < 3.0, took
+        assert [(r["state"], r["last_error"]) for r in rows(svc)] == [("pending", "timeout")]
+    finally:
+        server.shutdown()
+        server.server_close()

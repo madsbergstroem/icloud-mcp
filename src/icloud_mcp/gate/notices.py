@@ -37,7 +37,7 @@ past a gap; the receiver fetches the gap with approval_status(since=<cursor>).
 Egress (SSRF): https only; the host must be on NOTICE_HOSTS; it is resolved at every attempt and every address must be globally
 routable, or the host must be on NOTICE_PRIVATE_HOSTS (a receiver on the owner's own network). A link-local, multicast,
 unspecified or reserved address is refused always. The connection goes to the address that was checked, with TLS verified for the
-host name, and a timeout of 10 s.
+host name, and a timeout of 10 s for the connect and then 10 s for the whole attempt, however slowly the receiver answers.
 
 The tables are new beside the store's; PRAGMA user_version stays 2, so the previous version starts on the same DATA_DIR and ignores
 them (D9-8).
@@ -183,14 +183,36 @@ class _Pinned(http.client.HTTPSConnection):
 
 def https_post(host: str, ip: str, port: int, path: str, headers: dict[str, str], data: bytes, context: ssl.SSLContext,
                timeout: float) -> tuple[int, dict[str, str]]:
-    """POST once to the checked address; never follows a redirect. Returns (status, lower-cased headers)."""
+    """POST once to the checked address; never follows a redirect. Returns (status, lower-cased headers). `timeout` bounds the
+    connect, and once connected it is one deadline for the whole attempt: a receiver that answers a byte at a time is cut off."""
     conn = _Pinned(host, ip, port, context, timeout)
+    fired = threading.Event()
+
+    def cut() -> None:
+        fired.set()
+        try:
+            socket.socket.shutdown(conn.sock, socket.SHUT_RDWR)       # wakes a blocked read; the attempt then ends as a timeout
+        except (OSError, TypeError):
+            pass
+    timer = None
     try:
+        conn.connect()
+        timer = threading.Timer(timeout, cut)
+        timer.daemon = True
+        timer.start()
         conn.request("POST", path, body=data, headers=headers)
         r = conn.getresponse()
         r.read(4096)
+        if fired.is_set():
+            raise TimeoutError("the attempt ran past its deadline")
         return r.status, {k.lower(): v for k, v in r.getheaders()}
+    except Exception:
+        if fired.is_set():
+            raise TimeoutError("the attempt ran past its deadline") from None
+        raise
     finally:
+        if timer is not None:
+            timer.cancel()
         conn.close()
 
 
