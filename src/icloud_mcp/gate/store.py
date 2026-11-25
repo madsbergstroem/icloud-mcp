@@ -342,10 +342,12 @@ class Store:
         return dict(r) if r is not None else None
 
     def events_after(self, seq: int, upto: int, decided: bool = True) -> list[dict[str, Any]]:
-        """The status events after seq up to upto, oldest first; decided: only those that end a request."""
+        """The status events after seq up to upto, oldest first; decided: only those that end a request, which an export's discard
+        does not (the request goes on in the file, and a read-in makes it wait again)."""
         with self._lock:
             return [dict(r) for r in self._db.execute("SELECT * FROM status_event WHERE seq > ? AND seq <= ?"
-                                                      + (" AND status != 'waiting'" if decided else "") + " ORDER BY seq", (seq, upto))]
+                                                      + (" AND status != 'waiting' AND COALESCE(reason, '') != 'exported'" if decided else "")
+                                                      + " ORDER BY seq", (seq, upto))]
 
     def event_head(self) -> int:
         """The newest event's seq, 0 before the first (a seq is never used twice, also after its event was dropped)."""

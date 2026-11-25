@@ -170,12 +170,14 @@ class ApprovalLedger:
         return kind
 
     def _answer(self, item_id: str, waiting: dict[str, tuple[str, Any]], latest: dict[str, dict[str, Any]],
-                edited: dict[str, bool]) -> dict[str, Any]:
-        if item_id in waiting:                      # still in the queue wins: a release that failed puts the entry back
+                edited: dict[str, bool], ev: dict[str, Any] | None = None) -> dict[str, Any]:
+        """ev: the ending since() selected at or below its head; the answer is that ending, whatever came after it."""
+        if item_id in waiting and ev is None:                      # still in the queue wins: a release that failed puts the entry back
             kind, q = waiting[item_id]
             return _record(item_id, self._kind(kind, getattr(q, "action_type", None)), "waiting", q.created_at,
                            getattr(q, "edited_from", None) is not None, getattr(q, "action_type", None))
-        ev = self.events.last_event(item_id) if self.events is not None else None
+        if ev is None:
+            ev = self.events.last_event(item_id) if self.events is not None else None
         if ev is not None and ev["status"] != "waiting" and ev["reason"] != "exported" and not (ev["reconciled"] and item_id in latest):
             out = _record(item_id, self._kind(ev["kind"], ev["action_type"]), ev["status"], ev["at"], bool(ev["edited"]), ev["action_type"])
             if ev["status"] == "discarded" and ev["reason"] in _REASONS:                   # the server ended it, not the owner
@@ -256,14 +258,14 @@ class ApprovalLedger:
             return {"items": [], "cursor": f"e{head}", "more": False}
         if seq is None or seq > head:
             return self._note({"items": [], "cursor": f"e{head}", "more": False, "cursor_unknown": True})
-        last_at: dict[str, int] = {}                     # id -> the seq of its newest ending after the cursor
+        ending: dict[str, dict[str, Any]] = {}           # id -> its newest ending after the cursor, up to the head
         for ev in self.events.events_after(seq, head):
-            last_at[ev["request_id"]] = ev["seq"]
-        ordered = sorted(last_at, key=last_at.__getitem__)
+            ending[ev["request_id"]] = ev
+        ordered = sorted(ending, key=lambda i: ending[i]["seq"])
         shown, more = ordered[:_PAGE], len(ordered) > _PAGE
         latest, edited = self._latest(log), self._edited(log)
-        return {"items": [self._answer(i, waiting, latest, edited) for i in shown],
-                "cursor": f"e{last_at[shown[-1]]}" if more else f"e{head}", "more": more}
+        return {"items": [self._answer(i, waiting, latest, edited, ending[i]) for i in shown],
+                "cursor": f"e{ending[shown[-1]]['seq']}" if more else f"e{head}", "more": more}
 
 
 def _D(text: str) -> Any:

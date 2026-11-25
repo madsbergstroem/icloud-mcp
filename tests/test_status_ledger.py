@@ -570,3 +570,31 @@ def test_a_file_the_owner_added_is_no_edit_when_an_ending_is_reconciled(tmp_path
     st = reopen(st, tmp_path)
     assert said(st, done.id)[-1] == ("sent", None, 0, 0)
     assert said(st, rolled.id)[-1] == ("sent", None, 0, 1)
+
+
+def test_an_export_and_its_read_in_are_no_decision_and_never_list_one_twice(tmp_path):
+    """protects=since lists decisions only, each once and as of its cursor (Codex review of the 9a fixes); fails_when=an export's
+    discard is listed as a decision (as waiting once the request is read in again), or a decision made meanwhile is listed at the
+    export's place and then again at its own; no_claim=the log-cursor path."""
+    st, _, ledger = parts(tmp_path)
+    start = ledger.since("now")["cursor"]
+    q = add(st)
+    st.export_waiting("external-outbox.json")
+    st._migrate(st.dir / "external-outbox.json")                          # read in again: it waits
+    assert [e["status"] for e in events(st, q.id)] == ["waiting", "discarded", "waiting"]
+    assert ledger.since(start)["items"] == []
+    look = ledger._waiting
+
+    def approved_meanwhile():
+        seen = look()
+        if st.state_of(q.id)[0] == "waiting":
+            st.claim(q.id, "executing")
+            st.finish(q.id, "sent")
+        return seen
+    ledger._waiting = approved_meanwhile
+    seen, cursor = [], start
+    for _ in range(3):
+        page = ledger.since(cursor)
+        seen += [(i["id"], i["status"], page["cursor"]) for i in page["items"]]
+        cursor = page["cursor"]
+    assert seen == [(q.id, "sent", f"e{st.event_head()}")]
