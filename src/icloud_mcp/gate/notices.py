@@ -187,16 +187,19 @@ def https_post(host: str, ip: str, port: int, path: str, headers: dict[str, str]
     connect, and once connected it is one deadline for the whole attempt: a receiver that answers a byte at a time is cut off."""
     conn = _Pinned(host, ip, port, context, timeout)
     fired = threading.Event()
+    held: list[socket.socket] = []
 
     def cut() -> None:
         fired.set()
-        try:
-            socket.socket.shutdown(conn.sock, socket.SHUT_RDWR)       # wakes a blocked read; the attempt then ends as a timeout
-        except (OSError, TypeError):
-            pass
+        for sock in held:                      # the socket itself: with Connection: close the response keeps it, conn.sock is None
+            try:
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)        # wakes a blocked read; the attempt then ends as a timeout
+            except OSError:
+                pass
     timer = None
     try:
         conn.connect()
+        held.append(conn.sock)
         timer = threading.Timer(timeout, cut)
         timer.daemon = True
         timer.start()

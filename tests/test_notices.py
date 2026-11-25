@@ -902,9 +902,12 @@ def test_review1_a_crash_around_a_url_change_never_loses_pending_deliveries_or_s
     assert all(c["host"] == HOST for c in rx.calls)
 
 
-def test_review2_a_receiver_that_trickles_its_answer_is_cut_off_at_the_deadline(tmp_path, monkeypatch):
-    """protects=review finding 2: the timeout is one deadline for the whole attempt after the connection is made, not per read;
-    fails_when=a receiver that sends a byte now and then holds the worker past the deadline; no_claim=the connect's own timeout."""
+@pytest.mark.parametrize("where", ["headers", "body"])
+def test_review2_a_receiver_that_trickles_its_answer_is_cut_off_at_the_deadline(tmp_path, monkeypatch, where):
+    """protects=review finding 2 (and the second pass): the timeout is one deadline for the whole attempt after the connection is
+    made, not per read, also when the receiver answers `Connection: close` and trickles the body (http.client then hands the
+    socket to the response); fails_when=a receiver that sends a byte now and then holds the worker past the deadline;
+    no_claim=the connect's own timeout."""
     clock, st, _, _ = setup(tmp_path, monkeypatch)
     cert, key = certificate(tmp_path)
 
@@ -912,11 +915,17 @@ def test_review2_a_receiver_that_trickles_its_answer_is_cut_off_at_the_deadline(
         def do_POST(self):
             self.rfile.read(int(self.headers["content-length"]))
             try:
-                self.wfile.write(b"HTTP/1.1 200 OK\r\n")
-                for _ in range(12):                                       # 6 s in all, a line every half second, then it stops
-                    time.sleep(0.5)
-                    self.wfile.write(b"x-slow: 1\r\n")
-                self.wfile.write(b"content-length: 0\r\n\r\n")
+                if where == "headers":
+                    self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+                    for _ in range(12):                                   # 6 s in all, a line every half second, then it stops
+                        time.sleep(0.5)
+                        self.wfile.write(b"x-slow: 1\r\n")
+                    self.wfile.write(b"content-length: 0\r\n\r\n")
+                else:
+                    self.wfile.write(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n")
+                    for _ in range(12):                                   # a byte every half second, 6 s in all
+                        time.sleep(0.5)
+                        self.wfile.write(b"x")
             except OSError:
                 pass
 
