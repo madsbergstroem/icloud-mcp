@@ -314,15 +314,17 @@ class Store:
 
     def _reconcile(self) -> None:
         """A version without the ledger (before 9a, or one a rollback went back to) changed states and wrote no events: give each
-        request whose last event does not say its state the event it lacks, marked reconciled. edited of an ending is read from the
+        request whose last event does not say its state the event it lacks, marked reconciled. An ending is compared with its
+        reason too: an export's discard (reason exported) is not the owner's discard of the same request after a rollback read it in
+        again. edited of an ending is read from the
         versions (the owner's is newer than the agent's), since the row no longer keeps edited_from."""
         with self._lock, self._tx():
-            rows = self._db.execute("SELECT r.*, (SELECT status FROM status_event WHERE request_id = r.id ORDER BY seq DESC LIMIT 1) "
-                                    "AS last FROM request r").fetchall()
+            rows = self._db.execute("SELECT r.*, e.status AS last, e.reason AS last_reason FROM request r LEFT JOIN status_event e ON "
+                                    "e.seq = (SELECT MAX(seq) FROM status_event WHERE request_id = r.id)").fetchall()
             n = 0
             for r in rows:
                 status = "waiting" if r["state"] in ("waiting", "executing") else r["state"]
-                if r["last"] == status:
+                if r["last"] == status and (status == "waiting" or r["last_reason"] == r["outcome_reason"]):
                     continue
                 if status == "waiting":
                     self._event(r["id"], status, edited=r["edited_from"] is not None, at=r["created_at"], reconciled=True, r=r)

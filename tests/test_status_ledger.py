@@ -532,3 +532,25 @@ def test_a_decision_between_the_look_at_the_queue_and_the_ledger_is_listed_once_
         seen += [(i["id"], i["status"]) for i in page["items"]]
         cursor = page["cursor"]
     assert seen == [(q.id, "sent")]
+
+
+def reopen(st, tmp_path):
+    st._db.close()
+    os.close(S._locks.pop(str(Path(tmp_path).resolve())))
+    return S.Store(str(tmp_path), "external", 3600, 50)
+
+
+def test_an_owner_discard_after_an_export_and_a_rollback_is_reconciled(tmp_path):
+    """protects=reconciling compares the whole ending (Codex review of 9a, finding 2); fails_when=a request exported under 9a,
+    read in again by the previous version and discarded there by the owner keeps the export as its last event and reads unknown
+    with the log off; no_claim=the previous version's read-in itself (the rollback test runs that version)."""
+    st = S.Store(str(tmp_path), "external", 3600, 50)
+    q = add(st)
+    st.export_waiting("external-outbox.json")
+    assert said(st, q.id)[-1] == ("discarded", "exported", 0, 0)
+    # the previous version reads the file in again (waiting) and the owner discards it there, without events
+    st._db.execute("UPDATE request SET state = 'discarded', outcome_reason = NULL, decided_at = ? WHERE id = ?", (q.created_at + 9, q.id))
+    st = reopen(st, tmp_path)
+    assert said(st, q.id)[-1] == ("discarded", None, 0, 1)
+    assert ApprovalLedger({"external": st}, AuditLog(str(tmp_path), enabled=False)).status(q.id)["status"] == "discarded"
+
