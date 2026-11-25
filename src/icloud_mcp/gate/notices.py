@@ -288,6 +288,10 @@ _FREE = ("d.state = 'pending' AND NOT EXISTS (SELECT 1 FROM notice_delivery e WH
          "e.generation = d.generation AND e.request_id = d.request_id AND e.state = 'pending' AND e.seq < d.seq)")
 
 
+class _Gone(Exception):
+    """The receiver went, or has a new URL, while its host resolved: the attempt is abandoned, and it is no failure."""
+
+
 class NeedsConfirm(Exception):
     """A change lets more through than the receiver as it is now, and the owner has not signed in recently."""
 
@@ -665,9 +669,16 @@ class NoticeService:
                    "webhook-timestamp": str(ts), "webhook-signature": " ".join(sign(k, note["event_id"], ts, data) for k in keys),
                    "x-mcp-subscription-id": r["id"]}
         status, error, retry_after = None, None, None
+        gen = row["generation"]
+
+        def current() -> bool:
+            x = self._get(r["id"])
+            return x is not None and int(x["generation"]) == gen
         try:
-            status, answer = self._post(url, headers, data)
+            status, answer = self._post(url, headers, data, current)
             retry_after = _retry_after(answer.get("retry-after"), now)
+        except _Gone:
+            return "gone"
         except Refused as e:
             error = e.code
         except (TimeoutError, socket.timeout):
@@ -710,8 +721,10 @@ class NoticeService:
             raise got["error"]
         return got["ips"]
 
-    def _post(self, url: str, headers: dict[str, str], data: bytes) -> tuple[int, dict[str, str]]:
-        """Check the URL and every address it resolves to now, then post to the checked one."""
+    def _post(self, url: str, headers: dict[str, str], data: bytes,
+              current: Callable[[], bool] = lambda: True) -> tuple[int, dict[str, str]]:
+        """Check the URL and every address it resolves to now, then post to the checked one; `current` is asked under the lock
+        right before the request goes out (_Gone when the receiver went or moved meanwhile)."""
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()
         if parts.scheme != "https" or not host:
@@ -724,6 +737,9 @@ class NoticeService:
         if not ips or not all(address_ok(ip, private_ok) for ip in ips):
             raise Refused("address_not_allowed")
         path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        with self._lock:
+            if not current():
+                raise _Gone()
         return self.transport(host, ips[0], port, path, headers, data, self.ssl_context, TIMEOUT)
 
     # -- the worker ----------------------------------------------------------------------------------------------------------

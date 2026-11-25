@@ -1117,3 +1117,25 @@ def test_review10_a_stalled_name_lookup_ends_the_attempt_at_the_deadline_with_a_
         release_dns.set()
     assert took < 2.0, took
     assert rx.calls == [] and [(r["state"], r["last_error"]) for r in rows(svc)] == [("pending", "resolve_timeout")]
+
+
+@pytest.mark.parametrize("meanwhile", ["remove", "new_url"])
+def test_review11_a_receiver_removed_or_moved_while_its_host_resolves_gets_nothing(tmp_path, monkeypatch, meanwhile):
+    """protects=third review, point 2: right before a notice goes on the wire, the receiver and its generation are checked again
+    under the lock; a removal or a new URL made while the host resolved abandons the attempt, which is no failure;
+    fails_when=a notice reaches a removed receiver or the old URL after the owner changed it; no_claim=a change after the
+    request is on the wire."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch, hosts=(HOST, "new.example.net"))
+    rec, _ = svc.add(URL)
+    add(st)
+
+    def meanwhile_owner(host, port):
+        if meanwhile == "remove":
+            svc.remove(rec["id"])
+        else:
+            svc.change(rec["id"], url="https://new.example.net/hook")
+        return [PUBLIC_IP]
+    svc.resolve = meanwhile_owner
+    got = svc.run_once()
+    assert rx.calls == [] and got.get("gone") == 1 and "pending" not in got and "dead" not in got
+    assert [r for r in rows(svc) if r["state"] != "pending" or r["generation"] == 1] == []
