@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Agents learn how a request ended with the activity log off (fork).** Every change of a request's status is now recorded in
+  the approval store (`approvals.db`), in the same step as the change itself. `approval_status` reads that record, so with
+  `AUDIT_LOG=false` an approved, discarded, withdrawn or expired request no longer reads "unknown". With the log on, the answers
+  are the same as before; a request discarded with "discard all" on the old `/outbox` page now also names its type.
+  `approval_status(since="now")` hands out a new kind of cursor (`e` and a number); cursors from before keep working while the log
+  is on. The record holds ids, types, statuses, reason codes and times, never content or who asked. The previous version still
+  starts on the same `DATA_DIR`, and what it decides is added to the record at the next start.
+
 - **A mail is an action like the others (fork).** A mail waiting for your approval is now an action of one of three types
   (`mail.send`, `mail.reply`, `mail.forward`) on the same queue as the other actions. The list and the card read "Email reply" with
   "Re: Invoice 2291 · to accounts@example.org" underneath; a forward and a sent draft no longer show as replies. The card keeps

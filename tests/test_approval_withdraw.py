@@ -137,12 +137,13 @@ async def test_when_the_claim_is_lost_to_an_approve_nothing_looks_like_success(w
     real = box.claim
 
     def owner_first(item_id, state=None):              # claim takes how it ends since the store (gate/store.py)
-        real(item_id)                                  # the owner's release got there first ...
+        real(item_id, "executing")                     # the owner's release got there first ...
         return real(item_id)                           # ... so the tool's own claim comes back empty
     box.claim = owner_first
     got = await withdraw(mcp, q)
     assert got["withdrawn"] is False and got["status"] != "withdrawn" and set(got) == KEYS
     assert log(mcp, "approval.withdrawn") == [] and waiting(mcp, "mail") == []
+    box.finish(q, "sent")                              # the release ends as the store says (package 9a reads the store's ledger)
     mcp._icloud_dashboard.audit.record("approval.sent", actor="owner", via="password", summary="x", kind="mail", outbox_id=q)
     assert (await withdraw(mcp, q)) == {"id": q, "withdrawn": False, "status": "sent"}      # once the release is logged, it reads sent
 
