@@ -391,8 +391,9 @@ class NoticeService:
             secret = new_secret()
             rec = {"id": "rcv_" + secrets.token_hex(6), "url": url, "filter": filt, "generation": 1, "from_seq": self._head(),
                    "created_at": time.time(), "secrets": [{"secret": secret, "until": None}]}
-            self._receivers.append(rec)
-            self._save()
+            changed = self._receivers + [rec]
+            self._save(changed)                # memory follows the file, never runs ahead of it
+            self._receivers = changed
         log.info("notices: a receiver on %s was added", _host_of(url))
         self._ensure_thread()
         return self.public(rec), secret
@@ -438,9 +439,11 @@ class NoticeService:
             if r is None:
                 return None
             secret, now = new_secret(), time.time()
-            r["secrets"] = [{"secret": secret, "until": None}] + [{"secret": s["secret"], "until": now + OVERLAP}
-                                                                   for s in r["secrets"][:1]]
-            self._save()
+            r = {**r, "secrets": [{"secret": secret, "until": None}] + [{"secret": s["secret"], "until": now + OVERLAP}
+                                                                       for s in r["secrets"][:1]]}
+            changed = [r if x["id"] == rid else x for x in self._receivers]
+            self._save(changed)
+            self._receivers = changed
         log.info("notices: the secret of a receiver on %s was rotated", _host_of(r["url"]))
         return secret
 
@@ -450,8 +453,9 @@ class NoticeService:
             r = self._get(rid)
             if r is None or len(r["secrets"]) < 2:
                 return False
-            r["secrets"] = r["secrets"][:1]
-            self._save()
+            changed = [{**x, "secrets": x["secrets"][:1]} if x["id"] == rid else x for x in self._receivers]
+            self._save(changed)
+            self._receivers = changed
         return True
 
     def remove(self, rid: str) -> dict[str, Any] | None:
@@ -461,8 +465,9 @@ class NoticeService:
             if r is None:
                 return None
             shown = self.public(r)
-            self._receivers = [x for x in self._receivers if x["id"] != rid]
-            self._save()
+            changed = [x for x in self._receivers if x["id"] != rid]
+            self._save(changed)                # first the config; a stop before the rows go leaves them to _drop_stale
+            self._receivers = changed
             with _Tx(self._db):
                 self._db.execute("DELETE FROM notice_delivery WHERE receiver = ?", (rid,))
         log.info("notices: a receiver on %s was removed", _host_of(r["url"]))
@@ -586,7 +591,7 @@ class NoticeService:
             "AND e.seq < d.seq) ORDER BY next_at, seq LIMIT 100", (now,)).fetchall()
 
     def _end(self, row: Any, state: str, now: float, status: int | None = None, error: str | None = None) -> None:
-        with _Tx(self._db):
+        with self._lock, _Tx(self._db):        # one connection for every thread: each transaction holds the lock
             self._db.execute("UPDATE notice_delivery SET state = ?, ended_at = ?, last_status = ?, last_error = ? WHERE seq = ? AND "
                              "receiver = ? AND generation = ? AND state = 'pending'",
                              (state, now, status, error, row["seq"], row["receiver"], row["generation"]))
@@ -598,7 +603,7 @@ class NoticeService:
         wait = BACKOFF[attempts] * (0.9 + 0.2 * random.random())
         if status in SLOW_DOWN:
             wait = max(wait * 2, min(retry_after, RETRY_AFTER_MAX)) if retry_after is not None else wait * 2
-        with _Tx(self._db):
+        with self._lock, _Tx(self._db):
             self._db.execute("UPDATE notice_delivery SET next_at = ?, last_status = ?, last_error = ? WHERE seq = ? AND receiver = ? AND "
                              "generation = ? AND state = 'pending'", (now + wait, status, error, row["seq"], row["receiver"], row["generation"]))
 

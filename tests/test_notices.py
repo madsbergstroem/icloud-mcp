@@ -942,3 +942,43 @@ def test_review2_a_receiver_that_trickles_its_answer_is_cut_off_at_the_deadline(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_review4_every_transaction_waits_for_the_lock_and_memory_changes_only_after_the_write(tmp_path, monkeypatch):
+    """protects=review finding 4: the worker's writes (_end, _failed) take the service's lock like every other transaction on the
+    one connection, and add, rotate, end_old and remove change the receivers in memory only once notices.json is written;
+    fails_when=a write of the worker meets another thread's open transaction, or a failed write leaves memory changed;
+    no_claim=other processes (the DATA_DIR lock keeps them out)."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch)
+    rec, _ = svc.add(URL)
+    add(st)
+    add(st, "tom")
+    svc.fan_out()
+    first, second = rows(svc)
+    for write in (lambda: svc._end(first, "delivered", clock.now, 200), lambda: svc._failed(second, 1, clock.now, 500, None, None)):
+        began, done = threading.Event(), threading.Event()
+
+        def other():
+            with svc._lock, N._Tx(svc._db):                                   # the dashboard's thread, in a transaction
+                began.set()
+                done.wait(0.3)
+        t = threading.Thread(target=other)
+        t.start()
+        began.wait(2)
+        try:
+            write()
+        finally:
+            t.join()
+    assert [r["state"] for r in rows(svc)] == ["delivered", "pending"] and rows(svc)[1]["last_status"] == 500
+
+    svc.rotate(rec["id"])
+    before = json.dumps(svc._receivers, sort_keys=True)
+
+    def no_disk(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(svc, "_save", no_disk)
+    for step in (lambda: svc.add("https://hooks.example.org/two"), lambda: svc.rotate(rec["id"]), lambda: svc.end_old(rec["id"]),
+                 lambda: svc.remove(rec["id"])):
+        with pytest.raises(OSError):
+            step()
+        assert json.dumps(svc._receivers, sort_keys=True) == before
