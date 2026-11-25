@@ -1054,3 +1054,24 @@ def test_review6_the_worker_waits_while_the_only_due_row_waits_for_an_earlier_on
     assert [(r["state"], r["attempts"]) for r in rows(svc)] == [("pending", 1), ("pending", 0)]
     assert svc._due(clock.now) == []
     assert svc._next_wait() == 1.0
+
+
+def test_review7_a_round_of_slow_deliveries_ends_after_a_few_seconds_so_new_decisions_and_the_clock_run_between(tmp_path, monkeypatch):
+    """protects=second review, point 2: a round of the worker is bounded in time, so slow receivers do not keep new decisions out
+    of the queue or the expiry clock from running; fails_when=one round sends every due delivery however long each takes;
+    no_claim=the exact bound (N.ROUND_MAX)."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch)
+    svc.add(URL)
+    for i in range(10):
+        add(st, f"p{i}")
+    slow = rx.__call__
+
+    def ten_seconds(*a, **k):
+        clock.tick(10)
+        return slow(*a, **k)
+    svc.transport = ten_seconds
+    svc.run_once()
+    assert 1 <= len(rx.calls) < 10
+    late = add(st, "late")
+    svc.run_once()
+    assert any(r["request_id"] == late.id for r in rows(svc))

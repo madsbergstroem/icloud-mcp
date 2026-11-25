@@ -16,7 +16,8 @@ names it), action type, status, reason code, edited, the hash the request had wh
 Built from those fields by name, never from a log line, and never more than 2 KiB. Never a parameter, a text, a title, a
 recipient, a chat id or the agent's label (D9-6). An export's discard (reason `exported`) is no decision and makes no notice.
 
-Delivery: one worker thread, one request at a time. A notice is delivered on a 2xx answer only. Six attempts: at once, then after
+Delivery: one worker thread, one request at a time; a round starts no attempt after 5 s, and each round fans out first. A notice
+is delivered on a 2xx answer only. Six attempts: at once, then after
 5 s, 5 min, 30 min, 2 h and 5 h (7 h 35 min in all, D9-4), each delay with 10 % jitter; then the delivery is `dead`, which the owner
 sees and can send again. 410 and 413 end that delivery as `refused` without retries and leave the receiver on (D9-5); 429, 502, 503
 and 504 wait twice as long, or as long as a Retry-After header says, up to an hour. A redirect is a failure and is never followed.
@@ -80,6 +81,7 @@ SLOW_DOWN = (429, 502, 503, 504)
 REFUSED = (410, 413)
 RETRY_AFTER_MAX = 3600
 OVERLAP = 24 * 3600                            # an old secret signs this long beside a new one
+ROUND_MAX = 5.0                                # a round of the worker ends after this; the next one fans out and reads the clock first
 CLOCK_EVERY = 60                               # the worker reads the store this often, so an expiry is noticed without traffic
 FAILING_LINE = 24 * 3600                       # a receiver failing this long gets a line on the health page
 STATUSES = ("waiting", "sent", "unclear", "discarded", "withdrawn", "expired")
@@ -727,6 +729,7 @@ class NoticeService:
         """One round of the worker: the clock, the fan-out, every delivery that is due, the retention. Returns counts by result."""
         self.clock()
         self.fan_out()
+        began = time.time()
         counts: dict[str, int] = {}
         tried: set[tuple[int, str, int]] = set()
         for _ in range(50):                    # a notice that waited for an earlier one of its request goes in the same round
@@ -734,8 +737,10 @@ class NoticeService:
                 due = [r for r in self._due(time.time()) if (r["seq"], r["receiver"], r["generation"]) not in tried]
             if not due or self._stop.is_set():
                 break
+            if time.time() - began >= ROUND_MAX:
+                break
             for row in due:
-                if self._stop.is_set():
+                if self._stop.is_set() or time.time() - began >= ROUND_MAX:     # slow receivers: new decisions go in first
                     break
                 tried.add((row["seq"], row["receiver"], row["generation"]))
                 res = self.deliver(row)
