@@ -291,6 +291,7 @@ class NoticeService:
         with _Tx(self._db):                    # the first start of 9b begins at the ledger's head: no backlog
             self._db.execute("INSERT OR IGNORE INTO notice_progress (name, seq) VALUES ('fanout', ?)", (self._head(),))
         self._receivers = self._load()
+        self._drop_stale()
 
     # -- receivers (notices.json) ----------------------------------------------------------------------------------------------
     def _load(self) -> list[dict[str, Any]]:
@@ -301,14 +302,26 @@ class NoticeService:
         items = data.get("receivers") if isinstance(data, dict) else None
         return [r for r in (items or []) if isinstance(r, dict) and r.get("id") and r.get("url") and r.get("secrets")][:MAX_RECEIVERS]
 
-    def _save(self) -> None:
+    def _drop_stale(self) -> None:
+        """Drop the pending deliveries of receivers that are gone and of generations older than a receiver's own: a new URL or a
+        removal writes notices.json first and drops them after, so a stop in between leaves them here, never sent."""
+        with self._lock, _Tx(self._db):
+            gens = {r["id"]: int(r["generation"]) for r in self._receivers}
+            for row in self._db.execute("SELECT DISTINCT receiver, generation FROM notice_delivery WHERE state = 'pending'").fetchall():
+                if row["receiver"] not in gens or row["generation"] < gens[row["receiver"]]:
+                    self._db.execute("DELETE FROM notice_delivery WHERE receiver = ? AND generation = ? AND state = 'pending'",
+                                     (row["receiver"], row["generation"]))
+
+    def _save(self, receivers: list[dict[str, Any]] | None = None) -> None:
+        """Write notices.json; with `receivers`, that list (the caller takes it into memory once it is written)."""
+        receivers = self._receivers if receivers is None else receivers
         with self._file_lock:
             self.dir.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=self.dir, prefix=".notices-", suffix=".tmp")
             try:
                 os.chmod(tmp, 0o600)
                 with os.fdopen(fd, "w") as f:
-                    json.dump({"receivers": self._receivers}, f, indent=1)
+                    json.dump({"receivers": receivers}, f, indent=1)
                 os.replace(tmp, self.path)
             finally:
                 if os.path.exists(tmp):
@@ -368,19 +381,22 @@ class NoticeService:
         new_url = self.check_url(url) if url is not None else None
         new_filt = clean_filter(filt) if filt is not None else None
         with self._lock:
-            r = self._get(rid)
-            if r is None:
+            old = self._get(rid)
+            if old is None:
                 return None
-            secret = None
+            r, secret = dict(old), None
             if new_url is not None and new_url != r["url"]:
                 secret = new_secret()
                 r.update(url=new_url, generation=int(r["generation"]) + 1, from_seq=self._head(), secrets=[{"secret": secret, "until": None}])
+            if new_filt is not None:
+                r["filter"] = new_filt
+            changed = [r if x["id"] == rid else x for x in self._receivers]
+            self._save(changed)                # first the config; a stop before the rows go leaves them to _drop_stale
+            self._receivers = changed
+            if secret is not None:
                 with _Tx(self._db):
                     self._db.execute("DELETE FROM notice_delivery WHERE receiver = ? AND generation < ? AND state = 'pending'",
                                      (rid, r["generation"]))
-            if new_filt is not None:
-                r["filter"] = new_filt
-            self._save()
         return self.public(r), secret
 
     def rotate(self, rid: str) -> str | None:
@@ -560,6 +576,7 @@ class NoticeService:
         with self._lock:
             r = self._get(row["receiver"])
             if r is None or int(r["generation"]) != row["generation"]:
+                self._drop_stale()              # a removal or a new URL that stopped before its rows went
                 return "gone"
             row = self._db.execute("SELECT * FROM notice_delivery WHERE seq = ? AND receiver = ? AND generation = ? AND state = 'pending'",
                                    (row["seq"], row["receiver"], row["generation"])).fetchone()

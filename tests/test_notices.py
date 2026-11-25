@@ -866,3 +866,37 @@ def test_the_previous_version_starts_ignores_the_notice_tables_and_the_next_star
         svc.close()
         st._db.close()
         release(data)
+
+
+# -- review of 9b (Codex): each test below failed on commit 19e2a3c ------------------------------------------------------------
+def test_review1_a_crash_around_a_url_change_never_loses_pending_deliveries_or_sends_them_to_the_new_url(tmp_path, monkeypatch):
+    """protects=review finding 1: a URL change is one recoverable step (config first, then the old generation's rows, which a
+    start drops if the step stopped in between); fails_when=a crash leaves the old URL with its pending deliveries gone, or the new
+    URL gets the old generation's notices; no_claim=a crash inside SQLite's own commit."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch, 500, hosts=(HOST, "new.example.net"))
+    rec, _ = svc.add(URL)
+    add(st)
+    svc.run_once()
+    assert [r["state"] for r in rows(svc)] == ["pending"]
+
+    def no_disk(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(svc, "_save", no_disk)                           # the config write fails: nothing may change
+    with pytest.raises(OSError):
+        svc.change(rec["id"], url="https://new.example.net/hook")
+    assert svc.receivers()[0]["url"] == URL and svc.receivers()[0]["generation"] == 1
+    again = N.NoticeService(str(tmp_path), [st], hosts=(HOST, "new.example.net"), resolve=lambda h, p: [PUBLIC_IP], transport=rx)
+    assert again.receivers()[0]["url"] == URL and [r["state"] for r in rows(again)] == ["pending"]
+    monkeypatch.undo()
+    monkeypatch.setattr(N, "time", clock)
+    monkeypatch.setattr(N, "_Tx", lambda db: (_ for _ in ()).throw(RuntimeError("the process stopped here")))
+    with pytest.raises(RuntimeError):                                     # stopped after the config, before the rows
+        again.change(rec["id"], url="https://new.example.net/hook")
+    monkeypatch.undo()
+    monkeypatch.setattr(N, "time", clock)
+    rx.answers = [200]
+    third = N.NoticeService(str(tmp_path), [st], hosts=(HOST, "new.example.net"), resolve=lambda h, p: [PUBLIC_IP], transport=rx)
+    assert third.receivers()[0]["generation"] == 2 and rows(third) == []
+    clock.tick(3600)
+    third.run_once()
+    assert all(c["host"] == HOST for c in rx.calls)
