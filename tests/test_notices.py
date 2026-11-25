@@ -310,7 +310,7 @@ def test_six_failures_make_a_dead_delivery_that_the_owner_can_send_again(tmp_pat
     st_ = svc.receivers()[0]["status"]
     assert len(rx.calls) == 6 and (st_["dead"], st_["pending"], st_["last_error"]) == (1, 0, "http_500")
     rx.answers = [200]
-    assert svc.resend(rec["id"]) == 1
+    assert svc.resend(rec["id"]) == (1, 0)
     svc.run_once()
     assert rows(svc)[0]["state"] == "delivered" and svc.receivers()[0]["status"]["dead"] == 0
 
@@ -1075,3 +1075,21 @@ def test_review7_a_round_of_slow_deliveries_ends_after_a_few_seconds_so_new_deci
     late = add(st, "late")
     svc.run_once()
     assert any(r["request_id"] == late.id for r in rows(svc))
+
+
+def test_review9_resend_fills_the_queue_only_up_to_its_bound_oldest_first(tmp_path, monkeypatch):
+    """protects=second review, point 4: sending dead notices again respects MAX_PENDING per receiver: the oldest go first, up to the
+    free room, and the rest stay dead and are counted; fails_when=one click puts more than MAX_PENDING back in the queue;
+    no_claim=the dashboard's wording (tests/test_notices_dashboard.py)."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch, 500)
+    rec, _ = svc.add(URL)
+    monkeypatch.setattr(N, "BACKOFF", (0,))                                   # one attempt, then dead
+    monkeypatch.setattr(N, "MAX_PENDING", 3)
+    for i in range(5):
+        add(st, f"p{i}")
+    svc.run_once()
+    assert [r["state"] for r in rows(svc)] == ["dead"] * 5
+    add(st, "waits")
+    svc.fan_out()
+    assert svc.resend(rec["id"]) == (2, 3)
+    assert [r["state"] for r in rows(svc)] == ["pending", "pending", "dead", "dead", "dead", "pending"]

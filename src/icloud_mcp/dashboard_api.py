@@ -938,12 +938,13 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         host = next((r["host"] for r in await asyncio.to_thread(svc.receivers) if r["id"] == rid), None)
         if host is None:
             return err("There is no such receiver.", 404)
-        n = await asyncio.to_thread(svc.resend, rid)
+        n, left = await asyncio.to_thread(svc.resend, rid)
+        full = f" {left} stay undelivered: the queue for this receiver is full. Send again once it has emptied." if left else ""
         if not n:
-            return ok({"note": "Nothing to send again.", "count": 0})
+            return ok({"note": ("Nothing sent again." + full) if left else "Nothing to send again.", "count": 0, "left": left})
         audit.record("notice.resent", actor="owner", via=rec.get("via", ""), summary=f"Sent {n} notice{'s' if n != 1 else ''} to {host} again",
                      host=host, count=n)
-        return ok({"note": f"Sending {n} notice{'s' if n != 1 else ''} again.", "count": n})
+        return ok({"note": f"Sending {n} notice{'s' if n != 1 else ''} again." + full, "count": n, "left": left})
 
     d.api_writer, d.api_reader, d.api_ok, d.api_err, d.api_need_confirm = writer, reader, ok, err, need_confirm
     d.bridge_state = bridge_state

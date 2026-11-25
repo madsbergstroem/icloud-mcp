@@ -485,19 +485,24 @@ class NoticeService:
         log.info("notices: a receiver on %s was removed", _host_of(r["url"]))
         return shown
 
-    def resend(self, rid: str) -> int:
-        """Every dead delivery of a receiver goes out again, from its first attempt. Returns how many."""
+    def resend(self, rid: str) -> tuple[int, int]:
+        """The dead deliveries of a receiver go out again, from their first attempt, oldest first and only up to MAX_PENDING
+        waiting. Returns (how many go again, how many stay dead)."""
         with self._lock:
             r = self._get(rid)
             if r is None:
-                return 0
+                return 0, 0
             with _Tx(self._db):
-                n = self._db.execute("UPDATE notice_delivery SET state = 'pending', attempts = 0, next_at = ?, ended_at = NULL "
-                                     "WHERE receiver = ? AND generation = ? AND state = 'dead'",
-                                     (time.time(), rid, r["generation"])).rowcount
+                waiting = self._db.execute("SELECT COUNT(*) FROM notice_delivery WHERE receiver = ? AND state = 'pending'", (rid,)).fetchone()[0]
+                dead = self._db.execute("SELECT COUNT(*) FROM notice_delivery WHERE receiver = ? AND generation = ? AND state = 'dead'",
+                                        (rid, r["generation"])).fetchone()[0]
+                room = max(0, MAX_PENDING - waiting)
+                n = self._db.execute("UPDATE notice_delivery SET state = 'pending', attempts = 0, next_at = ?, ended_at = NULL WHERE rowid IN "
+                                     "(SELECT rowid FROM notice_delivery WHERE receiver = ? AND generation = ? AND state = 'dead' ORDER BY seq "
+                                     "LIMIT ?)", (time.time(), rid, r["generation"], room)).rowcount
         if n:
             self._wake.set()
-        return n
+        return n, dead - n
 
     def _status(self, r: dict[str, Any]) -> dict[str, Any]:
         rows = self._db.execute("SELECT state, COUNT(*) AS n FROM notice_delivery WHERE receiver = ? AND generation = ? GROUP BY state",
