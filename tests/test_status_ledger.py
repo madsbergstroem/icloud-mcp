@@ -509,3 +509,26 @@ def test_upgrade_downgrade_decide_and_upgrade_again(tmp_path):
     finally:
         st._db.close()
         os.close(S._locks.pop(str(data.resolve())))
+
+
+def test_a_decision_between_the_look_at_the_queue_and_the_ledger_is_listed_once_it_is_known(tmp_path):
+    """protects=since from one consistent view (Codex review of 9a, finding 1); fails_when=a request approved while since runs is
+    listed as waiting with a cursor past its ending, so no later call lists it; no_claim=the log-cursor path, which reads the log."""
+    st, _, ledger = parts(tmp_path)
+    cursor = ledger.since("now")["cursor"]
+    q = add(st)
+    look = ledger._waiting
+
+    def approved_meanwhile():
+        seen = look()
+        if st.state_of(q.id)[0] == "waiting":
+            st.claim(q.id, "executing")
+            st.finish(q.id, "sent")
+        return seen
+    ledger._waiting = approved_meanwhile
+    seen = []
+    for _ in range(3):
+        page = ledger.since(cursor)
+        seen += [(i["id"], i["status"]) for i in page["items"]]
+        cursor = page["cursor"]
+    assert seen == [(q.id, "sent")]

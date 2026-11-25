@@ -217,10 +217,10 @@ class ApprovalLedger:
     def since(self, cursor: str) -> dict[str, Any]:
         """What ended after `cursor`, oldest first, _PAGE at a time. 'now' starts one at the end of the ledger (`e<seq>`), or of the
         log where no store keeps a ledger; a log hash is read from the log as before 9a."""
+        if self.events is not None and (cursor == "now" or _EVENT_CURSOR.fullmatch(cursor) or not self._log_on()):
+            return self._since_events(cursor)
         waiting = self._waiting()
         log = self._log()
-        if self.events is not None and (cursor == "now" or _EVENT_CURSOR.fullmatch(cursor) or not self._log_on()):
-            return self._since_events(cursor, waiting, log)
         head = log[-1].get("h", _GENESIS) if log else _GENESIS
         if cursor == "now":
             return self._note({"items": [], "cursor": head, "more": False})
@@ -243,10 +243,14 @@ class ApprovalLedger:
                "cursor": log[last_at[shown[-1]]].get("h", _GENESIS) if more else head, "more": more}
         return self._note(out)
 
-    def _since_events(self, cursor: str, waiting: dict[str, tuple[str, Any]], log: list[dict[str, Any]]) -> dict[str, Any]:
+    def _since_events(self, cursor: str) -> dict[str, Any]:
         """since() from the ledger: requests whose newest event after `e<seq>` ended them, in the order of those events. A cursor
-        that is not one the ledger handed out (or a log hash while the log is off) reads cursor_unknown, with a cursor at the end."""
+        that is not one the ledger handed out (or a log hash while the log is off) reads cursor_unknown, with a cursor at the end.
+        The head is read before the queue: an ending at or below it is final, so the queue read afterwards cannot show its request
+        waiting, and an ending after it (one this read's expiry wrote among them) is listed by the next call."""
         head = self.events.event_head()
+        waiting = self._waiting()
+        log = self._log()
         seq = int(cursor[1:]) if _EVENT_CURSOR.fullmatch(cursor) else None
         if cursor == "now":
             return {"items": [], "cursor": f"e{head}", "more": False}
