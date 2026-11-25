@@ -35,10 +35,11 @@ The cursor (`e<seq>`, the cursor approval_status(since=...) reads) is a watermar
 was delivered or refused, or did not pass its filter. A pending or dead notice holds it back, so a later success never moves it
 past a gap; the receiver fetches the gap with approval_status(since=<cursor>).
 
-Egress (SSRF): https only; the host must be on NOTICE_HOSTS; it is resolved at every attempt and every address must be globally
-routable, or the host must be on NOTICE_PRIVATE_HOSTS (a receiver on the owner's own network). A link-local, multicast,
-unspecified or reserved address is refused always. The connection goes to the address that was checked, with TLS verified for the
-host name, and a timeout of 10 s for the connect and then 10 s for the whole attempt, however slowly the receiver answers.
+Egress (SSRF): https only; the host must be on NOTICE_HOSTS; it is resolved at every attempt, waiting at most 10 s, and every
+address must be globally routable, or the host must be on NOTICE_PRIVATE_HOSTS (a receiver on the owner's own network). A
+link-local, multicast, unspecified or reserved address is refused always. The connection goes to the address that was checked,
+with TLS verified for the host name, and a timeout of 10 s for the connect and then 10 s for the whole attempt, however slowly
+the receiver answers.
 
 The tables are new beside the store's; PRAGMA user_version stays 2, so the previous version starts on the same DATA_DIR and ignores
 them (D9-8).
@@ -688,6 +689,27 @@ class NoticeService:
         self._failed(row, attempts, time.time(), status, error, retry_after)
         return "pending" if attempts < len(BACKOFF) else "dead"
 
+    def _lookup(self, host: str, port: int) -> list[str]:
+        """Resolve in a helper thread, waiting at most TIMEOUT: a lookup that hangs ends the attempt (resolve_timeout) and leaves
+        the worker free; the helper ends when the system's lookup returns."""
+        got: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                got["ips"] = self.resolve(host, port)
+            except Exception as e:  # noqa: BLE001  -- read below
+                got["error"] = e
+        t = threading.Thread(target=run, name="icloud-notices-resolve", daemon=True)
+        t.start()
+        t.join(TIMEOUT)
+        if t.is_alive():
+            raise Refused("resolve_timeout")
+        if "ips" not in got:
+            if isinstance(got.get("error"), OSError):
+                raise Refused("resolve_failed")
+            raise got["error"]
+        return got["ips"]
+
     def _post(self, url: str, headers: dict[str, str], data: bytes) -> tuple[int, dict[str, str]]:
         """Check the URL and every address it resolves to now, then post to the checked one."""
         parts = urlsplit(url)
@@ -697,10 +719,7 @@ class NoticeService:
         if host not in self.hosts:
             raise Refused("host_not_allowed")
         port = parts.port or 443
-        try:
-            ips = self.resolve(host, port)
-        except OSError:
-            raise Refused("resolve_failed") from None
+        ips = self._lookup(host, port)
         private_ok = host in self.private_hosts
         if not ips or not all(address_ok(ip, private_ok) for ip in ips):
             raise Refused("address_not_allowed")

@@ -1093,3 +1093,27 @@ def test_review9_resend_fills_the_queue_only_up_to_its_bound_oldest_first(tmp_pa
     svc.fan_out()
     assert svc.resend(rec["id"]) == (2, 3)
     assert [r["state"] for r in rows(svc)] == ["pending", "pending", "dead", "dead", "dead", "pending"]
+
+
+def test_review10_a_stalled_name_lookup_ends_the_attempt_at_the_deadline_with_a_code(tmp_path, monkeypatch):
+    """protects=third review, point 1: name resolution is bounded by the attempt's deadline, so a lookup that hangs does not hold
+    the only worker; fails_when=the worker waits for the resolver as long as it takes, or the attempt is not a failure with a code;
+    no_claim=the resolver thread itself, which ends when the system's lookup returns."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(N, "TIMEOUT", 0.5)
+    release_dns = threading.Event()
+
+    def stalled(host, port):
+        release_dns.wait(3)
+        return [PUBLIC_IP]
+    svc.resolve = stalled
+    svc.add(URL)
+    add(st)
+    began = time.monotonic()
+    try:
+        svc.run_once()
+        took = time.monotonic() - began
+    finally:
+        release_dns.set()
+    assert took < 2.0, took
+    assert rx.calls == [] and [(r["state"], r["last_error"]) for r in rows(svc)] == [("pending", "resolve_timeout")]
