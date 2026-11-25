@@ -1,7 +1,7 @@
 # Sendgate: one approval gate for what an agent sends
 
 Status: reviewed and approved 2026-11-13 (see "Review obligations"). "Sendgate" is the working title the dashboard already
-shows. Packages 0 to 4, 5a, 5b, 6a, 6b and 9a are built; the others are not.
+shows. Packages 0 to 4, 5a, 5b, 6a, 6b, 9a and 9b are built; the others are not.
 "Current state" was read at commit `330c82f` (branch `mb/ionic-ui`, renamed `mb/sendgate` on 2026-11-18), which left upstream at `184ffa8`.
 
 ## Context
@@ -1442,6 +1442,45 @@ Tests: `tests/test_status_ledger.py`. The answers of commit `1f42796` for one re
 `tests/fixtures/status_ledger_golden.json` and compared as JSON; the same answers with the log off; ledger cursors and paging; one
 event per row of the status table; a rolled-back change; an UPDATE refused; no parameter in any event; retention; reconciling; and
 the previous version, run from `git archive 1f42796` between two starts of this one.
+
+### As built (9b)
+
+`gate/notices.py` delivers notices by webhook on top of the ledger. Tables `notice` (seq, event id, request, hash, time),
+`notice_delivery` (seq, receiver, generation, state, attempts, next try, last status or error code) and `notice_progress` sit beside
+the store's in `approvals.db`; `PRAGMA user_version` stays 2 (D9-8).
+
+- Fan-out: one transaction reads the events after its recorded progress, gives each an event id, makes one delivery per receiver
+  whose filter it passes and moves the progress. The first start of 9b begins at the ledger's head. An export's discard (reason
+  `exported`) makes no notice, as `since` lists none.
+- Body: type, the event's time and data {id, kind (as `approval_status` names it), action_type, status, reason, edited, sha256,
+  cursor}; no `requested_by` (D9-6). `sha256` is the request's hash when the notice is made.
+- Signing per Standard Webhooks with the secret's base64 after `whsec_`; the spec's own example is the test vector. A new secret
+  signs beside the old one for 24 hours, or until the owner ends it. `X-MCP-Subscription-Id` names the receiver.
+- Delivery: one worker thread, one request at a time (the spec allows 4), 10 s timeout. Six attempts (at once, 5 s, 5 min, 30 min,
+  2 h, 5 h) with 10 % jitter, then `dead`; 410 and 413 `refused`; 429 and 502 to 504 wait twice as long, or as Retry-After says, up
+  to an hour; a redirect is a failure and never followed. An attempt is counted before it is sent, so a request on the wire at a
+  stop goes again with the same `webhook-id`. 10 000 pending per receiver at most. The worker runs only while a receiver exists,
+  looks for new events every second and reads the store once a minute, so an expiry leaves within two minutes.
+- Cursor: below the receiver's oldest pending or dead notice, at most the fan-out's progress; a refused notice does not hold it
+  (the receiver answered). Events outside a receiver's filter do not hold it either.
+- Egress: https, a host on `NOTICE_HOSTS`, every address the host resolves to at that attempt globally routable, or any but
+  link-local, multicast and unspecified for a host on `NOTICE_PRIVATE_HOSTS`; the connection goes to the checked address with TLS
+  verified for the name.
+- Settings: `NOTICE_HOSTS` and `NOTICE_PRIVATE_HOSTS` in a group "Allowed hosts" (`_adds_entry`); like every setting they apply after
+  a restart. Settings, "Activity and server", "Notices" is the plainest list in the style of Notifications and Passkeys: the hosts
+  (opens the group), each receiver with its URL and one line (last delivered, waiting, not delivered, refused, last error, old
+  secret still signs) and the buttons Send again (when some are dead), New secret or End old secret, and Remove; then "Add a
+  receiver" with the address. A secret shows once in a notice with Copy. There was no mock; the owner may want one. The filter and
+  a new URL for a receiver exist in the API (`/dashboard/api/notices/<id>/change`) but not on the page.
+- Adding a receiver, a new URL, a wider filter and a new secret need a recent sign-in; removing, ending the old secret and sending
+  again do not. The log records `notice.receiver_added`, `_changed`, `_rotated`, `_removed` and `notice.resent` with the host only.
+  A receiver failing for 24 hours adds `notices` to `icloud_check_health`.
+
+Tests: `tests/test_notices.py` (status table, body, signing vector and rotation, schedule, Retry-After, 410/413, order, cursor and
+`since` with the log on and off, address and URL checks, fan-out crash, generations, a stop on the wire, expiry, retention, a local
+HTTPS receiver with a test certificate, the previous version run from `git archive acebbf9`) and `tests/test_notices_dashboard.py`
+(settings step-up, wiring, health, the API, a real mail end to end, no tool). The "process killed" of criterion 4 is simulated in
+one process by closing and opening the store and the service again.
 
 ## Package 10: standing approval for named people
 

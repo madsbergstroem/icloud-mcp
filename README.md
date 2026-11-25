@@ -600,6 +600,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `OWNER_PASSWORD_LOGIN` | true | `false` = the dashboard signs in with a passkey only, once one exists |
 | `DASHBOARD_SESSION_MINUTES` | 30 | A dashboard sign-in ends after this long without use (12 hours at most) |
 | `AUDIT_LOG`, `AUDIT_KEEP_DAYS` | true, 90 | The activity log in `DATA_DIR/audit.jsonl` and how many days it keeps |
+| `NOTICE_HOSTS`, `NOTICE_PRIVATE_HOSTS` | empty (none) | Hosts a receiver of signed notices of decisions may use (fork; receivers are added under Settings, Notices), and those of them that may resolve to a private address. Empty means no notice leaves the server |
 | `DASHBOARD_SETTINGS` | edit | `view` = settings are shown on the dashboard but not changed there; `off` = `DATA_DIR/settings.json` is ignored |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | `claude.ai,claude.com,chatgpt.com,chat.openai.com,localhost,127.0.0.1` | Where sign-in may return a client: Claude, ChatGPT, and local clients such as Codex. Every sign-in still needs the owner password |
 | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL` | 3600, 30 days | Token lifetimes (refresh tokens rotate) |
