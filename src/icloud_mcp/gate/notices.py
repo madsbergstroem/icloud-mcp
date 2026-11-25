@@ -277,6 +277,11 @@ def filter_wider(old: dict[str, list[str]], new: dict[str, list[str]]) -> bool:
     return False
 
 
+# a pending delivery that waits for no earlier pending notice of its request and receiver (_due and the worker's wait)
+_FREE = ("d.state = 'pending' AND NOT EXISTS (SELECT 1 FROM notice_delivery e WHERE e.receiver = d.receiver AND "
+         "e.generation = d.generation AND e.request_id = d.request_id AND e.state = 'pending' AND e.seq < d.seq)")
+
+
 class NeedsConfirm(Exception):
     """A change lets more through than the receiver as it is now, and the owner has not signed in recently."""
 
@@ -587,10 +592,8 @@ class NoticeService:
         return min(done, held - 1) if held is not None else done
 
     def _due(self, now: float) -> list[sqlite3.Row]:
-        return self._db.execute(
-            "SELECT * FROM notice_delivery d WHERE state = 'pending' AND next_at <= ? AND NOT EXISTS (SELECT 1 FROM notice_delivery e "
-            "WHERE e.receiver = d.receiver AND e.generation = d.generation AND e.request_id = d.request_id AND e.state = 'pending' "
-            "AND e.seq < d.seq) ORDER BY next_at, seq LIMIT 100", (now,)).fetchall()
+        return self._db.execute(f"SELECT * FROM notice_delivery d WHERE {_FREE} AND next_at <= ? ORDER BY next_at, seq LIMIT 100",
+                                (now,)).fetchall()
 
     def _end(self, row: Any, state: str, now: float, status: int | None = None, error: str | None = None) -> None:
         with self._lock, _Tx(self._db):        # one connection for every thread: each transaction holds the lock
@@ -739,7 +742,7 @@ class NoticeService:
 
     def _next_wait(self) -> float:
         with self._lock:
-            r = self._db.execute("SELECT MIN(next_at) FROM notice_delivery WHERE state = 'pending'").fetchone()[0]
+            r = self._db.execute(f"SELECT MIN(next_at) FROM notice_delivery d WHERE {_FREE}").fetchone()[0]   # as _due picks
         until = (r - time.time()) if r is not None else 30.0
         return max(0.0, min(until, 1.0))       # a new event is looked for every second
 

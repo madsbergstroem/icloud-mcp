@@ -1031,3 +1031,17 @@ def test_review5_one_worker_and_one_attempt_at_a_time_per_delivery(tmp_path, mon
         assert sum(1 for x in threading.enumerate() if x.name == "icloud-notices") - before == 1
     finally:
         svc.stop()
+
+
+def test_review6_the_worker_waits_while_the_only_due_row_waits_for_an_earlier_one(tmp_path, monkeypatch):
+    """protects=review finding 6: the worker's wait counts only rows _due could pick (none waiting for an earlier notice of its
+    request and receiver), so a later notice held back by a retry does not make it spin; fails_when=the wait is 0 while nothing can
+    be sent; no_claim=the length of a round."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch, 500, 200)
+    svc.add(URL)
+    q = add(st)
+    st.claim(q.id, "discarded")
+    svc.run_once()
+    assert [(r["state"], r["attempts"]) for r in rows(svc)] == [("pending", 1), ("pending", 0)]
+    assert svc._due(clock.now) == []
+    assert svc._next_wait() == 1.0
