@@ -310,6 +310,8 @@ class NoticeService:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._thread_lock = threading.Lock()
+        self._busy: set[tuple[int, str, int]] = set()     # deliveries on the wire now (one process holds the DATA_DIR lock)
         self.autostart = False                 # start() turns it on: the worker then runs while a receiver exists
         self._clock_at = 0.0
         self._retained_at = 0.0
@@ -608,7 +610,19 @@ class NoticeService:
                              "generation = ? AND state = 'pending'", (now + wait, status, error, row["seq"], row["receiver"], row["generation"]))
 
     def deliver(self, row: Any) -> str:
-        """One attempt for one delivery row. Returns the row's state afterwards."""
+        """One attempt for one delivery row. Returns the row's state afterwards, or "busy" when another caller is sending it."""
+        key = (row["seq"], row["receiver"], row["generation"])
+        with self._lock:
+            if key in self._busy:
+                return "busy"
+            self._busy.add(key)
+        try:
+            return self._deliver(row)
+        finally:
+            with self._lock:
+                self._busy.discard(key)
+
+    def _deliver(self, row: Any) -> str:
         now = time.time()
         with self._lock:
             r = self._get(row["receiver"])
@@ -739,11 +753,12 @@ class NoticeService:
             self._wake.clear()
 
     def _ensure_thread(self) -> None:
-        if not self.autostart or not self._receivers or (self._thread is not None and self._thread.is_alive()):
-            return
-        self.fan_out()                         # the first run records where the fan-out starts
-        self._thread = threading.Thread(target=self._loop, name="icloud-notices", daemon=True)
-        self._thread.start()
+        with self._thread_lock:                # two callers at once start one worker
+            if not self.autostart or not self._receivers or (self._thread is not None and self._thread.is_alive()):
+                return
+            self.fan_out()                     # the first run records where the fan-out starts
+            self._thread = threading.Thread(target=self._loop, name="icloud-notices", daemon=True)
+            self._thread.start()
 
     def start(self) -> None:
         """Run the worker thread while a receiver exists (it starts with the first one added)."""

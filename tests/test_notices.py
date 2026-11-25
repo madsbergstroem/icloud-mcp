@@ -982,3 +982,52 @@ def test_review4_every_transaction_waits_for_the_lock_and_memory_changes_only_af
         with pytest.raises(OSError):
             step()
         assert json.dumps(svc._receivers, sort_keys=True) == before
+
+
+def test_review5_one_worker_and_one_attempt_at_a_time_per_delivery(tmp_path, monkeypatch):
+    """protects=review finding 5: one worker thread however many callers start it at once, and a delivery that is on the wire is
+    not sent a second time by another caller; fails_when=two threads run the worker, or two callers send the same delivery;
+    no_claim=a second process (the DATA_DIR lock keeps it out)."""
+    clock, st, svc, rx = setup(tmp_path, monkeypatch)
+    svc.add(URL)
+    add(st)
+    svc.fan_out()
+    row = rows(svc)[0]
+    gate, calls = threading.Event(), []
+
+    def slow(*a, **k):
+        calls.append(1)
+        gate.wait(2)
+        return 200, {}
+    svc.transport = slow
+    t = threading.Thread(target=svc.deliver, args=(row,))
+    t.start()
+    for _ in range(100):
+        if calls:
+            break
+        threading.Event().wait(0.02)
+    try:
+        svc.deliver(row)                                                       # a second caller while the first is on the wire
+    finally:
+        gate.set()
+        t.join()
+    assert len(calls) == 1 and [r["state"] for r in rows(svc)] == ["delivered"]
+
+    svc.transport = Receiver(200)
+    svc.autostart = True
+    plain = svc.fan_out
+
+    def slow_fan_out():
+        time.sleep(0.2)
+        return plain()
+    monkeypatch.setattr(svc, "fan_out", slow_fan_out)
+    before = sum(1 for x in threading.enumerate() if x.name == "icloud-notices")
+    starters = [threading.Thread(target=svc._ensure_thread) for _ in range(2)]
+    try:
+        for s in starters:
+            s.start()
+        for s in starters:
+            s.join()
+        assert sum(1 for x in threading.enumerate() if x.name == "icloud-notices") - before == 1
+    finally:
+        svc.stop()
