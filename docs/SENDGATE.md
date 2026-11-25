@@ -1420,15 +1420,18 @@ the read-in of a JSON queue (waiting, `queued`). A claim for execution, a releas
   `expires_at` as its time, so the answer does not depend on when it was noticed. 9b's worker reads the store once a minute and so
   bounds when the notice leaves.
 - Rollback: a new table, index and trigger; `PRAGMA user_version` stays 2 (D9-8). The first open in a process runs `_reconcile`
-  before the crash recovery. A request whose last event does not say its state (`executing` counts as waiting) gets the missing
-  event, marked `reconciled`; for an ending, `edited` comes from the versions (an owner's version newer than the agent's).
+  before the crash recovery. A request whose last event does not say its state (`executing` counts as waiting; an ending must
+  match in status and reason, so the owner's discard after an export is not taken for the export) gets the missing event, marked
+  `reconciled`. A reconciled ending's `edited` is the one the ledger last recorded for the request: an owner's version alone (a
+  file added on the card) is no edit, and an edit made while the previous version ran is not known (the log answers it).
 - `approval_status(id)`: a waiting request answers from the queue as before, an ended one from its last event, with the log on or
   off. The log still answers where the ledger has nothing (a JSON queue, a request being carried out, one that ended before 9a and
   left the store) and for a reconciled event whose request the log has an entry for, so answers about earlier history stay as they
   were. With the log off, only `unknown` carries a note.
 - `approval_status(since)`: `since="now"` returns `e<seq>`, the ledger's newest seq (`e0` before the first event). With such a
   cursor the answer lists the requests whose newest ending came after it, in that order, 50 at a time; the next cursor is the seq
-  of the last one listed, or the newest seq. Waiting events (queued, revised) are in the ledger and are not listed, as before. An
+  of the last one listed, or the newest seq. The head is read before the queue, so an approval that ends during the call is listed
+  by the next one, never skipped. Waiting events (queued, revised) are in the ledger and are not listed, as before. An
   `e` cursor past the newest seq reads `cursor_unknown`. A log-hash cursor works as before while the log is on and hands back log
   cursors; with the log off it reads `cursor_unknown` and comes back with an `e` cursor.
 - One answer changed with the log on: the old `/outbox` page's "discard all" logs several ids in one line without an action type,
