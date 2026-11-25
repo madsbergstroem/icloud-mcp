@@ -2961,6 +2961,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                 **({"approval_tools": mcp._icloud_approval_tools} if getattr(mcp, "_icloud_approval_tools", "") else {}),
                 **({"approval_store": {"ok": False, "problem": p}} if (p := " ".join(x for x in (getattr(box, "problem", "") for box in (
                     getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
+                **({"notices": {"ok": False, "problem": " ".join(p)}} if (p := (n.problems() if (n := getattr(getattr(
+                    mcp, "_icloud_dashboard", None), "notices", None)) is not None else [])) else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check

@@ -37,6 +37,7 @@ IMESSAGE_MAX_AGE_DAYS IMESSAGE_HIDE_SHORT_CODES IMESSAGE_NEVER_SEND IMESSAGE_ALL
 IMESSAGE_SEND_ALLOWLIST SHORTCUTS_ALLOW BRIDGE_JOB_TIMEOUT_SECONDS
 READ_ONLY
 OWNER_PASSWORD_LOGIN DASHBOARD_SESSION_MINUTES AUDIT_LOG AUDIT_KEEP_DAYS
+NOTICE_HOSTS NOTICE_PRIVATE_HOSTS
 """.split())
 _dashboard_values: dict[str, str] = {}   # the dashboard's values while Settings.from_env runs; they win over the environment
 
@@ -277,6 +278,8 @@ class Settings:
     dashboard_session_minutes: int = 30  # DASHBOARD_SESSION_MINUTES: a dashboard session ends after this long without use
     audit_log: bool = True        # AUDIT_LOG: record writes, approvals and sign-ins in DATA_DIR/audit.jsonl
     audit_keep_days: int = 90     # AUDIT_KEEP_DAYS: how long activity entries are kept
+    notice_hosts: tuple[str, ...] = ()          # NOTICE_HOSTS: hosts a notice receiver's URL may use (empty = no notice leaves)
+    notice_private_hosts: tuple[str, ...] = ()  # NOTICE_PRIVATE_HOSTS: of those, the ones that may resolve to a private address
     invites_require_approval: bool = False  # ALLOW_CALENDAR_INVITES=approve: such writes wait for the owner on the dashboard
     dashboard_settings: str = "edit"        # DASHBOARD_SETTINGS: edit | view (shown, not changeable) | off (settings.json ignored)
     settings_active: tuple[str, ...] = ()   # which settings come from DATA_DIR/settings.json (names only)
@@ -423,6 +426,8 @@ class Settings:
             dashboard_session_minutes=max(5, min(_int("DASHBOARD_SESSION_MINUTES", 30), 720)),
             audit_log=_bool("AUDIT_LOG", True),
             audit_keep_days=max(1, min(_int("AUDIT_KEEP_DAYS", 90), 3650)),
+            notice_hosts=tuple(h.strip().lower() for h in _list("NOTICE_HOSTS") if h.strip()),
+            notice_private_hosts=tuple(h.strip().lower() for h in _list("NOTICE_PRIVATE_HOSTS") if h.strip()),
             invites_require_approval=_str("ALLOW_CALENDAR_INVITES").lower() == "approve",
             mail_password=_str("MAIL_PASSWORD"),
             caldav_password=_str("CALDAV_PASSWORD"),
