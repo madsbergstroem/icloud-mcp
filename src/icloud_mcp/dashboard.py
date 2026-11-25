@@ -569,6 +569,19 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         box = getattr(getattr(src, "cal", None), "outbox", None) or getattr(src, "box", None)
         if box is not None:
             box.on_new = (lambda q, src=src: d.push.notify(push_kind(src, q), f"{src.kind}:{q.id}"))
+    # Notices of decisions to the owner's receivers (gate/notices.py, package 9b): they need the approval store's ledger
+    d.notices = None
+    store = next((src.box for src in d.sources.values() if hasattr(getattr(src, "box", None), "last_event")), None)
+    if store is not None:
+        from .gate.notices import NoticeService
+        registry = getattr(d.sources.get("external"), "registry", None)
+
+        def notice_kind(type_id: str) -> str | None:            # what approval_status calls it (D6-8), as server.py's kind_of
+            reg = registry.get(type_id) if registry is not None else None
+            return getattr(reg, "status_kind", None) if reg is not None else ("mail" if type_id.startswith("mail.") else None)
+        d.notices = NoticeService(s.data_dir, [store], hosts=s.notice_hosts, private_hosts=s.notice_private_hosts,
+                                  keep_days=s.audit_keep_days, kinds=notice_kind)
+        d.notices.start()
     from .dashboard_api import register_api
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
                  record_failure_line=record_failure_line, headers=_HEADERS, for_owner=for_owner,

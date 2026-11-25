@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Notices of decisions by webhook (fork).** The server can tell your own systems each time a request an agent queued is
+  queued, decided or runs out, so an agent that runs unattended learns the outcome without asking. Add the hosts under Settings,
+  Notices, Allowed hosts (`NOTICE_HOSTS`, and `NOTICE_PRIVATE_HOSTS` for one on your own network), restart, then add a receiver's
+  https address there. Each notice is signed per Standard Webhooks with a secret the server makes and shows once; it carries the
+  request's id, kind, type, status, reason code, whether you edited it, its hash and a cursor for `approval_status(since=...)`,
+  never what the request says or who asked. Failed notices are retried for about 7.5 hours, then shown as not delivered, and you
+  can send them again. No tool can see or change a receiver. The previous version still starts on the same `DATA_DIR` and sends
+  nothing.
+
 - **Agents learn how a request ended with the activity log off (fork).** Every change of a request's status is now recorded in
   the approval store (`approvals.db`), in the same step as the change itself. `approval_status` reads that record, so with
   `AUDIT_LOG=false` an approved, discarded, withdrawn or expired request no longer reads "unknown". With the log on, the answers

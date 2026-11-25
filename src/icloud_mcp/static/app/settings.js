@@ -1,4 +1,5 @@
-// Activity, Settings and the pages Settings opens: notifications, passkeys, apps, the password, one settings area, the server.
+// Activity, Settings and the pages Settings opens: notifications, passkeys, apps, the password, one settings area, the server,
+// notices of decisions.
 // The pages of the connected services are in services.js.
 import { get, post, session, loadSession, token, confirmNow } from "./api.js";
 import { esc, ago, toast, fail, ask, section, titleBlock, row, tag, wide, selectUi } from "./ui.js";
@@ -103,6 +104,7 @@ export const PAGES = {
   helper: { slug: "helper", title: "Mac helper", sections: ["Shortcuts and timing"] },
   tools: { slug: "areas", title: "Only these tools", keys: ["TOOLS"] },
   log: { slug: "dashboard", title: "Activity log", sections: ["Activity log", "Sign-in"], hide: ["OWNER_PASSWORD_LOGIN"] },
+  notices: { slug: "notices", title: "Allowed hosts" },
 };
 
 function owner(st, key) { return (st.groups.find((g) => g.fields.some((f) => f.key === key)) || {}).slug; }
@@ -180,6 +182,7 @@ class Settings extends HTMLElement {
         <p class="note">These apply to every connected service.</p>`,
       server: head("Activity and server") + `<ion-list class="inset">
         ${row({ title: "Activity log", button: true, attrs: 'data-page="log"' })}
+        ${row({ title: "Notices", button: true, attrs: 'data-nav="icm-notices"' })}
         ${row({ title: "Server", note: esc(s.version), button: true, attrs: 'data-nav="icm-server"' })}
         ${feedback() ? row({ title: "Send feedback", sub: "A bug or a wish for this dashboard", button: true, attrs: "data-feedback" }) : ""}</ion-list>`,
     };
@@ -554,5 +557,70 @@ class Notifications extends HTMLElement {
   }
 }
 customElements.define("icm-notifications", Notifications);
+
+// -- notices of decisions (package 9b) ------------------------------------------------------------------------------------
+// Receivers the owner names: a signed note to each, every time a request changes state. A secret is shown once, when it is made.
+class Notices extends HTMLElement {
+  connectedCallback() { this.body = page(this, "", "Settings"); this.secret = null; this.load(); }
+
+  line(r) {
+    const s = r.status;
+    return [s.last_ok_at ? `Last delivered ${ago(s.last_ok_at)}` : "Nothing delivered yet",
+      s.pending ? `${s.pending} waiting` : "", s.dead ? `${s.dead} not delivered` : "", s.refused ? `${s.refused} refused` : "",
+      s.last_error ? `last error ${s.last_error}` : "", r.rotating ? "old secret still signs" : ""].filter(Boolean).join(" · ");
+  }
+
+  async load() {
+    let st;
+    try { st = await get("/notices"); } catch (e) { fail(e); return; }
+    const full = st.receivers.length >= st.max;
+    this.body.innerHTML = titleBlock("Notices", "A signed note to your own systems each time a request is decided. It carries ids and codes, never what a request says.")
+      + (this.secret ? `<div class="notice warn"><div><b>Secret for ${esc(this.secret.host)}, shown only this once</b><br>
+          <span class="mono" style="word-break:break-all">${esc(this.secret.value)}</span>
+          <div class="btns"><ion-button size="small" data-copy>Copy</ion-button><ion-button size="small" fill="clear" data-hide>Done</ion-button></div></div></div>` : "")
+      + section("Allowed hosts") + `<ion-list class="inset">${row({ title: "Hosts receivers may use", sub: esc(st.hosts.join(", ") || "None: no notice leaves the server"), button: true, attrs: 'data-page="notices"' })}</ion-list>`
+      + (st.receivers.length ? section("Receivers") + `<ion-list class="inset">${st.receivers.map((r) => `<ion-item><ion-label class="ion-text-wrap">
+          <h2>${esc(r.url)}</h2><p>${esc(this.line(r))}</p></ion-label>
+          ${r.status.dead ? `<ion-button slot="end" fill="clear" size="small" data-resend="${esc(r.id)}">Send again</ion-button>` : ""}
+          ${r.rotating ? `<ion-button slot="end" fill="clear" size="small" data-endold="${esc(r.id)}">End old secret</ion-button>`
+            : `<ion-button slot="end" fill="clear" size="small" data-rotate="${esc(r.id)}" data-host="${esc(r.host)}">New secret</ion-button>`}
+          <ion-button slot="end" fill="clear" color="danger" size="small" data-remove="${esc(r.id)}" data-host="${esc(r.host)}">Remove</ion-button></ion-item>`).join("")}</ion-list>` : "")
+      + section("Add a receiver") + `<ion-list class="inset"><ion-item><ion-input label="Address" label-placement="stacked" type="url" inputmode="url"
+          placeholder="https://hooks.example.org/sendgate" data-url ${full || !st.hosts.length ? "disabled" : ""}></ion-input></ion-item></ion-list>
+        <div class="acts"><ion-button data-add ${full || !st.hosts.length ? "disabled" : ""}>Add</ion-button></div>
+        <p class="note">${full ? `At most ${st.max} receivers.` : st.hosts.length ? "The host must be on Allowed hosts, and the place the server runs must let it reach that host."
+          : "Add a host under Allowed hosts first; it applies after a restart."}</p>`;
+    this.wire();
+  }
+
+  show(host, value) { this.secret = value ? { host, value } : null; this.load(); }
+
+  wire() {
+    this.querySelectorAll("[data-page]").forEach((n) => n.addEventListener("click", () => push(this, "icm-group", { page: n.dataset.page })));
+    this.querySelector("[data-copy]")?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(this.secret.value); toast("Copied."); } catch (e) { fail(new Error("Copy it by hand.")); }
+    });
+    this.querySelector("[data-hide]")?.addEventListener("click", () => this.show());
+    this.querySelector("[data-add]")?.addEventListener("click", async () => {
+      const url = await this.querySelector("[data-url]").getInputElement().then((i) => i.value);
+      try { const r = await post("/notices/add", { url }); toast(r.note); this.show(r.receiver.host, r.secret); } catch (e) { fail(e); }
+    });
+    this.querySelectorAll("[data-rotate]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await ask(`New secret for ${b.dataset.host}?`, "The old one keeps signing beside it for 24 hours.", "Make one"))) return;
+      try { const r = await post(`/notices/${encodeURIComponent(b.dataset.rotate)}/rotate`); toast(r.note); this.show(b.dataset.host, r.secret); } catch (e) { fail(e); }
+    }));
+    this.querySelectorAll("[data-endold]").forEach((b) => b.addEventListener("click", async () => {
+      try { const r = await post(`/notices/${encodeURIComponent(b.dataset.endold)}/end-old`); toast(r.note); this.load(); } catch (e) { fail(e); }
+    }));
+    this.querySelectorAll("[data-resend]").forEach((b) => b.addEventListener("click", async () => {
+      try { const r = await post(`/notices/${encodeURIComponent(b.dataset.resend)}/resend`); toast(r.note); this.load(); } catch (e) { fail(e); }
+    }));
+    this.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await ask(`Remove ${b.dataset.host}?`, "No more notices go there, and the ones still waiting are dropped.", "Remove", { danger: true }))) return;
+      try { const r = await post(`/notices/${encodeURIComponent(b.dataset.remove)}/remove`); toast(r.note); this.load(); } catch (e) { fail(e); }
+    }));
+  }
+}
+customElements.define("icm-notices", Notices);
 
 export { loadSession };

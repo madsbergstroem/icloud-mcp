@@ -114,7 +114,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
 
     # -- the activity table: what each entry did, to what, and its details (the log holds names, addresses and hashes, no text)
     actions = {"all": ("All actions", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agent requests", ("tool.",)),
-               "settings": ("Settings", ("settings.", "accounts.", "push.", "server.", "owner_password.")),
+               "settings": ("Settings", ("settings.", "accounts.", "push.", "notice.", "server.", "owner_password.")),
                "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
     labels = {"approval.sent": "Approved", "approval.discarded": "Discarded", "approval.edited": "Edited", "approval.edit_undone": "Edited",
               "approval.withdrawn": "Withdrawn", "approval.revised": "Changed", "approval.expired": "Expired", "approval.failed": "Failed",
@@ -124,6 +124,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
               "app.connected": "App connected", "app.denied": "App refused", "app.signed_out": "App signed out",
               "app.signed_out_all": "App signed out", "settings.changed": "Setting", "accounts.changed": "Accounts",
               "push.added": "Notifications", "push.removed": "Notifications", "server.paused": "Paused", "server.resumed": "Resumed",
+              "notice.receiver_added": "Notices", "notice.receiver_changed": "Notices", "notice.receiver_rotated": "Notices",
+              "notice.receiver_removed": "Notices", "notice.resent": "Notices",
               "server.restart": "Restarted", "owner_password.changed": "Password"}
     warn_tags = ("Changed", "Unclear", "Withdrawn", "Expired", "Not sent")
     lead = re.compile(r"^(?:Approved|Discarded|Did not send|Could not send|Withdrew|Edited|Brought back the original text of|Added|Removed"
@@ -804,6 +806,145 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if counts["ok"]:
             return ok({"note": "Sent. It should arrive in a few seconds.", **counts})
         return err("The push service did not take it." + (" The device was removed; turn notifications on again." if counts["gone"] else ""), 502, **counts)
+
+    # -- notices of decisions (gate/notices.py, package 9b): receivers come from the owner here, never from a tool ----------
+    # The secret is in the answer that makes it (add, a new URL, a new secret) and nowhere else; the log names the host only.
+    def notice_service() -> Any:
+        return getattr(d, "notices", None)
+
+    @route("/notices", ["GET"])
+    async def notices_state(request: Request) -> Response:
+        got = reader(request)
+        if isinstance(got, Response):
+            return got
+        svc = notice_service()
+        if svc is None:
+            return err("Notices need the approval store, which this server does not run.", 404)
+        from .gate.notices import MAX_RECEIVERS
+        return ok({"receivers": await asyncio.to_thread(svc.receivers), "hosts": sorted(svc.hosts),
+                   "private_hosts": sorted(svc.private_hosts), "max": MAX_RECEIVERS})
+
+    async def notice_writer(request: Request) -> tuple[Any, dict[str, Any], dict[str, Any]] | Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        svc = notice_service()
+        if svc is None:
+            return err("Notices need the approval store, which this server does not run.", 404)
+        return svc, got[1], got[2]
+
+    @route("/notices/add", ["POST"])
+    async def notices_add(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc, rec, body = got
+        from .gate.notices import clean_filter
+        try:
+            url, filt = svc.check_url(str(body.get("url", ""))), clean_filter(body.get("filter"))
+        except ValueError as e:
+            return err(str(e), 400)
+        if not recent(rec):
+            return need_confirm("Notices of every decision go to a new receiver.")
+        try:
+            shown, secret = await asyncio.to_thread(svc.add, url, filt)
+        except ValueError as e:
+            return err(str(e), 400)
+        audit.record("notice.receiver_added", actor="owner", via=rec.get("via", ""), summary=f"Added a receiver of notices on {shown['host']}",
+                     host=shown["host"])
+        return ok({"receiver": shown, "secret": secret,
+                   "note": "Added. Copy the secret now: it is shown only this once, and the receiver checks every notice with it."})
+
+    @route("/notices/{rid}/change", ["POST"])
+    async def notices_change(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc, rec, body = got
+        rid = request.path_params["rid"]
+        url = str(body["url"]) if body.get("url") is not None else None
+        filt = body.get("filter") if isinstance(body.get("filter"), dict) else None
+        try:
+            if url is not None:
+                svc.check_url(url)
+            looser = await asyncio.to_thread(svc.loosens, rid, url, filt)   # the service's lock never blocks the event loop
+        except ValueError as e:
+            return err(str(e), 400)
+        if looser and not recent(rec):
+            return need_confirm("Notices go to a new address, or more of them go out.")
+        from .gate.notices import NeedsConfirm
+        try:
+            done = await asyncio.to_thread(lambda: svc.change(rid, url, filt, may_loosen=recent(rec)))
+        except NeedsConfirm:                   # checked again against the receiver as it is now: another change came first
+            return need_confirm("Notices go to a new address, or more of them go out.")
+        except ValueError as e:
+            return err(str(e), 400)
+        if done is None:
+            return err("There is no such receiver.", 404)
+        shown, secret = done
+        audit.record("notice.receiver_changed", actor="owner", via=rec.get("via", ""), summary=f"Changed a receiver of notices on {shown['host']}",
+                     host=shown["host"])
+        return ok({"receiver": shown, **({"secret": secret} if secret else {}),
+                   "note": "Changed. It has a new secret, shown only this once." if secret else "Changed."})
+
+    @route("/notices/{rid}/rotate", ["POST"])
+    async def notices_rotate(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc, rec, _ = got
+        rid = request.path_params["rid"]
+        if not any(r["id"] == rid for r in await asyncio.to_thread(svc.receivers)):
+            return err("There is no such receiver.", 404)
+        if not recent(rec):
+            return need_confirm("A new signing secret is shown.")
+        secret = await asyncio.to_thread(svc.rotate, rid)
+        if secret is None:
+            return err("There is no such receiver.", 404)
+        host = next(r["host"] for r in await asyncio.to_thread(svc.receivers) if r["id"] == rid)
+        audit.record("notice.receiver_rotated", actor="owner", via=rec.get("via", ""), summary=f"Made a new secret for notices on {host}", host=host)
+        return ok({"secret": secret, "note": "New secret made. The old one signs beside it for 24 hours. Copy it now: it is shown only this once."})
+
+    @route("/notices/{rid}/end-old", ["POST"])
+    async def notices_end_old(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc = got[0]
+        if not await asyncio.to_thread(svc.end_old, request.path_params["rid"]):
+            return err("That receiver has no old secret.", 404)
+        return ok({"note": "Only the new secret signs now."})
+
+    @route("/notices/{rid}/remove", ["POST"])
+    async def notices_remove(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc, rec, _ = got
+        shown = await asyncio.to_thread(svc.remove, request.path_params["rid"])
+        if shown is None:
+            return err("There is no such receiver.", 404)
+        audit.record("notice.receiver_removed", actor="owner", via=rec.get("via", ""), summary=f"Removed the receiver of notices on {shown['host']}",
+                     host=shown["host"])
+        return ok({"note": f"No more notices go to {shown['host']}."})
+
+    @route("/notices/{rid}/resend", ["POST"])
+    async def notices_resend(request: Request) -> Response:
+        got = await notice_writer(request)
+        if isinstance(got, Response):
+            return got
+        svc, rec, _ = got
+        rid = request.path_params["rid"]
+        host = next((r["host"] for r in await asyncio.to_thread(svc.receivers) if r["id"] == rid), None)
+        if host is None:
+            return err("There is no such receiver.", 404)
+        n, left = await asyncio.to_thread(svc.resend, rid)
+        full = f" {left} stay undelivered: the queue for this receiver is full. Send again once it has emptied." if left else ""
+        if not n:
+            return ok({"note": ("Nothing sent again." + full) if left else "Nothing to send again.", "count": 0, "left": left})
+        audit.record("notice.resent", actor="owner", via=rec.get("via", ""), summary=f"Sent {n} notice{'s' if n != 1 else ''} to {host} again",
+                     host=host, count=n)
+        return ok({"note": f"Sending {n} notice{'s' if n != 1 else ''} again." + full, "count": n, "left": left})
 
     d.api_writer, d.api_reader, d.api_ok, d.api_err, d.api_need_confirm = writer, reader, ok, err, need_confirm
     d.bridge_state = bridge_state

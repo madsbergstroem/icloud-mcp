@@ -218,6 +218,12 @@ CORE_GROUPS: list[Group] = [
         Spec("AUDIT_KEEP_DAYS", "Keep activity for", "int", default="90", min=1, max=3650, unit_label="days", loosens=_lower, section="Activity log"),
     ], summary=lambda v: ("Password sign-in on" if _on(v("OWNER_PASSWORD_LOGIN")) else "Passkey only")
                          + (f" · activity kept {v('AUDIT_KEEP_DAYS')} days" if _on(v("AUDIT_LOG")) else " · no activity log")),
+    Group("notices", "Allowed hosts", "Where signed notices of decisions may go. A receiver's address must use one of these hosts.", [
+        Spec("NOTICE_HOSTS", "Hosts receivers may use", "list", "Host names such as hooks.example.org. Empty means no notice leaves "
+             "the server. The host must also be reachable from where the server runs.", loosens=_adds_entry),
+        Spec("NOTICE_PRIVATE_HOSTS", "Hosts on your own network", "list", "Hosts from the list above that may resolve to a private "
+             "address. Any other host must resolve to a public one.", loosens=_adds_entry),
+    ], summary=lambda v: f"{len(_entries(v('NOTICE_HOSTS')))} host(s)" if v("NOTICE_HOSTS") else "No notice leaves the server"),
 ]
 
 
