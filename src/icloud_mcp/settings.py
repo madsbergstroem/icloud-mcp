@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass, field as dfield
 from typing import Any, Callable
@@ -46,6 +47,12 @@ class Spec:
     section: str = ""             # groups fields into cards on a settings page
     hidden: bool = False          # set through another control (the sending choice)
     empty_hint: str = ""          # for a list: shown above the field while it is empty (an action that reaches nobody yet)
+    # package 10 (gate.allow), for a list only: an agent may ask the owner to add one entry; an empty list means anyone (a request
+    # for an entry is then refused, as adding one would shut out everyone else); and (settings, entry) -> {entry, label, problem}:
+    # the entry as the list stores it, what the card names it and why it cannot be added, asked of the service when queued
+    requestable: bool = False
+    empty_means_anyone: bool = False
+    entry_info: Callable[[Any, str], dict[str, Any]] | None = None
 
 
 def _on(v: str) -> bool:
@@ -116,6 +123,26 @@ def _more_history(old: str, new: str) -> bool:
     return o != 0 and (n == 0 or n > o)
 
 
+def _address(_: Any, entry: str) -> dict[str, Any]:
+    """An email address for a mail or invitation list: one person, never a domain (package 10)."""
+    e = entry.strip().lower()
+    local, at, dom = e.partition("@")
+    if not (at and local and "." in dom and " " not in e):
+        return {"problem": "This list takes one email address, such as tom@example.org."}
+    return {"entry": e, "label": e}
+
+
+def _handle(_: Any, entry: str) -> dict[str, Any]:
+    """A Messages handle for the iMessage list: an email address or a phone number, as chat.db holds it (package 10)."""
+    from .config import _norm_handle
+    h = _norm_handle(entry)
+    if "@" in h:
+        return _address(None, h)
+    if not re.fullmatch(r"\+?\d{5,}", h):
+        return {"problem": "This list takes one phone number or email address."}
+    return {"entry": h, "label": h}
+
+
 @dataclass
 class Group:
     slug: str
@@ -151,6 +178,7 @@ CORE_GROUPS: list[Group] = [
         Spec("ALLOW_SEND", "Agents may send mail", default="true", loosens=_to_true, section="Sending", hidden=True),
         Spec("SEND_REQUIRES_APPROVAL", "Send only after my approval", default="true", loosens=_to_false, section="Sending", hidden=True),
         Spec("SEND_ALLOWLIST", "Only send to", "list", "Addresses or domains such as @example.org. Empty means anyone.", loosens=_wider,
+             requestable=True, empty_means_anyone=True, entry_info=_address,
              section="Sending"),
         Spec("MAX_RECIPIENTS", "Recipients per message", "int", default="25", min=1, max=500, loosens=_higher, section="Sending"),
         Spec("SAVE_SENT_COPY", "Keep a copy in Sent", default="true", section="Sending"),
@@ -177,7 +205,8 @@ CORE_GROUPS: list[Group] = [
         Spec("ALLOW_CALENDAR_INVITES", "Invitations to other people", "choice",
              "Events with guests make iCloud email them: invitations, updates and cancellations.", default="false",
              choices=(("false", "Off"), ("approve", "After my approval"), ("true", "Allowed")), loosens=_invites_open, section="Invitations"),
-        Spec("INVITE_ALLOWLIST", "Only invite", "list", "Addresses or domains. Empty means anyone.", loosens=_wider, section="Invitations"),
+        Spec("INVITE_ALLOWLIST", "Only invite", "list", "Addresses or domains. Empty means anyone.", loosens=_wider, section="Invitations",
+             requestable=True, empty_means_anyone=True, entry_info=_address),
         Spec("MAX_ATTENDEES", "Guests per event", "int", default="10", min=1, max=200, loosens=_higher, section="Invitations"),
     ], summary=lambda v: f"{v('DEFAULT_TIMEZONE') or 'UTC'} · invitations "
                          + {"approve": "after your approval", "true": "allowed"}.get(v("ALLOW_CALENDAR_INVITES").lower(), "off")),
@@ -194,7 +223,8 @@ CORE_GROUPS: list[Group] = [
         Spec("ENABLE_HEALTH", "Health", default="false", loosens=_to_true, section="Areas"),
         Spec("IMESSAGE_ALLOW_SEND", "Agents may send iMessages", default="false", loosens=_to_true, section="Messages"),
         Spec("IMESSAGE_SEND_REQUIRES_APPROVAL", "Send iMessages only after my approval", default="true", loosens=_to_false, section="Messages"),
-        Spec("IMESSAGE_SEND_ALLOWLIST", "Who may receive an iMessage", "list", "Empty means nobody, * anyone.", loosens=_changed, section="Messages"),
+        Spec("IMESSAGE_SEND_ALLOWLIST", "Who may receive an iMessage", "list", "Empty means nobody, * anyone.", loosens=_changed, section="Messages",
+             requestable=True, entry_info=_handle),
         Spec("IMESSAGE_NEVER_SEND", "Never send to", "list", loosens=_removes_entry, section="Messages"),
         Spec("IMESSAGE_HIDDEN_CHATS", "Chats agents never see", "list", loosens=_removes_entry, section="Messages"),
         Spec("IMESSAGE_VISIBLE_CHATS", "Only these chats", "list", "Empty means every chat except the hidden ones.", loosens=_changed, section="Messages"),
@@ -257,10 +287,15 @@ SERVER_VIEW = [
 ]
 
 
+_STORE_LOCKS: dict[str, threading.Lock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
+
+
 class SettingsStore:
     def __init__(self, data_dir: str):
         self.path = os.path.join(data_dir, SETTINGS_FILE)
-        self._lock = threading.Lock()
+        with _STORE_LOCKS_GUARD:          # one lock per file, so the dashboard and an approved list entry never lose a change
+            self._lock = _STORE_LOCKS.setdefault(os.path.abspath(self.path), threading.Lock())
 
     def read(self) -> dict[str, str]:
         try:
@@ -274,6 +309,18 @@ class SettingsStore:
         from .admin import _write_private
         with self._lock:
             _write_private(self.path, json.dumps(dict(sorted(values.items())), indent=1) + "\n")
+
+    def change(self, fn: Callable[[dict[str, str]], dict[str, str]]) -> dict[str, str]:
+        """Read what is on disk, let fn return the keys to set, and write them, all under the file's lock, so a dashboard save in
+        between cannot be lost (package 10: an approved list entry is added to the list as it is at that moment)."""
+        from .admin import _write_private
+        with self._lock:
+            stored = self.read()
+            changed = fn(dict(stored))
+            if changed:
+                stored = {**stored, **changed}
+                _write_private(self.path, json.dumps(dict(sorted(stored.items())), indent=1) + "\n")
+            return stored
 
     def update(self, set_: dict[str, str] | None = None, remove: tuple[str, ...] = ()) -> dict[str, str]:
         """Apply only these keys to what is on disk now, read under the lock, so two saves at once cannot lose a change."""
@@ -346,12 +393,20 @@ def validate(new_values: dict[str, str], known_tools: set[str]) -> tuple[str, st
 def register_settings(d: Any, mcp: Any, s: Settings) -> None:
     """Adds Settings to the dashboard `d` (dashboard.Dashboard)."""
     from . import dashboard as D
+    from .gate.allow import origins as allow_origins
 
     store = SettingsStore(s.data_dir)
     editable = s.dashboard_settings == "edit"
     d.extra_nav.append(("settings", "Settings", "/dashboard#/settings"))
     started_with = dict(s.settings_active and store.read() or {})
     state = {"restart_needed": False}
+
+    def waits_for_restart(stored: dict[str, str]) -> bool:
+        """Whether a setting on disk differs from what this server runs with. A list an approved request added to (package 10)
+        already runs with its new entries, so it does not count."""
+        from .config import live_matches
+        return any(stored.get(k) != started_with.get(k) and not live_matches(s, k, stored.get(k, ""))
+                   for k in set(stored) | set(started_with))
 
     def known_tools() -> set[str]:
         return {t.name for t in mcp._tool_manager.list_tools()}
@@ -425,7 +480,8 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
         return {"key": sp.key, "label": sp.label, "kind": sp.kind, "help": sp.help, "value": _on(v) if sp.kind == "bool" else shown,
                 "display": display(sp, v), "source": src, "section": sp.section, "choices": [list(c) for c in sp.choices],
                 "min": sp.min, "max": sp.max, "unit_label": sp.unit_label, "set_here": sp.key in stored,
-                **({"empty_hint": sp.empty_hint} if sp.empty_hint else {})}
+                **({"empty_hint": sp.empty_hint} if sp.empty_hint else {}),
+                **({"origins": allow_origins(s.data_dir, sp.key, v)} if sp.requestable else {})}
 
     def group_json(g: Group, stored: dict[str, str], full: bool) -> dict[str, Any]:
         set_up = not (g.needs_bridge and not s.bridge_token)
@@ -450,7 +506,7 @@ def register_settings(d: Any, mcp: Any, s: Settings) -> None:
                                                      ("set" if os.environ.get(key, "").strip() else "not set") if how == "set" else
                                                      (os.environ.get(key, "").strip() or "default"))] for label, key, how in items]}
                   for title, items in SERVER_VIEW]
-        return d.api_ok({"editable": editable, "restart_needed": bool(state["restart_needed"] or stored != started_with),
+        return d.api_ok({"editable": editable, "restart_needed": bool(state["restart_needed"] or waits_for_restart(stored)),
                          "groups": [group_json(g, stored, True) for g in all_groups()], "server": server, "mac": d.bridge_state(),
                          "values": {sp.key: current(sp.key, stored)[0] for g in all_groups() for sp in g.specs}})
 

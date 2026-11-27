@@ -155,6 +155,38 @@ def _list(name: str, default: str = "") -> list[str]:
     return [p.strip() for p in _str(name, default).split(",") if p.strip()]
 
 
+# The lists an approved request may add an entry to while the server runs (package 10, gate.allow): key -> (field, how an entry
+# is stored). Every other setting still applies after a restart.
+_LIVE_LISTS = {
+    "SEND_ALLOWLIST": ("send_allowlist", lambda x: x.lower()),
+    "INVITE_ALLOWLIST": ("invite_allowlist", lambda x: x.lower()),
+    "IMESSAGE_SEND_ALLOWLIST": ("imessage_send_allowlist", lambda x: _norm_handle(x)),
+    "BEEPER_SEND_ALLOWLIST": ("beeper_send_allowlist", lambda x: x.strip()),
+}
+
+_EMPTY_MEANS_ANYONE = frozenset({"SEND_ALLOWLIST", "INVITE_ALLOWLIST"})
+
+
+def add_live(s: "Settings", key: str, entry: str) -> None:
+    """Add one entry to a list of this running server, as the owner approved it. The entry is written to the dashboard's settings
+    as well, so the next start reads it from there. Only adds: a list never gets narrower here, and only the lists above."""
+    field, norm = _LIVE_LISTS[key]
+    have = tuple(getattr(s, field))
+    if not have and key in _EMPTY_MEANS_ANYONE:     # this server lets anyone through; one entry would shut out everyone else
+        return
+    value = norm(entry)
+    if value and value not in have:
+        object.__setattr__(s, field, have + (value,))      # Settings is frozen for everything else; this is the one way in
+
+
+def live_matches(s: "Settings", key: str, value: str) -> bool:
+    """Whether this running server already holds exactly `value` for one of the lists above (an entry approved meanwhile)."""
+    if key not in _LIVE_LISTS:
+        return False
+    field, norm = _LIVE_LISTS[key]
+    return {norm(x) for x in value.split(",") if x.strip()} == set(getattr(s, field))
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- iCloud credentials -------------------------------------------------
