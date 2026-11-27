@@ -1568,8 +1568,45 @@ The calendar becomes an action type in 5b and mail in 6, so the order is 5b, 6, 
 (`SEND_ALLOWLIST`, `MAX_RECIPIENTS`): a rule only skips the wait. A mail with an attachment never goes without a look, whatever
 rules exist (the owner, 2026-11-18, on the mock of package 6).
 
+### Adding someone to a list on request
+
+The second wish from the live system (2026-11-27): an agent is told "you may write to Jan" and has to send the owner to the
+settings, where adding a chat id to `BEEPER_SEND_ALLOWLIST` asks for a fresh sign-in. Package 10 lets the agent ask for the entry
+instead. Unlike a standing rule, a list entry does not skip the wait: every message to Jan is still approved one by one. It only
+widens who may be reached at all.
+
+| Part | What it is |
+|------|------------|
+| Type `gate.allow` | A request for one list entry, registered by the server itself (`builtin`), `allowed` `["*"]`. Parameters `setting` (the key), `entry`, `reason`. Asked for with `approval_request` |
+| `Spec.requestable` | A new field, `False` by default. Package 10 sets it on `SEND_ALLOWLIST`, `INVITE_ALLOWLIST`, `IMESSAGE_SEND_ALLOWLIST` and `BEEPER_SEND_ALLOWLIST`. Every other list stays dashboard only, above all `OWNER_ADDRESSES`, `BEEPER_NETWORKS` and the lists of people never written to |
+| Executor | Reads the list's current value (dashboard, environment or default, as `current()` does), adds the entry, writes it with `SettingsStore.update()`, the path a dashboard save takes. Answers `sent`; a write that fails answers `failed`. Never `unclear` |
+| Card | Built from the fields alone: title "Add to list", rows "List" (the setting's label and its group), "Adds" (the entry) and, for a Beeper chat id, the chat's name, network and "one to one" or "group" as Beeper reports them now. The reason is a quote marked as the assistant's words |
+
+`queue` refuses, with `policy`:
+
+- a `setting` that is not a key of a `requestable` list;
+- an entry that is empty, `*`, a domain (`@example.org`) or contains a comma: one request, one person or chat;
+- an entry the list already covers (listed, matched by a domain on the list, or the list holds `*`);
+- an entry for a list where empty means anyone (`SEND_ALLOWLIST`, `INVITE_ALLOWLIST`) while that list is empty: adding one person
+  would shut out everyone else, so the agent is told the person may already be reached;
+- for Beeper, a chat id Beeper does not know, and a group while "Group chats" is off.
+
+Approving needs no fresh sign-in (the owner, 2026-11-27, on the question "why a passkey?"): the agent's request and the owner's
+click are two steps already, and each message still waits. Typing the same entry into the settings keeps asking for one, because
+that page cannot tell who typed it. `ActionType.step_up` stays `False` for `gate.allow`.
+
+The settings show where an entry came from (the owner, 2026-11-27, on the mock): an entry added this way carries "on request" and
+the date, linked to the approved card. The origin lives in a table `list_origin` in `approvals.db` (setting, entry case-folded,
+request id, time), written in the executor's step. An entry no longer on the list shows no origin, and its row is dropped the next
+time the list is saved; an entry typed by hand again shows none.
+
+Removing an entry stays in the settings, with no request. The log line names the setting and the request id, never the entry; the
+Activity line for the approval says "Added to list". Rollback: the version before package 10 refuses the unknown type for new
+requests; entries already written stay, because they are ordinary settings.
+
 ### Out of scope for package 10
 
+- An agent asking to remove a list entry, to add a domain or `*`, or to change any other setting.
 - Domains, groups or "everyone in my contacts" as a rule. One rule, one person.
 - Rules that depend on the content (only invitations on weekends). That would be a policy language.
 - An agent removing or extending a rule without the owner.
@@ -1584,14 +1621,18 @@ rules exist (the owner, 2026-11-18, on the mock of package 6).
 | D10-4 | Step-up sign-in to approve a rule | yes | It loosens protection, as `SEND_REQUIRES_APPROVAL=false` does |
 | D10-5 | Daily limit per rule | 20 | Bounds what a misled agent can send to one person before the owner looks |
 | D10-6 | Push for released requests | no | The owner asked not to be asked; Activity shows each one |
+| D10-7 | List entries by request: own type or part of `gate.trust`? | own type `gate.allow` | A list entry and a rule to skip the wait are different promises; one card each keeps "who" apart from "without a look" |
+| D10-8 | Step-up sign-in to approve a list entry | no (decided by the owner, 2026-11-27) | Each message still waits for approval; two steps are enough |
+| D10-9 | Which lists | the four send and invite lists | Lists that grant the owner's rights or hide chats stay dashboard only |
+| D10-10 | Where the request shows, and its origin | a card in the inbox; the list marks "on request" (decided by the owner, 2026-11-27) | Push, `approval_status` and Activity work as for any request; the origin says later why an entry is there |
 
 Reviewed on 2026-11-18 with gstack `/plan-eng-review` and a second opinion from Codex (gpt-6-astra). Taken in: the per-type
 step-up, `gate.trust`'s own list check and the use table from the review; from Codex, `standing_identity` instead of
 `recipients()`, waiting on an empty identity, one try per request, one transaction for rule, use and claim, and `gate.submit()`
 with the push only for waiting requests.
 
-The dashboard parts (the settings list and the Activity marker) need a mock before they are built. The card of `gate.trust`
-uses the general card of actions and needs none.
+The dashboard parts (the settings list, the Activity marker and the card of `gate.allow` with a Beeper chat) need a mock before
+they are built. The card of `gate.trust` uses the general card of actions and needs none.
 
 Acceptance criteria:
 
@@ -1609,9 +1650,16 @@ Acceptance criteria:
 4. An expired rule, a removed rule and a rule past its daily limit all leave the request waiting.
 5. The log line of a standing release names the rule and no recipient of a non-builtin type.
 6. Rollback: the version before package 10 starts on the same `DATA_DIR` and ignores the table; every request waits again.
+10. A `gate.allow` request is refused with `policy` for a list that is not `requestable`, for `*`, a domain, an empty entry, an
+    entry already covered, an empty list where empty means anyone, and a Beeper group while group chats are off; nothing is queued.
+11. Approving a `gate.allow` request with an old sign-in adds the entry once; a second approval of the same request adds nothing.
+    A message to that entry queued afterwards waits for approval as before; the same entry typed in the settings still asks for a
+    fresh sign-in.
+12. The entry is added to the value in effect, so a list set only in the environment keeps its entries.
 
 Effort, estimated and not measured: about 480 min of work (store, rule and use table 90, standing release in one transaction 90,
 `gate.submit()` and moving every caller 90, `gate.trust` type and step-up 60, tests 150) after the mock, plus 60 min of review.
+`gate.allow` adds about 180 min (type, policy and executor 60, Beeper chat lookup for the card 30, origin table and marker 30, tests 60).
 
 ## Rules for whoever implements a package
 
