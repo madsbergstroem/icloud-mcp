@@ -33,11 +33,30 @@ def _split(value: str) -> list[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
+def _entry_info(s: Any, entry: str) -> dict[str, Any]:
+    """What the card of a request to add a chat to the list shows (package 10, gate.allow), asked of Beeper with the read key:
+    the chat's name, network and whether it is a group. A chat Beeper does not know, a group while group chats are off and a chat
+    on a network that may not be written to are refused. Raises when Beeper cannot be asked, so nothing is queued."""
+    state, refs = _resolve(s, [entry.strip()])
+    if state != "ok":
+        raise RuntimeError(state)
+    ref = refs[0] if refs else None
+    if ref is None or not ref.found:
+        return {"problem": "Beeper does not know this chat. Use the chat id messages_list_chats gives."}
+    nets = {x.casefold() for x in _split(s.plugin_value(NETWORKS, "*"))}
+    if "*" not in nets and ref.network.casefold() not in nets:
+        return {"problem": f"Writing on {ref.network or 'this network'} is off, so this chat cannot be added. Tell the owner."}
+    if ref.group and s.plugin_value(GROUPS, "false").strip().lower() not in ("1", "true", "yes", "on"):
+        return {"problem": "This chat is a group, and group chats are off. Tell the owner."}
+    kind = "group" if ref.group else "one to one"
+    return {"entry": ref.id, "label": " · ".join(x for x in (ref.title or "Chat", ref.network, kind) if x)}
+
+
 def _settings_group() -> Any:
     from ...settings import Group, Spec, _changed, _more_history, _removes_entry, _to_false, _to_true
     return Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
         Spec(ALLOW, "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat except groups.",
-             loosens=_changed, section="Sending"),
+             loosens=_changed, section="Sending", requestable=True, entry_info=_entry_info),
         Spec(NETWORKS, "Networks that may be written to", "list", "Network names as Beeper shows them. * means every network, empty none.",
              default="*", loosens=_changed, section="Sending"),
         Spec(GROUPS, "Group chats", default="false", help="Only groups on the list by name; * never covers a group.", loosens=_to_true, section="Sending"),
@@ -90,9 +109,9 @@ def _policy(s: Any) -> Callable[[Mapping[str, Any]], str | None]:
     on the list. Read when a request is queued and again when it is approved; the answer is written for the agent."""
     nets = {x.casefold() for x in _split(s.plugin_value(NETWORKS, "*"))}
     groups_on = s.plugin_value(GROUPS, "false").strip().lower() in ("1", "true", "yes", "on")
-    listed = {x.casefold() for x in s.beeper_send_allowlist}
 
     def check(p: Mapping[str, Any]) -> str | None:
+        listed = {x.casefold() for x in s.beeper_send_allowlist}       # read each time: an approved entry applies at once (package 10)
         network = str(p.get("network") or "")
         if "*" not in nets and network.casefold() not in nets:
             return (f"Not permitted: writing on {network or 'this network'} is off. Tell the owner; only the owner can choose the networks "

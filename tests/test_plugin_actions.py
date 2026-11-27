@@ -92,7 +92,8 @@ async def test_a_plugin_action_is_listed_queued_shown_edited_approved_once_and_a
     or approval_status does not say sent; no_claim=a real service: the executor here only records the call."""
     app, mcp, *_ = web(PARCEL_DEPOTS="d-17,d-21")
     listed = await call(mcp, "approval_list_actions")
-    assert [(a["action"], a["allowed"], a["text_field"]) for a in listed["actions"]] == [("parcel.pickup.book", "list", "note")]
+    assert [(a["action"], a["allowed"], a["text_field"]) for a in listed["actions"]] == [("parcel.pickup.book", "list", "note"),
+                                                                                         ("gate.allow", "anyone", "reason")]   # package 10
     got = await call(mcp, "approval_request", **ASK)
     assert got["status"] == "queued_for_owner_approval" and got["sent"] is False and BOOKED == []
     assert got["approve_at"].endswith(f"#/item/external:{got['outbox_id']}")
@@ -179,7 +180,7 @@ async def test_an_unknown_action_and_a_channel_owned_type_are_refused_by_name(we
     assert (await refused(mcp, action="parcel.nothing", params={}))["reason"] == "unknown_action"
     got = await refused(mcp, action="chatty.message.send", params={"chat_id": "room-1", "text": "Hi", "room": "x"})
     assert got["reason"] == "channel_tool" and "messages_send_request" in got["message"]
-    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["parcel.pickup.book"]
+    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["parcel.pickup.book", "gate.allow"]
 
 
 async def test_a_service_that_cannot_be_asked_refuses_as_retryable_without_its_error_text(web, parcel):
@@ -226,7 +227,7 @@ async def test_with_only_channel_types_the_list_is_empty_with_a_hint(web, monkey
     monkeypatch.setattr(P, "entry_points", lambda: [("chatty", "test_plugins:chatty_plugin")])
     _app, mcp, *_ = web(CHATTY_SEND_ALLOWLIST="room-1")
     got = await call(mcp, "approval_list_actions")
-    assert got["actions"] == [] and "messages_send_request" in got["hint"]
+    assert [a["action"] for a in got["actions"]] == ["gate.allow"]       # package 10: a list entry may be asked for; the chat type never
 
 
 def _server(tmp_path, monkeypatch, **env):
@@ -416,7 +417,7 @@ async def test_a_broken_action_is_skipped_and_the_server_starts(web, parcel, mon
     monkeypatch.setattr(me, "parcel_plugin", lambda: P.Plugin(**{**plugin.__dict__, "actions": (bad, plugin.actions[0])}))
     P._loaded.cache_clear()
     _app, mcp, *_ = web(PARCEL_DEPOTS="d-17")
-    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["parcel.pickup.book"]
+    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["parcel.pickup.book", "gate.allow"]
     assert "parcel.bad.thing" in caplog.text and "executor-secret-marker" not in caplog.text
 
 

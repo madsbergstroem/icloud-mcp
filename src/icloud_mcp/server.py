@@ -3070,6 +3070,16 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                                       hold=functools.partial(spec.hold, ctx) if spec.hold else None)
                 except Exception as e:  # noqa: BLE001  -- one broken action must not take the server down
                     log.warning("plugin %s: action %s skipped (%s)", p.id, getattr(spec.action_type, "id", "?"), type(e).__name__)
+        if any(not r.builtin for r in registry.registrations()) and s.dashboard and s.dashboard_settings == "edit":
+            # package 10: an agent asks to add someone to a list, with approval_request, which a server has only next to a type of a
+            # plugin or a sender; the owner approves on the dashboard. A server of mail, calendar and iMessage alone gets no new tool
+            from . import settings as settings_mod
+            from .config import add_live
+            from .gate.allow import ListAllow, register as register_allow
+            own_groups = lambda: settings_mod.CORE_GROUPS + [p.settings_group() for p in plugins if p.settings_group is not None]  # noqa: E731  -- set up here only
+            register_allow(registry, ListAllow(s, settings_mod.SettingsStore(s.data_dir),
+                                               lambda: {sp.key: sp for g in own_groups() for sp in g.specs}, settings_mod.current,
+                                               add_live, own_groups))
         if registry.types():
             from .external import ExternalApprovals
             from .gate.store import Store

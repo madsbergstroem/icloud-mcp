@@ -55,7 +55,7 @@ os.makedirs(DATA, exist_ok=True)
 os.environ.update(
     ICLOUD_USERNAME="alex.morgan@example.org", ICLOUD_APP_PASSWORD="aaaa-bbbb-cccc-dddd", MCP_PUBLIC_URL=f"http://localhost:{PORT}",
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
-    DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*",
+    DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*", INVITE_ALLOWLIST="@example.org,@example.net",
     BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400", OUTBOX_MAX="40",   # one store for every kind since 6b
     OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1")   # no request comes from that proxy: see --owner
 # Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
@@ -369,6 +369,14 @@ if args.gateway != "none":                                   # a marketplace rep
     asyncio.run(mcp.call_tool("approval_request", {"action": "market.message.send",
                                                    "params": {"conversation_id": "c-1", "offer": 35,
                                                               "text": "Is the trailer still free on Saturday?"}}))
+if "external" in d.sources and d.sources["external"].registry.get("gate.allow") is not None:   # package 10: list entries on request
+    def _allow(entry, reason):
+        return asyncio.run(mcp.call_tool("approval_request", {"action": "gate.allow", "params": {
+            "setting": "INVITE_ALLOWLIST", "entry": entry, "reason": reason}}))
+    _allow("lena@example.com", "Lena asked to be invited to the book club.")           # approved already: "On request" in Settings
+    _done = next(q for q in d.sources["external"].pending() if b'"gate.allow"' in q.raw)
+    d.sources["external"].release(_done)
+    _allow("tom@example.com", "Tom asked me to invite him to Saturday's hike.")    # waits on Home
 if "external" in d.sources:                                  # and a request whose type this server no longer has: "Other"
     from icloud_mcp import actions as AT
     d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")

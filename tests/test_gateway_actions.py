@@ -276,7 +276,7 @@ async def test_a_disabled_action_is_not_offered_and_timeout_seconds_is_used(web,
     monkeypatch.setenv("GATE_ACTIONS_FILE", str(write_file(tmp_path, doc)))
     P._loaded.cache_clear()
     _app, mcp, *_ = web(MARKET_SEND_ALLOWLIST="c-1")
-    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["market.message.send"]
+    assert [a["action"] for a in (await call(mcp, "approval_list_actions"))["actions"]] == ["market.message.send", "gate.allow"]   # package 10
     await call(mcp, "approval_request", **ASK)
     assert market.timeouts and set(market.timeouts) == {7.0}
 

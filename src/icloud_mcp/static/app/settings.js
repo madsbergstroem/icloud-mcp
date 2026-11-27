@@ -283,7 +283,15 @@ class Group extends HTMLElement {
     if (f.kind === "textarea") return `<ion-item><ion-textarea ${attrs} label="${esc(f.label)}" label-placement="stacked" auto-grow="true" value="${esc(f.value)}"></ion-textarea></ion-item>`;
     const type = f.kind === "int" ? `type="number" inputmode="numeric" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""}` : `type="text" autocomplete="off"`;
     return `<ion-item><ion-input ${attrs} ${type} label="${esc(f.label)}${f.unit_label ? ` (${esc(f.unit_label)})` : ""}" label-placement="stacked"
-      value="${esc(f.value)}" ${f.kind === "list" ? 'placeholder="Comma-separated"' : ""}></ion-input></ion-item>`;
+      value="${esc(f.value)}" ${f.kind === "list" ? 'placeholder="Comma-separated"' : ""}></ion-input></ion-item>${this.origins(f)}`;
+  }
+
+  // package 10: entries of a list that your assistant asked for and you approved, each linked to the card you approved
+  origins(f) {
+    if (!f.origins || !f.origins.length) return "";
+    const day = (t) => new Date(t * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const links = f.origins.map((o) => `<a href="#/item/external:${encodeURIComponent(o.item_id)}">${esc(o.label || o.entry)}</a>, ${esc(day(o.at))}`);
+    return `<ion-item lines="none" class="origins"><ion-label class="ion-text-wrap"><p>On request: ${links.join(" · ")}</p></ion-label></ion-item>`;
   }
 
   wire() {
