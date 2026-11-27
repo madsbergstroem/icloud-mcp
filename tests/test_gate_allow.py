@@ -11,6 +11,8 @@ import pytest
 
 from icloud_mcp import dashboard as D
 from icloud_mcp.gate import allow as AL
+from icloud_mcp.plugins import ChatRef
+from icloud_mcp.plugins import beeper as B
 from test_dashboard import api, client, signed_in, web  # noqa: F401  (web is a fixture)
 from test_external_approvals import url
 from test_plugin_actions import call, parcel, refused  # noqa: F401  (parcel is a fixture)
@@ -137,6 +139,48 @@ def test_origins_name_only_entries_still_on_the_list(tmp_path):
                    {"setting": "SEND_ALLOWLIST", "entry": "sam@example.org", "label": "sam@example.org", "item_id": "a2", "at": 2}], f)
     assert [o["entry"] for o in AL.origins(str(tmp_path), "SEND_ALLOWLIST", "Tom@example.org,jana@example.org")] == ["tom@example.org"]
     assert AL.origins(str(tmp_path), "INVITE_ALLOWLIST", "tom@example.org") == []
+
+
+class _S:
+    def __init__(self, groups="false", nets="*"):
+        self.values = {B.GROUPS: groups, B.NETWORKS: nets}
+
+    def plugin_value(self, key, default=""):
+        return self.values.get(key, default)
+
+
+@pytest.mark.parametrize("ref,groups,nets,want", [
+    (ChatRef("4817", "Tom", "Signal", False), "false", "*", {"entry": "4817", "label": "Tom · Signal · one to one"}),
+    (ChatRef("4818", "Book club", "WhatsApp", True), "false", "*", "group chats are off"),
+    (ChatRef("4818", "Book club", "WhatsApp", True), "true", "*", {"entry": "4818", "label": "Book club · WhatsApp · group"}),
+    (ChatRef("4817", "Tom", "Signal", False), "false", "WhatsApp", "Writing on Signal is off"),
+    (ChatRef("9999", found=False), "false", "*", "does not know this chat"),
+])
+def test_a_beeper_chat_is_named_by_beeper_and_refused_when_it_cannot_be_written_to(monkeypatch, ref, groups, nets, want):
+    """protects=the card names the chat as Beeper does, and a chat that could never be written to is not queued; fails_when=a group
+    passes while group chats are off, a chat on a closed network passes, or an unknown id is queued; no_claim=the live gateway."""
+    monkeypatch.setattr(B, "_resolve", lambda s, ids: ("ok", [ref]))
+    got = B._entry_info(_S(groups, nets), ref.id)
+    assert got == want if isinstance(want, dict) else want in got["problem"]
+
+
+def test_a_beeper_lookup_that_fails_queues_nothing(monkeypatch):
+    """protects=nothing is queued when Beeper cannot be asked; fails_when=the entry is queued unnamed; no_claim=none."""
+    monkeypatch.setattr(B, "_resolve", lambda s, ids: ("unreachable", []))
+    with pytest.raises(RuntimeError):
+        B._entry_info(_S(), "4817")
+
+
+def test_the_beeper_policy_reads_the_list_each_time():
+    """protects=a group added on request applies at once; fails_when=the policy keeps the list it read at start;
+    no_claim=the gateway's own checks."""
+    class S(_S):
+        beeper_send_allowlist = ()
+    s = S(groups="true")
+    check = B._policy(s)
+    assert check({"network": "WhatsApp", "is_group": True, "chat_id": "4818"})
+    S.beeper_send_allowlist = ("4818",)
+    assert check({"network": "WhatsApp", "is_group": True, "chat_id": "4818"}) is None
 
 
 # -- the review of 10a (Codex, 2026-11-27): one unit each, on the real ListAllow with a settings file in tmp_path --------------
