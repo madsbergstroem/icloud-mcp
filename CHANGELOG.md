@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **An agent can ask you to add someone to a list (fork).** With `approval_request` and the action `gate.allow`, an agent asks
+  for one entry on one of four lists: Only send to, Only invite, Who may receive an iMessage, and Beeper's Chats that may be
+  written to. The card names the list and the person or chat; for a Beeper chat it shows the chat's name, network and whether it
+  is a group, as Beeper reports them. You approve it with Add, without signing in again. The entry is saved in your settings and
+  applies at once, with no restart, and the list says "On request" next to it with a link to the card. Every message to that
+  person still waits for your approval. An agent cannot ask for `*`, a domain, several entries at once, an entry already covered,
+  or an entry on an empty mail or invitation list (empty means anyone there). Removing an entry stays in Settings. The action is
+  offered on servers that already have `approval_request`, so a server with only mail, calendar and iMessage gets no new tool.
+
 - **Notices of decisions by webhook (fork).** The server can tell your own systems each time a request an agent queued is
   queued, decided or runs out, so an agent that runs unattended learns the outcome without asking. Add the hosts under Settings,
   Notices, Allowed hosts (`NOTICE_HOSTS`, and `NOTICE_PRIVATE_HOSTS` for one on your own network), restart, then add a receiver's

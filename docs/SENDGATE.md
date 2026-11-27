@@ -1604,6 +1604,33 @@ Removing an entry stays in the settings, with no request. The log line names the
 Activity line for the approval says "Added to list". Rollback: the version before package 10 refuses the unknown type for new
 requests; entries already written stay, because they are ordinary settings.
 
+
+### As built (10a)
+
+`gate.allow` shipped first, as 10a, because the owner needed it before the standing rules (10b, still to come). It differs from
+the text above in four places:
+
+- **It applies at once.** Settings apply after a restart (`Settings` is frozen). An approved entry is written to `settings.json`
+  and also added to the running server's list (`config.add_live`, only these four lists and only adding), so the agent can ask to
+  write to the new entry right away. The settings page asks for no restart for a list that already runs with what is on disk.
+- **The origin is a file, not a table.** `list-origins.json` in the data folder holds setting, entry, label, request id and time.
+  An entry no longer on the list shows no origin.
+- **Where it is offered.** `gate.allow` is registered when the dashboard edits settings and the server already has a type an
+  agent asks for itself (a plugin's action or a sender such as Beeper), so `approval_request` exists. A server with only mail,
+  calendar and iMessage gets no new tool and keeps its tool budget. The lists are those of the core and of plugins set up here.
+- **A list that is not offered** is refused by the schema (`setting` is an enum), not by `policy`.
+
+After a second opinion from Codex (gpt-6-astra, 2026-11-27): the entry is added under the settings file's own lock
+(`SettingsStore.change`), so a dashboard save in between is kept; a running mail or invitation list that is empty (anyone) is
+never narrowed by an approved entry, the saved list applies at the next restart; a failed "On request" note no longer fails the
+approval; the service is asked again just before the entry is added (a Beeper chat on a network closed meanwhile ends the
+request, a renamed chat waits again as a new version); and the card of a phone number on the iMessage list says that the list
+matches the last nine digits, so other numbers with those digits get in too.
+
+Code: `gate/allow.py` (type, prepare, policy, executor, origins), `Spec.requestable`, `empty_means_anyone` and `entry_info` in
+`settings.py` (addresses for mail and invitations, handles for iMessage), Beeper's `_entry_info` (the chat as Beeper names it; an
+unknown chat, a group while group chats are off and a closed network are refused; its policy now reads the list each time), one
+lock per settings file. Tests: `tests/test_gate_allow.py`.
 ### Out of scope for package 10
 
 - An agent asking to remove a list entry, to add a domain or `*`, or to change any other setting.
