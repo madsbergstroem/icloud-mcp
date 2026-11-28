@@ -47,6 +47,7 @@ def schema(types: Mapping[str, A.Registration]) -> dict[str, Any]:
                        "description": "Why, in one sentence the owner reads on the card."},
             "action_label": {"type": "string", "readOnly": True},
             "until": {"type": "string", "readOnly": True},
+            "expires_at": {"type": "integer", "readOnly": True},
         },
     }
 
@@ -100,9 +101,10 @@ class Trust:
             raise A.ExternalError(why, "policy", "params")
         reg = self.types()[str(params["action_type"])]
         days = int(params.get("days") or ST.DEFAULT_DAYS)
+        end = int(time.time() + days * ST.DAY)          # the end the card shows is the end the rule gets, whenever it is approved
         return {"action_type": reg.action_type.id, "recipient": ST.identity(params["recipient"]), "days": days,
                 "reason": str(params.get("reason") or ""), "action_label": reg.action_type.title,
-                "until": until_text(time.time() + days * ST.DAY)}
+                "until": until_text(end), "expires_at": end}
 
     def policy(self, params: Mapping[str, Any]) -> str | None:
         return self._why(params)
@@ -110,6 +112,8 @@ class Trust:
     def recheck(self, params: Mapping[str, Any]) -> Any:
         if why := self._why(params):
             raise A.Rechecked("not_allowed", f"Not allowed: {why}")
+        if int(params.get("expires_at") or 0) and int(params["expires_at"]) <= time.time():
+            raise A.Rechecked("target_changed", "Not allowed: the end date on the card has passed. Your assistant has to ask again.")
         return None
 
     def execute(self, request: A.ActionRequest) -> A.Result:
@@ -117,7 +121,8 @@ class Trust:
         if self.standing is None:
             return A.Result("failed", "Rules cannot be kept on this server right now. It waits again.")
         try:
-            rule = self.standing.add(str(p["action_type"]), str(p["recipient"]), int(p.get("days") or ST.DEFAULT_DAYS), request.id)
+            rule = self.standing.add(str(p["action_type"]), str(p["recipient"]), int(p.get("days") or ST.DEFAULT_DAYS), request.id,
+                                     expires_at=p.get("expires_at"))
         except ValueError as e:
             return A.Result("failed", f"Not allowed: {e}")
         except Exception as e:  # noqa: BLE001  -- nothing was written: the owner can try again

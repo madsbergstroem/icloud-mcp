@@ -355,3 +355,93 @@ async def test_a_mail_with_an_attachment_always_waits(web, parcel):
     ext.standing.add("mail.send", JANA, 30)
     got = await call(mcp, "mail_send_message", to=[JANA], subject="Menu", body="See the file. Sam", attachments=[{"filename": "menu.txt", "content_base64": "U291cCwgYnJlYWQ=", "content_type": "text/plain"}])
     assert got["status"].startswith("queued") and sent == []
+
+
+# -- after the review by Codex (gpt-6-astra) ---------------------------------------------------------------------------------------
+def _with_context(tmp_path, context):
+    reg, ex = A.ActionRegistry(), Exec()
+    reg.register(NOTE, ex, ["*"], builtin=True, context=context)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    ext = ExternalApprovals(Store(str(tmp_path), "external", 3600, 20), reg)
+    ext.standing = ST.Standing(ext.box)
+    ext.standing.add("test.note", JANA, 30)
+    pushes = []
+    ext.box.on_new = pushes.append
+    return ext, ex, pushes
+
+
+def test_a_second_question_the_types_context_adds_makes_it_wait(tmp_path):
+    """protects=the release checks the card as the owner's endpoint does, with the type's context (a reply to a suspicious mail);
+    fails_when=a rule sends what the card would ask about first, or a context that cannot be read lets it through;
+    no_claim=mail's own reasons for a second question (tested with mail)."""
+    ext, ex, pushes = _with_context(tmp_path, lambda reqs: {r.id: {"confirm": "The mail it answers looks like phishing."} for r in reqs})
+    got = ask(ext)
+    assert got.waits and got.reason == "confirm" and ex.calls == [] and len(pushes) == 1
+
+    def broken(reqs):
+        raise OSError("the mailbox did not answer")
+    ext2, ex2, _ = _with_context(tmp_path / "b", broken)
+    assert ask(ext2).reason == "context" and ex2.calls == []
+
+
+def test_a_request_the_owner_approved_once_is_never_released_by_a_rule(gate, monkeypatch):
+    """protects=one try per request: the owner approved it while the rule was about to look, the attempt failed and put it back;
+    fails_when=the rule then runs it a second time without the owner; no_claim=none beyond protects."""
+    ext, ex, pushes, logged, *_ = gate
+    ext.standing.add("test.note", JANA, 30)
+    real = ext.standing.claim
+
+    def owner_first(item_id, type_id, people):
+        q = ext.box.claim(item_id, "executing")                  # the owner's click, and the service failed: it waits again
+        ext.box.restore(q)
+        return real(item_id, type_id, people)
+    monkeypatch.setattr(ext.standing, "claim", owner_first)
+    got = ask(ext)
+    assert got.waits and got.reason == "gone" and ex.calls == [] and pushes == [] and logged == []
+
+
+def test_a_request_the_owner_decided_meanwhile_answers_its_state_without_a_push(gate, monkeypatch):
+    """protects=the answer says what became of it: discarded by the owner between queueing and the rule's look; fails_when=it says
+    waiting, pushes, or is logged as a rule's; no_claim=none beyond protects."""
+    from icloud_mcp.gate.external import released_answer
+    ext, ex, pushes, logged, *_ = gate
+    ext.standing.add("test.note", JANA, 30)
+    real = ext.standing.claim
+
+    def discarded_first(item_id, type_id, people):
+        ext.box.claim(item_id, "discarded")
+        return real(item_id, type_id, people)
+    monkeypatch.setattr(ext.standing, "claim", discarded_first)
+    got = ask(ext)
+    assert got.status == "discarded" and got.reason == "decided" and not got.rules and pushes == [] and logged == []
+    assert "without_approval" not in released_answer(got) and released_answer(got)["sent"] is False
+
+
+def test_a_request_past_its_expiry_is_not_claimed(gate, monkeypatch):
+    """protects=the claim checks the request's own expiry, as the owner's claim does; fails_when=a request that ran out goes out;
+    no_claim=none beyond protects."""
+    ext, ex, *_ = gate
+    ext.standing.add("test.note", JANA, 30)
+    real = ext.standing.claim
+
+    def late(item_id, type_id, people):
+        with ext.box._lock:
+            ext.box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() - 1, item_id))
+        return real(item_id, type_id, people)
+    monkeypatch.setattr(ext.standing, "claim", late)
+    assert ask(ext).reason == "gone" and ex.calls == []
+
+
+def test_the_rule_ends_on_the_date_the_card_showed(gate):
+    """protects=the end date the owner saw is the end the rule gets, whenever it is approved; a card whose date passed ends;
+    fails_when=the rule runs longer than the card said, or a passed date still makes a rule; no_claim=none beyond protects."""
+    ext, tr = _trust(gate)
+    stored = tr.prepare({"action_type": "test.note", "recipient": JANA, "days": 1, "reason": "Lunch."})
+    got = ext.submit("gate.trust", stored, None)
+    ext.release(got.q)
+    assert int(ext.standing.live()[0]["expires_at"]) == stored["expires_at"]
+    old = {**tr.prepare({"action_type": "test.note", "recipient": TOM, "days": 1, "reason": "Lunch."}), "expires_at": int(time.time()) - 5}
+    late = ext.submit("gate.trust", old, None)
+    with pytest.raises(A.Rechecked):
+        ext.release(late.q)
+    assert [r["recipient"] for r in ext.standing.live()] == [JANA]

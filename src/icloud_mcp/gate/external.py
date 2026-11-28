@@ -583,8 +583,9 @@ class ExternalApprovals(ApprovalSource):
             return Submitted(q, new=False)
         got = self._standing_release(q)
         if got.status == "waiting":
-            self._push(got.q)
-        else:
+            if got.reason != "gone":                              # the owner already acted on it: no note for something seen
+                self._push(got.q)
+        elif got.rules:
             if self.on_standing is not None:
                 try:
                     self.on_standing(q, got)
@@ -623,8 +624,8 @@ class ExternalApprovals(ApprovalSource):
         people = self.standing_people(reg, params) if reg is not None else None
         if people is None:
             return waiting("")
-        if self._confirm(reg.action_type, params):               # a rule never answers a second question (a group chat)
-            return waiting("confirm")
+        if why := self._card_check(reg, q):                      # what the owner's endpoint checks on the card, read as it does
+            return waiting(why)
         claimed_rules: list[Any] = []
 
         def claim() -> QueuedMessage | None:
@@ -636,6 +637,11 @@ class ExternalApprovals(ApprovalSource):
         try:
             note = self.release(q, claim=claim)
         except _Waits as e:
+            if e.reason == "gone":                                # the owner decided it meanwhile: its state, not "waiting"
+                st = self.box.state_of(q.id) if hasattr(self.box, "state_of") else None
+                state = st[0] if st else "waiting"
+                if state not in ("waiting", "executing"):
+                    return Submitted(q, new=True, status=state, reason="decided")
             return waiting(e.reason)
         except A.Revised as e:                                    # a new version waits for the owner
             fresh = next((x for x in self.box.pending() if x.id == q.id), q)
@@ -649,6 +655,28 @@ class ExternalApprovals(ApprovalSource):
             return waiting("failed", "Not carried out, it waits for the owner.")
         status = "unclear" if getattr(note, "delivery", None) in ("unconfirmed", "failed") else "sent"
         return Submitted(q, new=True, status=status, line=str(note), rules=tuple(claimed_rules), note=note)
+
+    def _card_check(self, reg: A.Registration, q: QueuedMessage) -> str:
+        """Why the card would not let the owner approve this request with one click, or "": a second question (confirm_twice,
+        or one the type's context adds, such as a reply to a suspicious mail), a hold, a file it waits for, or a request that
+        cannot be approved. A context that cannot be read counts as a reason: a rule never decides what it cannot see."""
+        ctx = None
+        if reg.context is not None:
+            try:
+                _, type_id, params = self._entry(q)
+                got = reg.context([A.ActionRequest(q.id, type_id, params, q.requested_by, q.key)]) or {}
+            except Exception as e:  # noqa: BLE001
+                log.warning("The context of %s raised %s; the request waits", reg.action_type.id, type(e).__name__)
+                return "context"
+            ctx = got.get(q.id) if isinstance(got, Mapping) else None
+        v = self.describe(q, ctx)
+        if v.get("approvable") is False:
+            return "held"
+        if v.get("needs_override"):
+            return "confirm"
+        if v.get("held") or v.get("blocked"):
+            return "held"
+        return ""
 
     # -- the owner's decision ----------------------------------------------------------------------------------------------
     def discard(self, q):
@@ -741,7 +769,11 @@ _RELEASED_NOTICE = {
 
 
 def released_answer(got: "Submitted") -> dict[str, Any]:
-    """What a tool answers for a request a standing rule released (package 10), in place of queued_for_owner_approval."""
+    """What a tool answers for a request that did not wait (package 10): released by a standing rule, or decided by the owner
+    in the moment between queueing and the rule's look, in place of queued_for_owner_approval."""
+    if not got.rules:
+        return {"status": got.status, "sent": got.status == "sent", "outbox_id": got.q.id,
+                "notice": "The owner already decided this request. approval_status with the outbox_id says more; do not ask again."}
     return {"status": got.status, "sent": got.status == "sent", "outbox_id": got.q.id, "without_approval": True,
             **({"result": got.line} if got.line else {}), "notice": _RELEASED_NOTICE.get(got.status, "")}
 

@@ -117,9 +117,11 @@ class Standing:
                  "limit": self.daily_limit} for r in rows]
 
     # -- changing --------------------------------------------------------------------------------------------------------
-    def add(self, action_type: str, recipient: str, days: int, request_id: str | None = None) -> Rule:
-        """A rule for this type and person, until `days` from now (1 to 365). An older live rule for the same pair is revoked in the
-        same transaction, so there is at most one. ValueError for a recipient that is not one person, or days out of range."""
+    def add(self, action_type: str, recipient: str, days: int, request_id: str | None = None, expires_at: float | None = None) -> Rule:
+        """A rule for this type and person, until `days` from now (1 to 365), or until expires_at when given (the end date the owner
+        saw on the card, never further than 365 days ahead). An older live rule for the same pair is revoked in the same
+        transaction, so there is at most one. ValueError for a recipient that is not one person, days out of range, or an end
+        date that has passed."""
         who = identity(recipient)
         if who is None:
             raise ValueError("A rule names one person by email address.")
@@ -127,7 +129,10 @@ class Standing:
         if not 1 <= days <= MAX_DAYS:
             raise ValueError(f"days must be 1 to {MAX_DAYS}.")
         now = time.time()
-        rule = Rule("r_" + secrets.token_urlsafe(9), action_type, who, now, now + days * DAY, request_id)
+        end = now + days * DAY if expires_at is None else min(float(expires_at), now + MAX_DAYS * DAY)
+        if end <= now:
+            raise ValueError("The end date has passed.")
+        rule = Rule("r_" + secrets.token_urlsafe(9), action_type, who, now, end, request_id)
         with self.store._lock, self.store._tx():
             self.store._db.execute("UPDATE standing SET revoked_at = ? WHERE action_type = ? AND recipient = ? AND revoked_at IS NULL",
                                    (now, action_type, who))
@@ -162,9 +167,12 @@ class Standing:
         if not who or any(w is None for w in who):
             return Claimed(waits="no_rule")
         who = list(dict.fromkeys(who))
-        st, now = self.store, time.time()
+        st = self.store
         with st._lock, st._tx():
-            r = st._db.execute("SELECT * FROM request WHERE id = ? AND source = ? AND state = 'waiting'", (item_id, st.source)).fetchone()
+            now = time.time()                    # read under the lock, so a rule or a request that ran out meanwhile does not count
+            # tried once, when first queued: a request the owner already approved once (a failure put it back) is theirs
+            r = st._db.execute("SELECT * FROM request WHERE id = ? AND source = ? AND state = 'waiting' AND attempts = 0 AND expires_at > ?",
+                               (item_id, st.source, now)).fetchone()
             if r is None:
                 return Claimed(waits="gone")
             rules: list[Rule] = []
