@@ -3080,6 +3080,13 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             register_allow(registry, ListAllow(s, settings_mod.SettingsStore(s.data_dir),
                                                lambda: {sp.key: sp for g in own_groups() for sp in g.specs}, settings_mod.current,
                                                add_live, own_groups))
+            # and asks for a standing rule (gate.trust), so requests of the server's own kinds to one person go out without waiting
+            from .gate.trust import Trust, register as register_trust
+            trust = Trust(registry)
+            if not register_trust(registry, trust):
+                trust = None
+        else:
+            trust = None
         if registry.types():
             from .external import ExternalApprovals
             from .gate.store import Store
@@ -3087,6 +3094,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             external = ExternalApprovals(Store(s.data_dir, "external", s.outbox_ttl, s.outbox_max, keep_days=s.audit_keep_days,
                                               legacy="external-outbox.json",
                                               tombstones=tuple(MAIL_TYPES) if held_mail is not None else False), registry)
+            if trust is not None:                  # the rules live in the approval store's database (package 10)
+                from .gate.standing import Standing
+                external.standing = trust.standing = Standing(external.box)
             _adopt_imessages(s, external.box, _audit)
             if invites is not None:
                 _adopt_calendar(s, external.box, _audit, invites)

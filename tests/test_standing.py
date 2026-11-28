@@ -306,3 +306,52 @@ def test_only_the_servers_own_types_may_say_who_they_reach():
         reg.register(NOTE, Exec(), ["*"])
 
 
+# -- on the dashboard, with the real server and mail -------------------------------------------------------------------------------
+async def test_approving_a_rule_needs_a_fresh_sign_in_then_mail_to_that_person_goes_out_logged_by_the_rule(web, parcel, monkeypatch):
+    """protects=criteria 3, 5 and 9 for approval_request and mail: an old sign-in is refused and the request keeps waiting; a
+    fresh one writes the rule; a mail to the person then goes out at once, without a push, answered as sent and logged with the
+    rule as the actor; removing the rule makes the next mail wait; fails_when=any of these differs; no_claim=SMTP delivery (faked)."""
+    app, mcp, _p, sent = web(PARCEL_DEPOTS="d-17")
+    d = mcp._icloud_dashboard
+    pushes = []
+    monkeypatch.setattr(d.push, "notify", lambda kind, key="": pushes.append(key))
+    got = await call(mcp, "approval_request", action="gate.trust",
+                     params={"action_type": "mail.send", "recipient": JANA, "reason": "Jana and I write about lunch every week."})
+    assert got["status"] == "queued_for_owner_approval" and len(pushes) == 1
+    async with client(app) as c:
+        token = await signed_in(c)
+        it = (await c.get(url(got["outbox_id"]))).json()
+        assert it["title"] == "Allow without approval" and ["Action", "Email"] in it["rows"] and ["Person", JANA] in it["rows"]
+        fresh = D._STEP_UP
+        monkeypatch.setattr(D, "_STEP_UP", -1)               # every sign-in counts as old
+        r = await c.post(url(got["outbox_id"]) + "/approve", json={"sha": it["sha"]}, headers=api(token))
+        assert r.status_code == 403 and r.json().get("confirm") is True
+        assert (await call(mcp, "approval_status", id=got["outbox_id"]))["status"] == "waiting"
+        monkeypatch.setattr(D, "_STEP_UP", fresh)
+        r = await c.post(url(got["outbox_id"]) + "/approve", json={"sha": it["sha"]}, headers=api(token))
+        assert r.status_code == 200, r.text
+        rules = (await c.get("/dashboard/api/standing")).json()["rules"]
+        assert [(x["recipient"], x["title"], x["uses"]) for x in rules] == [(JANA, "Email", 0)]
+
+        mailed = await call(mcp, "mail_send_message", to=[JANA], subject="Lunch on Friday", body="Hi Jana, noon as usual? Sam")
+        assert mailed["status"] == "sent" and mailed["sent"] is True and mailed["without_approval"] is True
+        assert len(sent) == 1 and len(pushes) == 1                # no push for the mail that went out
+        acts = (await c.get("/dashboard/api/activity?days=1&action=approvals")).json()
+        line = next(e for day in acts["days"] for e in day["entries"] if e["action"] == "Without approval")
+        assert line["actor"] == "Your rule" and JANA in line["note"] and line["target"].startswith("Email")
+        assert any(k == "Rule" for k, _ in line["details"])
+
+        r = await c.post(f"/dashboard/api/standing/{rules[0]['id']}/remove", json={}, headers=api(token))
+        assert r.status_code == 200 and (await c.get("/dashboard/api/standing")).json()["rules"] == []
+    again = await call(mcp, "mail_send_message", to=[JANA], subject="Lunch next week", body="Hi Jana, next week too? Sam")
+    assert again["status"] == "queued_for_owner_approval" and len(sent) == 1 and len(pushes) == 2
+
+
+async def test_a_mail_with_an_attachment_always_waits(web, parcel):
+    """protects=the owner's word on the mock of package 6: a mail with a file never goes without a look; fails_when=a rule
+    releases it; no_claim=none beyond protects."""
+    app, mcp, _p, sent = web(PARCEL_DEPOTS="d-17")
+    ext = mcp._icloud_dashboard.sources["external"]
+    ext.standing.add("mail.send", JANA, 30)
+    got = await call(mcp, "mail_send_message", to=[JANA], subject="Menu", body="See the file. Sam", attachments=[{"filename": "menu.txt", "content_base64": "U291cCwgYnJlYWQ=", "content_type": "text/plain"}])
+    assert got["status"].startswith("queued") and sent == []
