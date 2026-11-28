@@ -5,6 +5,14 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **The side list shows what needs you (fork).** "Waiting by kind" counted every request type on its own line and did nothing
+  when tapped. In its place, "Needs you" has All waiting, Ends within 2 h and Take a close look (a warning, a missing file, a
+  group chat, a request that cannot be approved yet), then "Asked by" with one line per agent. Each line filters the list on Home
+  and stays chosen while the page refreshes; a line with nothing in it is left out. On a phone the same filters are chips above
+  the list. A request you open from a notification or a link shows even when the filter leaves it out. The side list also scrolls
+  now when it is taller than the window, instead of squeezing Home, Activity and Settings into each other. `/state` reports the
+  counts as `needs` in place of `kinds`, with no recipient, title or text.
+
 - **Requests to people you name can go out without waiting (fork).** With `approval_request` and the action `gate.trust`, an
   agent asks for a rule: one kind of request (an invitation, an event update or cancellation, a reply to an invitation, an email)
   to one person by address, for 90 days unless you say otherwise, at most a year. The card shows the kind of request, the person
