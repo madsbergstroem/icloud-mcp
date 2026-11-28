@@ -5,6 +5,11 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **An .eml file can be attached (fork).** `mail_send_message` with an attachment of type `message/rfc822` failed with
+  `'str' object has no attribute 'as_bytes'`. Such a file now goes out as the mail it is, unencoded as RFC 2046 asks, so
+  the recipient's mail program can open it, for example as a draft when it carries `X-Unsent: 1`. Any other `message/*`
+  type goes out as a plain file. Reading an attached mail that another program wrote base64-encoded now gives its real bytes.
+
 - **An agent can ask you to add someone to a list (fork).** With `approval_request` and the action `gate.allow`, an agent asks
   for one entry on one of four lists: Only send to, Only invite, Who may receive an iMessage, and Beeper's Chats that may be
   written to. The card names the list and the person or chat; for a Beeper chat it shows the chat's name, network and whether it
