@@ -309,9 +309,13 @@ class IMessageService:
                                   "owner the text so they can send it themselves. It was NOT sent."}
             from .gate import actions as A                 # package 4b: an action of type imessage.send on the external source
             try:
-                q = external.queue_external(ACTION_ID, params_of({"chat_id": t["chat_id"], "handle": t["handle"], "text": text, "to": to}), None)
+                got = external.submit(ACTION_ID, params_of({"chat_id": t["chat_id"], "handle": t["handle"], "text": text, "to": to}), None)
             except A.ExternalError as e:
                 raise IMessageError(str(e)) from None
+            if not got.waits:                      # a standing rule (package 10); iMessage has none yet, so this stays unused
+                from .gate.external import released_answer
+                return {**released_answer(got), "to": to}
+            q = got.q
             return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "to": to,
                     "approve_at": self.s.approval_link("external", q.id),
                     "notice": "Queued, NOT sent: it goes out only when the owner approves it on the approval page (approve_at). "

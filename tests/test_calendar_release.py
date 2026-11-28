@@ -440,3 +440,22 @@ def test_the_export_then_5a_shows_the_same_waiting_changes_and_writes_one_when_a
     got = json.loads(run.stdout.strip().splitlines()[-1])
     assert sorted(map(tuple, got["waiting"])) == sorted([(item, "calendar.invite", "create"), (upd, "calendar.update", "update")])
     assert got["status"] == "sent" and any("Autumn fair" in e and "Bring a cake" in e for e in got["events"])
+
+
+# -- package 10: a standing rule --------------------------------------------------------------------------------------------------
+def test_an_invitation_a_rule_covers_is_written_at_once_and_one_to_someone_else_waits_with_a_push(env):
+    """protects=criterion 9 for the calendar tools: the tool answers through gate.submit, sent without a push when every guest has
+    a rule, queued with one push otherwise; fails_when=a covered invitation waits, is written twice, or an uncovered one goes out;
+    no_claim=iCloud's own invitation mail (the fake server only stores the event)."""
+    from icloud_mcp.gate.standing import Standing
+    cal, server = env
+    cal.external.standing = Standing(cal.external.box)
+    cal.external.standing.add("calendar.invite", "jana@example.org", 30)
+    pushes = []
+    cal.external.box.on_new = pushes.append
+    r = cal.create_event(summary="Autumn fair", start="2026-12-05T10:00", end="2026-12-05T12:00", calendar="Calendar",
+                         attendees=["jana@example.org"])
+    assert r["status"] == "sent" and r["written"] is True and r["without_approval"] is True and r["would_email"] == "jana@example.org"
+    assert len(writes(server)) == 1 and pushes == [] and state(cal, r["outbox_id"]) == ("sent", None)
+    item = invite(cal, location="Hall B", attendees=["jana@example.org", "kim@club.example.org"])
+    assert len(writes(server)) == 1 and [q.id for q in pushes] == [item]

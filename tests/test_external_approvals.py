@@ -104,9 +104,9 @@ async def test_only_the_beeper_tool_calls_queue_external():
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
     # since package 10 every tool that queues goes through gate.submit (external.submit), which queues and tries the owner's
     # standing rules: the Beeper and iMessage senders, the calendar, mail and approval_request; nothing calls queue_external itself
-    assert sorted(users) == ["cal.py", "imessage.py", "mail.py", "plugins/beeper/gateway.py"]
+    assert sorted(users) == ["plugins/beeper/gateway.py"]
     submitters = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "external.submit(" in p.read_text()]
-    assert sorted(submitters) == ["gate/requests.py", "plugins/__init__.py"]   # the contract names it
+    assert sorted(submitters) == ["cal.py", "gate/requests.py", "imessage.py", "mail.py", "plugins/__init__.py"]   # the contract names it
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------
