@@ -123,6 +123,23 @@ def test_an_approved_mail_is_sent_once_filed_in_sent_and_ends_sent(env):
     assert server.data_reached == 1
 
 
+def test_an_eml_attachment_is_queued_approved_and_arrives_as_the_mail_it_is(env):
+    """protects=mail_send_message with an .eml (message/rfc822) on the whole path, queue, store, approval and SMTP; fails_when=the
+    call raises AttributeError (seen 2026-11-28), the store or the wire holds it base64, or the recipient's part is other bytes;
+    no_claim=how a mail program opens it."""
+    import base64
+    from icloud_mcp.mail import attachment_bytes
+    mail, server, _fake, _ = env
+    eml = b"To: Support <help@example.org>\r\nSubject: Login codes\r\nX-Unsent: 1\r\n\r\nHi team,\r\nthe code never arrives.\r\n"
+    item = queue(mail, attachments=[{"filename": "Support.eml", "content_type": "message/rfc822",
+                                     "content_base64": base64.b64encode(eml).decode()}])
+    assert approve(mail, item)["status"] == "sent"
+    part = next(email.message_from_bytes(server.messages[0], policy=policy.default).iter_attachments())
+    assert part.get_content_type() == "message/rfc822" and part.get_filename() == "Support.eml"
+    inner = email.message_from_bytes(attachment_bytes(part), policy=policy.default)
+    assert inner["X-Unsent"] == "1" and "the code never arrives." in inner.get_content()
+
+
 def test_the_wire_carries_no_bcc_and_the_copy_in_sent_keeps_it(env):
     """protects=the review's Bcc requirement: the stepwise send builds the bytes it sends without Bcc, and the stored message and
     the copy for Sent keep it; fails_when=the DATA bytes hold a Bcc header or the hidden address, the hidden address is not an
