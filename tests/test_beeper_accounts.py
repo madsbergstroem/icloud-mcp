@@ -144,11 +144,11 @@ async def test_a_beeper_request_counts_as_beeper_and_an_unknown_type_as_other(we
     app, mcp, src = launch(web, hub)
     async with client(app) as c:
         await signed_in(c)
-        assert (await c.get("/dashboard/api/state")).json()["kinds"]["external:Beeper"] == 0     # a line even with nothing waiting
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["all"] == 0
         await ask(mcp)
         src.box.add(A.canonical("example.gone", {"x": 1}), ["someone"], action_type="example.gone")
-        kinds = (await c.get("/dashboard/api/state")).json()["kinds"]
+        needs = (await c.get("/dashboard/api/state")).json()["needs"]
         today = (await c.get("/dashboard/api/today")).json()["waiting"]
-    assert kinds["external:Beeper"] == 1 and kinds["external:Other"] == 1 and "external" not in kinds
+    assert needs["all"] == 2
     assert sorted(w["kind_label"] for w in today if w["kind"] == "external") == ["Beeper", "Other"]
     assert all("kind_label" not in w for w in today if w["kind"] != "external")

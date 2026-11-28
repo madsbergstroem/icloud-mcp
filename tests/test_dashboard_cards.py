@@ -1,4 +1,4 @@
-"""What the app's request cards and side list read from the API: kinds waiting, the Mac helper, group chats by name, the account a
+"""What the app's request cards and side list read from the API: what needs the owner, the Mac helper, group chats by name, the account a
 mail goes out from, and an unclear send in Sent today and Activity."""
 import json
 
@@ -6,7 +6,7 @@ from test_dashboard import api, client, queue, signed_in, web  # noqa: F401  (we
 from test_text_edit import IMESSAGE_ENV, answer_with, queue_imessage
 
 
-async def test_the_state_counts_what_waits_by_kind_and_says_how_the_mac_is(web):
+async def test_the_state_counts_what_needs_the_owner_and_says_how_the_mac_is(web):
     app, mcp, *_ = web(**IMESSAGE_ENV, ALLOW_CALENDAR_INVITES="approve")
     queue(mcp)
     queue_imessage(mcp)
@@ -14,11 +14,12 @@ async def test_the_state_counts_what_waits_by_kind_and_says_how_the_mac_is(web):
     async with client(app) as c:
         await signed_in(c)
         s = (await c.get("/dashboard/api/state")).json()
-        # the sidebar line: the type's badge; since package 5b the calendar's types have a line each (two share Cancellation)
-        # and since 6b the mail types (the side list names the type's badge, as for the others)
-        assert s["kinds"] == {"external:Email": 1, "external:Email reply": 0, "external:Forward": 0, "external:Invitation": 0,
-                              "external:Event update": 0, "external:Cancellation": 0, "external:Reply": 0, "external:iMessage": 2} \
-            and s["waiting"] == 3
+        today = (await c.get("/dashboard/api/today")).json()["waiting"]
+        # the side list: all, ending within 2 h, a close look (the two group chats), who asked; counted by the rows' own flag
+        assert s["waiting"] == 3 and s["needs"]["all"] == 3 and s["needs"]["soon"] == 0 and s["needs"]["soon_seconds"] == 7200
+        assert s["needs"]["look"] == sum(w["look"] for w in today) == 2
+        assert sorted(w["key"] for w in today if w["look"]) == sorted(w["key"] for w in today if "Group" in w.get("tags", []))
+        assert "kinds" not in s
         assert s["mac"] == "offline"                               # a helper is set up (BRIDGE_TOKEN) but has not connected
 
 
@@ -27,7 +28,7 @@ async def test_the_state_says_when_no_mac_helper_is_set_up(web):
     async with client(app) as c:
         await signed_in(c)
         s = (await c.get("/dashboard/api/state")).json()
-        assert s["mac"] == "off" and s["kinds"]["external:Email"] == 0
+        assert s["mac"] == "off" and s["needs"] == {"all": 0, "soon": 0, "look": 0, "soon_seconds": 7200, "by": []}
 
 
 async def test_a_named_group_chat_is_titled_by_its_name_and_the_people_stay_in_the_card(web):

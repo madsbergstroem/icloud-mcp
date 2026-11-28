@@ -93,6 +93,13 @@ ion-toggle::part(label) { white-space: normal; }
 .tag.bad { background: var(--neg-bg); color: var(--neg-ink); border-color: transparent; }
 .tag.end { margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+/* the side list's groups as chips over Home on a phone, and the dot that marks "ends soon" and "close look" in both */
+.filters { display: flex; gap: 6px; overflow-x: auto; padding: 4px 16px 2px; scrollbar-width: none; }
+.filters ion-chip { flex: none; margin: 0; }
+.filters .num { margin-left: 4px; opacity: .75; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; margin-right: 6px; }
+.dot.danger { background: var(--negative); }
+.dot.warning { background: var(--note-ink); }
 .chips .tag { margin: 0; }
 
 ion-item.sel { --background: var(--active); }                          /* the open request; an entry Home pointed to in Activity */
@@ -226,6 +233,12 @@ ion-toast.undo { --background: var(--text); --color: var(--ground); --button-col
   .side ion-item.on { --background: var(--active); }
   .side ion-item.on ion-icon { color: var(--text); }
   .side ion-item.sub { --min-height: 34px; --padding-start: 43px; color: var(--muted); font-size: 14.5px; }
+  /* a column taller than the window scrolls; without this its entries shrink to fit and Home, Activity and Settings overlap */
+  .side > *, .side [data-needs] > *, .side [data-services] > * { flex-shrink: 0; }
+  .side [data-needs] { display: flex; flex-direction: column; gap: 2px; }
+  .side ion-item.filter { --padding-start: 12px; }
+  .side ion-item.filter.on { --background: var(--active); color: var(--text); font-weight: 500; }
+  .side ion-item.filter .dot { margin: 0 10px 0 2px; }
   .side .lbl { padding: 18px 10px 6px; color: var(--muted); font-size: 13px; }
   .side ion-item p { margin: 1px 0 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
   .shell { display: flex; height: 100%; }

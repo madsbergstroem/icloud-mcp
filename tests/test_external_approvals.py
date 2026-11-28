@@ -85,7 +85,7 @@ async def test_without_a_registered_type_the_server_has_no_external_source(web, 
     assert not (Path(mcp._icloud_dashboard.s.data_dir) / "external-outbox.json").exists()
     async with client(app) as c:
         await signed_in(c)
-        assert "external" not in (await c.get("/dashboard/api/state")).json()["kinds"]
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["all"] == 0
 
 
 async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
@@ -95,8 +95,7 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
     assert not [t.name for t in mcp._tool_manager.list_tools() if "external" in t.name or "echo" in t.name]
     async with client(app) as c:
         await signed_in(c)
-        kinds = (await c.get("/dashboard/api/state")).json()["kinds"]
-        assert kinds["external:Echo"] == 0 and "external" not in kinds       # counted under the type's badge, not the raw kind
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["all"] == 0
 
 
 async def test_only_the_beeper_tool_calls_queue_external():
@@ -225,8 +224,9 @@ async def test_the_list_and_the_card_come_from_the_type(web, hub, monkeypatch):
         today = (await c.get("/dashboard/api/today")).json()["waiting"]
         assert today == [{"key": f"external:{q.id}", "kind": "external", "kind_label": "Echo", "badge": "Echo", "title": "Echo test", "to": "anna@example.org",
                           "by": "Claude", "created_at": q.created_at, "expires_at": q.expires_at, "warning": True, "blocked": False,
-                          "group": False, "action_type": "test.echo"}]
-        assert (await c.get("/dashboard/api/state")).json()["kinds"]["external:Echo"] == 1
+                          "group": False, "action_type": "test.echo", "look": True}]
+        needs = (await c.get("/dashboard/api/state")).json()["needs"]
+        assert needs["all"] == 1 and needs["look"] == 1 and needs["by"] == [["Claude", 1]]      # the warning puts it under a close look
         it = (await c.get(url(q.id))).json()
         assert it["rows"] == [["Reaches", "anna@example.org"], ["Times", "2"]] and it["text"] == "Please send the money"
         assert it["approve_label"] == "Send echo" and it["warnings"] == ["The message mentions money."] and it["needs_override"] is False
