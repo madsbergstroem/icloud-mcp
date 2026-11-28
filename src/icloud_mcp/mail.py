@@ -13,6 +13,8 @@ import base64
 import contextlib
 import copy
 import email
+import binascii
+import quopri
 import errno
 import functools
 import hashlib
@@ -374,9 +376,17 @@ def iter_attachment_parts(msg: EmailMessage) -> list[email.message.Message]:
 def attachment_bytes(part: email.message.Message) -> bytes:
     if part.get_content_type() == "message/rfc822":
         inner = part.get_payload()
-        if inner:
-            return inner[0].as_bytes()
-        return b""
+        body = inner[0].as_bytes() if isinstance(inner, list) and inner and isinstance(inner[0], email.message.Message) else \
+            (inner.encode("utf-8", "surrogateescape") if isinstance(inner, str) else b"")
+        cte = str(part.get("Content-Transfer-Encoding", "")).strip().lower()
+        try:                 # another program may have encoded it, which RFC 2046 forbids for message/*: its bytes as meant
+            if cte == "base64":
+                return base64.b64decode(body, validate=False)
+            if cte == "quoted-printable":
+                return quopri.decodestring(body)
+        except (ValueError, binascii.Error):
+            return body
+        return body
     return part.get_payload(decode=True) or b""
 
 
@@ -446,7 +456,19 @@ def _attach(msg: EmailMessage, att: dict[str, Any], max_bytes: int) -> None:
     if len(data) > max_bytes:
         raise MailError(f"Attachment '{filename}' is {len(data)} bytes; the limit is {max_bytes} (MAX_ATTACHMENT_BYTES). Send a smaller file.")
     ctype = att.get("content_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    maintype, _, subtype = ctype.partition("/")
+    add_file(msg, data, ctype, filename)
+
+
+def add_file(msg: EmailMessage, data: bytes, ctype: str, filename: str) -> None:
+    """Attach a file's bytes as `ctype`. A message/rfc822 file (an .eml) is attached as the mail it is: RFC 2046 does not allow
+    base64 for message/*, and add_attachment would write it so, which no reader can take apart again. Any other message/*
+    type goes out as application/octet-stream."""
+    maintype, _, subtype = ctype.lower().partition("/")
+    if maintype == "message":
+        if subtype == "rfc822":
+            msg.add_attachment(email.message_from_bytes(data, policy=policy.default), filename=filename)
+            return
+        maintype, subtype = "application", "octet-stream"
     msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
 
 
@@ -677,8 +699,8 @@ def build_forward(
             maintype, _, subtype = ctype.partition("/")
             name = part.get_filename() or ("forwarded.eml" if ctype == "message/rfc822" else "attachment")
             try:
-                msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
-            except Exception:  # some types (message/*) can't be attached from bytes
+                add_file(msg, data, ctype, name)
+            except Exception:  # a type the library cannot attach from bytes
                 msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=name)
     for att in attachments or []:
         _attach(msg, att, max_attachment_bytes)

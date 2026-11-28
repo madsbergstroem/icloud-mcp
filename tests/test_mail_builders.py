@@ -134,6 +134,45 @@ def test_build_message_attachments_unicode_and_bcc():
     assert parsed["Message-ID"].endswith("@icloud.com>")
 
 
+EML = b"To: Support <help@example.org>\r\nSubject: Login codes\r\nX-Unsent: 1\r\n\r\nHi team,\r\nthe code never arrives.\r\n"
+
+
+def test_an_eml_attachment_goes_out_as_the_mail_it_is():
+    """protects=an .eml (message/rfc822) attached to a new mail; fails_when=building it raises AttributeError (seen 2026-11-28 in
+    mail_send_message), the part is base64 (RFC 2046 forbids it for message/*, readers then show the base64 text as the mail),
+    or the recipient gets other bytes than were sent; no_claim=how a given mail program opens it."""
+    from icloud_mcp.mail import attachment_bytes
+    m = build_message(sender=ME, to=[("", "a@x.org")], subject="s", text="see attached",
+                      attachments=[{"filename": "Support.eml", "content_type": "message/rfc822",
+                                    "content_base64": base64.b64encode(EML).decode()}])
+    part = next(m.iter_attachments())
+    assert part.get_content_type() == "message/rfc822" and part["Content-Transfer-Encoding"] != "base64"
+    got = next(parse(m.as_bytes(policy=policy.SMTP)).iter_attachments())
+    assert got.get_filename() == "Support.eml"
+    inner = parse(attachment_bytes(got))
+    assert inner["X-Unsent"] == "1" and inner["Subject"] == "Login codes" and "the code never arrives." in inner.get_content()
+
+
+def test_another_message_type_goes_out_as_a_file():
+    """protects=message/* other than rfc822 cannot be attached as a mail; fails_when=it raises or is written as message/*;
+    no_claim=none."""
+    m = build_message(sender=ME, to=[("", "a@x.org")], subject="s", text="x",
+                      attachments=[{"filename": "part.bin", "content_type": "message/partial", "content_base64": base64.b64encode(b"abc").decode()}])
+    part = next(m.iter_attachments())
+    assert part.get_content_type() == "application/octet-stream" and part.get_content() == b"abc"
+
+
+def test_a_base64_eml_from_another_program_reads_as_its_bytes():
+    """protects=reading an rfc822 attachment that another program wrote with base64; fails_when=attachment_bytes raises
+    AttributeError on it; no_claim=that such a mail shows well elsewhere."""
+    from icloud_mcp.mail import attachment_bytes
+    raw = (b"From: a@x.org\r\nTo: me@icloud.com\r\nSubject: s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n"
+           b"--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b\r\nContent-Type: message/rfc822\r\nContent-Transfer-Encoding: base64\r\n"
+           b"Content-Disposition: attachment; filename=x.eml\r\n\r\n" + base64.b64encode(EML) + b"\r\n--b--\r\n")
+    part = next(parse(raw).iter_attachments())
+    assert attachment_bytes(part) == EML
+
+
 def test_html_only_original_is_quoted_as_text():
     o = parse("From: a@x.org\r\nTo: me@icloud.com\r\nSubject: s\r\nMessage-ID: <1@x>\r\nContent-Type: text/html\r\n\r\n<html><body><p>Hello <b>there</b></p></body></html>\r\n")
     r = build_reply(o, sender=ME, body="ok")
