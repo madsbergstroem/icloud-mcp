@@ -217,7 +217,8 @@ class Connect extends HTMLElement {
       + `<div class="tiles">${tile("icloud", "iCloud", "Mail, calendar and contacts. With your Mac also reminders, notes, iCloud Drive and iMessage.", can, here)}
         ${tile("other", "Other email &amp; calendar", "Any provider with IMAP and SMTP, and CalDAV or CardDAV if it has them. You enter the servers and a password.", can, here)}
         ${(r.plugins || []).map((p) => tile("plugin:" + p.id, esc(p.name), esc(p.description), false,
-          p.connection === "operator" ? esc(p.status) : "Not available here yet")).join("")}</div>`
+          p.connection === "operator" ? esc(p.status) : "Not available here yet")).join("")}
+        ${(r.skipped || []).map((p) => tile("skipped:" + p.id, esc(p.name), "Installed, but not loaded.", false, esc(p.why))).join("")}</div>`
       + `<p class="note">Mail, calendar and contacts each come from one service. You can connect a second mail service, but only one is used for mail at a time.</p>`;
     this.querySelectorAll("[data-provider]").forEach((n) => n.addEventListener("click", () => push(this, "icm-connect-form", { provider: n.dataset.provider })));
   }

@@ -21,7 +21,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from ...messages import Account, Chat, ChatFilter, Filters, Match, Matches, Message, MessagesError, Page, Person, make_id, split_id
+from ...plugin_api import Account, Chat, ChatFilter, Filters, Match, Matches, Message, MessagesError, Page, Person, make_id, split_id
 from . import gateway as G
 
 log = logging.getLogger(__name__)
@@ -34,17 +34,17 @@ _TRUE = ("1", "true", "yes", "on")
 
 
 def _list(s: Any, key: str) -> tuple[str, ...]:
-    return tuple(x.strip() for x in s.plugin_value(key, "").split(",") if x.strip())
+    return tuple(x.strip() for x in s.value(key, "").split(",") if x.strip())
 
 
 def reading_on(s: Any) -> bool:
     """Off unless the owner turned it on; and it needs the gateway and the read key."""
-    return bool(s.beeper_gateway_url and s.beeper_read_key and s.plugin_value(READ, "false").strip().lower() in _TRUE)
+    return bool(G.gateway_url(s) and G.read_key(s) and s.value(READ, "false").strip().lower() in _TRUE)
 
 
 def _max_age(s: Any) -> int:
     try:
-        return max(0, min(int(s.plugin_value(MAX_AGE, "0") or 0), 36500))
+        return max(0, min(int(s.value(MAX_AGE, "0") or 0), 36500))
     except ValueError:
         return 0
 
@@ -64,7 +64,7 @@ class _Rules:
         self.hidden = {x.casefold() for x in _list(s, HIDDEN)}
         self.visible = {x.casefold() for x in _list(s, VISIBLE)}
         self.max_age = _max_age(s)
-        self.short_codes = s.plugin_value(SHORT_CODES, "true").strip().lower() in _TRUE
+        self.short_codes = s.value(SHORT_CODES, "true").strip().lower() in _TRUE
         rules = json.dumps([sorted(self.hidden), sorted(self.visible), self.max_age, self.short_codes])
         self.hash = hashlib.sha256(rules.encode()).hexdigest()[:12]      # which rules were in force, without naming a chat
 

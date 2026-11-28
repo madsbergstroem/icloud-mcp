@@ -32,7 +32,7 @@ from . import callctx
 from .approvals import register_outbox_routes
 from .approval_status import ApprovalLedger, register as register_approval_status
 from .approval_withdraw import register as register_approval_withdraw
-from .plugins import enabled_plugins
+from .plugins import context as plugin_context, enabled_plugins, secrets_of as plugin_secrets
 from .audit import AuditLog
 from .auth import SCOPE, OwnerOAuthProvider, register_routes
 from .setup_page import register_setup_routes
@@ -548,7 +548,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
         _mac_executor = ThreadPoolExecutor(max_workers=min(s.tool_workers, 6), thread_name_prefix="icloud-mac")
     plugins = enabled_plugins(s)                 # service plugins set up on this server (plugins/__init__.py); Beeper is one
     _error_secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token,
-                      *(x for p in plugins for x in p.secrets(s) if x))
+                      *(x for p in plugins for x in plugin_secrets(p, s)))
     _error_ids = (s.username, s.email_address, s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username)
     _audit, _audit_provider = None, None
     if s.local_mode:
@@ -763,7 +763,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     plugins = enabled_plugins(s)                 # the service plugins set up here: their chats, sending and health join the rest
     for p in plugins:
         if p.health is not None:
-            health[p.id] = (lambda p=p: p.health(s))
+            health[p.id] = (lambda p=p: p.health(plugin_context(p, s)))
     warm: dict[str, Any] = {}                   # area -> zero-argument warm-up, run in the background at start (WARMUP_ON_START)
     pools: dict[str, Any] = {}                  # area -> zero-argument view of its kept connections, for the health check
     mcp._icloud_warmups = warm
@@ -2940,7 +2940,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
 
     def health_report() -> dict[str, Any]:
         secrets = (s.app_password, s.mail_password, s.caldav_password, s.carddav_password, s.owner_password, s.bridge_token, s.username, s.email_address,
-                   s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username, *(x for p in plugins for x in p.secrets(s) if x))
+                   s.imap_username, s.smtp_username, s.caldav_username, s.carddav_username, *(x for p in plugins for x in plugin_secrets(p, s)))
         before = {area: view() for area, view in pools.items()}          # read first: the checks below warm things up
         holder = callctx.current()
 
@@ -3008,7 +3008,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     # Plugins that read chats join the chat tools; the core keeps the owner's filters and the foreign-text notice
     for p in plugins:
         m = p.capabilities.messages
-        if m is not None and m.backend is not None and (backend := m.backend(s)) is not None:
+        if m is not None and m.backend is not None and (backend := m.backend(plugin_context(p, s))) is not None:
             hub.add_backend(backend, backend.filters())
     if hub.backends():
         register_chat_reading("mac" if s.bridge_enabled and s.enable_imessage else "main")
@@ -3017,7 +3017,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
     if writable:
         for p in plugins:
             m = p.capabilities.messages
-            if m is not None and m.archive is not None and m.prefix in hub.backends() and (arch := m.archive(s)) is not None:
+            if m is not None and m.archive is not None and m.prefix in hub.backends() and (arch := m.archive(plugin_context(p, s))) is not None:
                 hub.add_archiver(arch)
     if hub.can_archive:
         @tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
@@ -3049,11 +3049,10 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             return out
 
     external = None                        # requests of the action types registered in actions.py and by the plugins that send
-    senders = [p.capabilities.messages for p in plugins if p.capabilities.messages is not None
-               and p.capabilities.messages.action_type is not None and p.capabilities.messages.sending_on(s)]
+    senders = [(p, p.capabilities.messages) for p in plugins if p.capabilities.messages is not None
+               and p.capabilities.messages.action_type is not None and p.capabilities.messages.sending_on(plugin_context(p, s))]
     if provider is not None and _audit is not None and (s.dashboard or approval["imessage"] is not None or held_mail is not None):
         from . import actions
-        from .plugins import PluginContext
         registry = actions.REGISTRY.copy()         # this server's own, so what its settings turn on stays with it
         if approval["imessage"] is not None:       # iMessage is an action type of the server's own (package 4b)
             from .imessage import register_type as register_imessage
@@ -3066,10 +3065,11 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             from .mail import register_types as register_mail
             register_mail(registry, held_mail, account=lambda: mail_account(s))
         # the senders' and plugins' types need the dashboard or iMessage, as before 6b; held mail alone brings only its own types
-        for m in (senders if s.dashboard or approval["imessage"] is not None else []):     # the core calls the executor once, after approval; list and policy at queue and approval
-            registry.register(m.action_type, m.executor(s), (lambda m=m: m.allowed(s)), m.policy(s), channel_tool="messages_send_request")
+        for p, m in (senders if s.dashboard or approval["imessage"] is not None else []):     # the core calls the executor once, after approval; list and policy at queue and approval
+            ctx = plugin_context(p, s)
+            registry.register(m.action_type, m.executor(ctx), (lambda m=m, ctx=ctx: m.allowed(ctx)), m.policy(ctx), channel_tool="messages_send_request")
         for p in (plugins if s.dashboard or approval["imessage"] is not None else []):     # actions of any kind (docs/SENDGATE.md, package 1): asked for with approval_request
-            ctx = PluginContext(s, p.id)
+            ctx = plugin_context(p, s)
             for spec in p.actions:
                 try:
                     registry.register(spec.action_type, spec.executor(ctx), (lambda spec=spec, ctx=ctx: spec.allowed(ctx)), spec.policy(ctx),
@@ -3087,7 +3087,8 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             own_groups = lambda: settings_mod.CORE_GROUPS + [p.settings_group() for p in plugins if p.settings_group is not None]  # noqa: E731  -- set up here only
             register_allow(registry, ListAllow(s, settings_mod.SettingsStore(s.data_dir),
                                                lambda: {sp.key: sp for g in own_groups() for sp in g.specs}, settings_mod.current,
-                                               add_live, own_groups))
+                                               add_live, own_groups,
+                                               lambda key: next((plugin_context(p, s) for p in plugins if key in p.settings_keys), s)))
             # and asks for a standing rule (gate.trust), so requests of the server's own kinds to one person go out without waiting
             from .gate.trust import Trust, register as register_trust
             trust = Trust(registry)
@@ -3133,9 +3134,9 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
             from .gate import requests as gate_requests
             gate_requests.register(tool, _guard, gate_requests.Requests(external, s.approval_link, max(1, s.effective_tool_timeout - 2)), _WRITE)
         if external is not None:
-            for m in senders:
+            for p, m in senders:
                 if m.sender is not None:
-                    hub.add_sender(m.sender(s, external))
+                    hub.add_sender(m.sender(plugin_context(p, s), external))
     if hub.can_send:
         @tool(annotations=_WRITE)
         @_guard(lane="mac")                              # an iMessage request asks the Mac about the chat; a Beeper one asks the gateway, briefly

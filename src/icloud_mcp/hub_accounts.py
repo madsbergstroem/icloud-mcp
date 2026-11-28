@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 from . import accounts as A
+from .plugins import context as plugin_context
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def channels(s: Any, plugins: list[Any], hub: Any) -> list[dict[str, Any]]:
             row.update(_channel(hub, p.capabilities.messages.prefix))
         if p.agent_accounts is not None:
             try:
-                state, refs = p.agent_accounts(s)
+                state, refs = p.agent_accounts(plugin_context(p, s))
             except Exception as e:  # noqa: BLE001  -- one plugin must not take the list down
                 log.warning("hub accounts: plugin %s failed (%s)", p.id, type(e).__name__)
                 state, refs = "unreadable", []

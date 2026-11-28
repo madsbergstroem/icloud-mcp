@@ -34,12 +34,56 @@ from typing import Any, Callable, Mapping
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from ... import actions as A
-from ...config import Settings
-from ...messages import SendRequest
-from ...gate_connectors.gateway import Answer, Gateway, GatewayError, _answer, _classify  # noqa: F401  -- moved; the names stay here for callers and tests
+from ... import plugin_api as A
+from ...plugin_api import Answer, Gateway, GatewayError, PluginContext, SendRequest  # noqa: F401  -- Answer stays here for callers and tests
+
+Settings = PluginContext        # what every function here takes: the plugin's context (plugin_api v1), never the server's settings
 
 log = logging.getLogger(__name__)
+
+# The settings whoever runs the server sets (docs/SENDGATE.md, package 7: they left the core's Settings, the names stayed)
+GATEWAY_URL, EXEC_KEY, READ_KEY = "BEEPER_GATEWAY_URL", "BEEPER_EXEC_KEY", "BEEPER_READ_KEY"
+CHAT_TOOL, SEND_TOOL, TIMEOUT, ACCOUNTS_TOOL = "BEEPER_CHAT_TOOL", "BEEPER_SEND_TOOL", "BEEPER_TIMEOUT_SECONDS", "BEEPER_ACCOUNTS_TOOL"
+SEND_ALLOWLIST = "BEEPER_SEND_ALLOWLIST"
+
+
+def gateway_url(s: PluginContext) -> str:
+    return s.value(GATEWAY_URL).strip()
+
+
+def exec_key(s: PluginContext) -> str:
+    return s.secret(EXEC_KEY).strip()
+
+
+def read_key(s: PluginContext) -> str:
+    return s.secret(READ_KEY).strip()
+
+
+def chat_tool(s: PluginContext) -> str:
+    return s.value(CHAT_TOOL).strip() or "beeper-get_chat"
+
+
+def send_tool(s: PluginContext) -> str:
+    return s.value(SEND_TOOL).strip() or "beeper_send-send_message"
+
+
+def accounts_tool(s: PluginContext) -> str:
+    return s.value(ACCOUNTS_TOOL).strip() or "beeper-get_accounts"
+
+
+def timeout_seconds(s: PluginContext) -> float:
+    """How long one gateway call may take: 5 to 120 seconds, 30 by default."""
+    try:
+        n = int(s.value(TIMEOUT, "30").strip() or 30)
+    except ValueError:
+        n = 30
+    return float(max(5, min(n, 120)))
+
+
+def send_allowlist(s: PluginContext) -> tuple[str, ...]:
+    """The owner's list of chats that may be written to, as it is now (an entry approved by request applies at once)."""
+    return tuple(x.strip() for x in s.value(SEND_ALLOWLIST).split(",") if x.strip())
+
 
 ACTION_ID = "beeper.message.send"
 MAX_TEXT = 10000
@@ -160,15 +204,15 @@ def _networks_of(answer: Answer) -> list[Network] | None:
 
 def read_gateway(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> "Gateway":
     """The gateway with the read key, for reading chats (plugins/beeper/reading.py). Tests replace this."""
-    return Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 15.0), make_http=make_http)
+    return Gateway(gateway_url(s), read_key(s), min(timeout_seconds(s), 15.0), make_http=make_http)
 
 
 def read_tool(s: Settings, name: str) -> str:
     """The gateway's name of one of Beeper's read tools for the read key: `<BEEPER_READ_SERVER>-<name>` ("beeper_alex-search_chats").
     BEEPER_ACCOUNTS_TOOL, where set, still names get_accounts; without a read server the old default names stay."""
-    server = s.plugin_value("BEEPER_READ_SERVER").strip()
-    if name == "get_accounts" and (s.plugin_value("BEEPER_ACCOUNTS_TOOL").strip() or not server):
-        return s.beeper_accounts_tool
+    server = s.value("BEEPER_READ_SERVER").strip()
+    if name == "get_accounts" and (s.value(ACCOUNTS_TOOL).strip() or not server):
+        return accounts_tool(s)
     return f"{server or 'beeper'}-{name}"
 
 
@@ -182,7 +226,7 @@ class AccountsReader:
 
     def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
         self.tool = read_tool(s, "get_accounts")
-        self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
+        self.gateway = Gateway(gateway_url(s), read_key(s), min(timeout_seconds(s), 10.0), make_http) if read_key(s) else None
         self._lock = threading.Lock()
         self._kept: tuple[float, dict[str, Any]] | None = None
 
@@ -262,7 +306,7 @@ class ChatsReader:
 
     def __init__(self, s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None):
         self.chat_tool, self.search_tool = read_tool(s, "get_chat"), read_tool(s, "search_chats")
-        self.gateway = Gateway(s.beeper_gateway_url, s.beeper_read_key, min(s.beeper_timeout_seconds, 10.0), make_http) if s.beeper_read_key else None
+        self.gateway = Gateway(gateway_url(s), read_key(s), min(timeout_seconds(s), 10.0), make_http) if read_key(s) else None
         self._lock = threading.Lock()
         self._kept: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
@@ -409,16 +453,11 @@ class BeeperExecutor:
 # -- wiring ---------------------------------------------------------------------------------------------------------------------------
 def configured(s: Settings) -> bool:
     """Beeper messages are on when the gateway address and the key are set. Without them the server has no such tool."""
-    return bool(s.beeper_gateway_url and s.beeper_exec_key)
+    return bool(gateway_url(s) and exec_key(s))
 
 
 def connect(s: Settings, make_http: Callable[[dict[str, str], float], Any] | None = None) -> Beeper:
-    return Beeper(Gateway(s.beeper_gateway_url, s.beeper_exec_key, s.beeper_timeout_seconds, make_http), s.beeper_chat_tool, s.beeper_send_tool)
-
-
-def register_type(registry: A.ActionRegistry, beeper: Beeper, s: Settings) -> None:
-    """The action type, with the owner's list read from the settings every time it is asked."""
-    registry.register(ACTION_TYPE, BeeperExecutor(beeper), lambda: s.beeper_send_allowlist)
+    return Beeper(Gateway(gateway_url(s), exec_key(s), timeout_seconds(s), make_http), chat_tool(s), send_tool(s))
 
 
 class BeeperSender:
@@ -454,8 +493,7 @@ class BeeperSender:
         except A.ExternalError as e:
             raise ToolError(str(e)) from None
         if not got.waits:                          # a standing rule (package 10); a connector cannot opt in, so this stays unused
-            from ...gate.external import released_answer
-            return released_answer(got)
+            return A.released_answer(got)
         q = got.q
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id,
                 "chat": {"title": chat.title, "network": chat.network, "group": chat.is_group, **({"people": chat.people} if chat.people is not None else {})},
