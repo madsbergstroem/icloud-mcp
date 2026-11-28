@@ -1182,6 +1182,35 @@ tests 130, docs including "Writing a plugin action" 30), plus 30 min of review b
 
 Reviewed on 2026-11-28: see "Review of packages 7 and 8" below.
 
+### As built (7)
+
+Built on 2026-11-28 without the Codex review (the owner's choice; the Codex workspace had no credits). A separate pass with
+gstack `/review` over the whole diff took its place; its findings are below.
+
+- `icloud_mcp.plugin_api` re-exports the names of the table above, `API_VERSION = 1` and `released_answer` (what a sender answers
+  when a standing rule let a request through, package 10b; additive). The five `loosens` rules are public as `to_true`,
+  `to_false`, `changed`, `removes_entry` and `more_history` (`settings.py`), the old private names stay.
+- `PluginContext` is a class with slots, not a dataclass: `value`, `secret`, `approval_link`, `plugin_id`. `plugins.context(p, s)`
+  gives the one context of a plugin per server, so a plugin keeps what it caches per server keyed on it (Beeper's readers).
+  `value` answers only the plugin's own `settings_keys` and `env_keys`. Built directly (`PluginContext(settings, id)`, as tests
+  do) it reads any plugin value.
+- `Settings.plugin_secrets` holds every plugin's `secret_keys` apart from `plugin_values`, `repr=False`, read with
+  `plugin_secret`; `plugins.secrets_of(p, s)` is what the core masks (the secret names' values and `secrets(ctx)`).
+- Beeper: `BEEPER_GATEWAY_URL`, `_CHAT_TOOL`, `_SEND_TOOL`, `_TIMEOUT_SECONDS`, `_ACCOUNTS_TOOL` are `env_keys`, the two keys are
+  `secret_keys`; defaults and the 5 to 120 second bound are in `plugins/beeper/gateway.py`. Its unused `register_type` is gone,
+  and so are the re-exports of the private `_answer` and `_classify`.
+- `config.add_live` and `live_matches` take a plugin's requestable list and change `plugin_values` in place, under the same rule
+  (only adds; an empty list that means anyone stays empty).
+- `gate.allow` hands a plugin list's `entry_info` that plugin's context; the server passes the lookup in (`ListAllow(view=...)`),
+  so the gate imports no plugin code.
+- `settings.GROUPS` and `SPECS` are built when first read (module `__getattr__`), because a plugin imports `plugin_api`, which
+  imports `settings`; building them at import found the plugins half loaded.
+- Connect a service lists a plugin skipped for its version with its name and "Needs a newer server" or "Written for an older
+  server" (`/dashboard/api/accounts` → `skipped`).
+- Tests: `tests/test_plugin_api.py` for criteria 1 to 6 and 8; the Beeper tests (criterion 7) changed only where they built a
+  reader from `Settings` or set `beeper_send_allowlist`. The commits follow the bins (gate, connector, mixed); the change crosses
+  them in one step, so only the last commit runs green on its own.
+
 ## Package 8: signed checkpoints of the log, export
 
 The activity log is a hash chain (`gate/audit.py:40-42`, `:80-81`), and the dashboard checks it (`dashboard_api.py:659`,
@@ -2034,7 +2063,9 @@ To be asked once packages 0 to 3 run in the fork.
 ## Writing a plugin action
 
 Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`, a tuple of `ActionSpec`
-(`src/icloud_mcp/plugins/__init__.py`). `ActionSpec` and `PluginContext` are public from package 1 and versioned in package 7.
+(`src/icloud_mcp/plugins/__init__.py`). Since package 7 a plugin imports every public name from `icloud_mcp.plugin_api` and says
+`Plugin(api=1, ...)`; the core loads only the versions it supports and lists any other plugin on Connect a service. Every
+callback, of an action and of every other part of a plugin, gets a `PluginContext`, never the server's settings.
 
 | Field | What it is |
 |-------|------------|
@@ -2046,7 +2077,10 @@ Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`
 | `recheck(ctx, params)` | Optional. Called after the owner approved and before the executor. Return `target_changed` when the target is not what the owner saw: nothing is carried out and the request ends as discarded with that reason. |
 | `hold(ctx)` | Optional. Whether approving is off right now: an `actions.Hold` with level `blocked` (the card says why and approving is refused, nothing is carried out, the request keeps waiting) or `note` (one line on the card), or None. Read on every look and every approval; one that raises blocks. |
 
-`ctx.value(key, default)` reads one of the plugin's own settings. Agents name an action `action` in `approval_request` and
+`ctx.value(key, default)` reads one of the plugin's own settings (its `settings_keys` and `env_keys`; any other key gives the
+default), `ctx.secret(key)` one of its `secret_keys` (any other name raises `KeyError`), `ctx.approval_link(kind, id)` the
+dashboard link of a request; nothing else of the server is on it. A list setting marked `requestable` in the plugin's group can be
+asked for with `gate.allow` like the core's lists. Agents name an action `action` in `approval_request` and
 `approval_list_actions`; `approval_status` keeps the field `action_type` it already had, so existing agents read it unchanged.
 `approval_request` checks the agent's own parameters (schema, size, the owner's list) before `prepare`, so the service is never
 asked about a target the owner did not allow; the policy runs after `prepare`, on what it filled in. `readOnly` is allowed only

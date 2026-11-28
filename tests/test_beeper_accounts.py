@@ -131,10 +131,11 @@ def test_beepers_text_answer_and_structured_data_give_the_same_networks():
 
 
 def test_a_reader_that_trips_over_something_unexpected_still_answers(monkeypatch):
+    from icloud_mcp import plugins as P
     from icloud_mcp.config import Settings
     monkeypatch.setenv("BEEPER_GATEWAY_URL", URL)
     monkeypatch.setenv("BEEPER_READ_KEY", READ_KEY)
-    reader = B.AccountsReader(Settings.from_env())
+    reader = B.AccountsReader(P.context(next(p for p in P.load_plugins() if p.id == "beeper"), Settings.from_env()))
     monkeypatch.setattr(reader.gateway, "call", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
     assert reader.read() == {"state": "unreadable", "networks": []}
 

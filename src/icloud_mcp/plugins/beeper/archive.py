@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...messages import MessagesError, Unclear, make_id
+from ...plugin_api import MessagesError, Unclear, make_id
 from . import gateway as G
 from . import reading as R
 
@@ -21,10 +21,10 @@ ARCHIVE_TOOL = "BEEPER_ARCHIVE_TOOL"
 
 def archive_tool(s: Any) -> str:
     """BEEPER_ARCHIVE_TOOL, or archive_chat on the server entry of BEEPER_CHAT_TOOL."""
-    own = s.plugin_value(ARCHIVE_TOOL).strip()
+    own = s.value(ARCHIVE_TOOL).strip()
     if own:
         return own
-    server, dash, _tool = s.beeper_chat_tool.rpartition("-")
+    server, dash, _tool = G.chat_tool(s).rpartition("-")
     return f"{server if dash else 'beeper'}-archive_chat"
 
 
@@ -33,7 +33,7 @@ class BeeperArchiver:
 
     def __init__(self, beeper: G.Beeper, tool: str, s: Any):
         self.beeper, self.tool = beeper, tool
-        self.short_codes = s.plugin_value(R.SHORT_CODES, "true").strip().lower() in R._TRUE
+        self.short_codes = s.value(R.SHORT_CODES, "true").strip().lower() in R._TRUE
 
     def archive_chat(self, chat_id: str, archived: bool) -> dict[str, Any]:
         unknown = f"No conversation with chat_id '{make_id(R.PREFIX, chat_id)}' (take it from messages_list_chats). Nothing changed."

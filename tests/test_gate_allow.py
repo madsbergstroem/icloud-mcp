@@ -145,7 +145,7 @@ class _S:
     def __init__(self, groups="false", nets="*"):
         self.values = {B.GROUPS: groups, B.NETWORKS: nets}
 
-    def plugin_value(self, key, default=""):
+    def value(self, key, default=""):
         return self.values.get(key, default)
 
 
@@ -174,12 +174,10 @@ def test_a_beeper_lookup_that_fails_queues_nothing(monkeypatch):
 def test_the_beeper_policy_reads_the_list_each_time():
     """protects=a group added on request applies at once; fails_when=the policy keeps the list it read at start;
     no_claim=the gateway's own checks."""
-    class S(_S):
-        beeper_send_allowlist = ()
-    s = S(groups="true")
+    s = _S(groups="true")
     check = B._policy(s)
     assert check({"network": "WhatsApp", "is_group": True, "chat_id": "4818"})
-    S.beeper_send_allowlist = ("4818",)
+    s.values[B.ALLOW] = "4818"
     assert check({"network": "WhatsApp", "is_group": True, "chat_id": "4818"}) is None
 
 

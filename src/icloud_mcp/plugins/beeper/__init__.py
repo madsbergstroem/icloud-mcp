@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping
 
-from .. import AccountRef, Capabilities, ChatRef, Listing, MessagesCapability, Plugin
+from ...plugin_api import (AccountRef, Capabilities, ChatRef, Group, Listing, MessagesCapability, Plugin, Spec, changed,
+                           more_history, removes_entry, to_false, to_true)
 from . import archive as AR
 from . import gateway as G
 from . import reading as R
@@ -43,30 +44,29 @@ def _entry_info(s: Any, entry: str) -> dict[str, Any]:
     ref = refs[0] if refs else None
     if ref is None or not ref.found:
         return {"problem": "Beeper does not know this chat. Use the chat id messages_list_chats gives."}
-    nets = {x.casefold() for x in _split(s.plugin_value(NETWORKS, "*"))}
+    nets = {x.casefold() for x in _split(s.value(NETWORKS, "*"))}
     if "*" not in nets and ref.network.casefold() not in nets:
         return {"problem": f"Writing on {ref.network or 'this network'} is off, so this chat cannot be added. Tell the owner."}
-    if ref.group and s.plugin_value(GROUPS, "false").strip().lower() not in ("1", "true", "yes", "on"):
+    if ref.group and s.value(GROUPS, "false").strip().lower() not in ("1", "true", "yes", "on"):
         return {"problem": "This chat is a group, and group chats are off. Tell the owner."}
     kind = "group" if ref.group else "one to one"
     return {"entry": ref.id, "label": " · ".join(x for x in (ref.title or "Chat", ref.network, kind) if x)}
 
 
 def _settings_group() -> Any:
-    from ...settings import Group, Spec, _changed, _more_history, _removes_entry, _to_false, _to_true
     return Group("beeper", "Beeper", "Chats on WhatsApp, Signal, Telegram and more that your assistant may write to, after your approval.", [
         Spec(ALLOW, "Chats that may be written to", "list", "Chat ids as Beeper gives them. Empty means nobody, * every chat except groups.",
-             loosens=_changed, section="Sending", requestable=True, entry_info=_entry_info),
+             loosens=changed, section="Sending", requestable=True, entry_info=_entry_info),
         Spec(NETWORKS, "Networks that may be written to", "list", "Network names as Beeper shows them. * means every network, empty none.",
-             default="*", loosens=_changed, section="Sending"),
-        Spec(GROUPS, "Group chats", default="false", help="Only groups on the list by name; * never covers a group.", loosens=_to_true, section="Sending"),
-        Spec(R.READ, "Read chats", default="false", help="Off: your assistant sees no Beeper chats.", loosens=_to_true, section="Reading"),
-        Spec(R.VISIBLE, "Only these chats", "list", "Empty means every chat except the hidden ones.", loosens=_changed, section="Reading"),
-        Spec(R.HIDDEN, "Chats agents never see", "list", loosens=_removes_entry, section="Reading"),
+             default="*", loosens=changed, section="Sending"),
+        Spec(GROUPS, "Group chats", default="false", help="Only groups on the list by name; * never covers a group.", loosens=to_true, section="Sending"),
+        Spec(R.READ, "Read chats", default="false", help="Off: your assistant sees no Beeper chats.", loosens=to_true, section="Reading"),
+        Spec(R.VISIBLE, "Only these chats", "list", "Empty means every chat except the hidden ones.", loosens=changed, section="Reading"),
+        Spec(R.HIDDEN, "Chats agents never see", "list", loosens=removes_entry, section="Reading"),
         Spec(R.MAX_AGE, "Only messages from the last", "int", "0 means the whole history.", default="0", min=0, max=36500,
-             unit_label="days", loosens=_more_history, section="Reading"),
+             unit_label="days", loosens=more_history, section="Reading"),
         Spec(R.SHORT_CODES, "Hide service senders", default="true", help="Chats named by a short number: banks, deliveries, codes.",
-             loosens=_to_false, section="Reading"),
+             loosens=to_false, section="Reading"),
     ], summary=lambda v: ("Any chat" if "*" in [x.strip() for x in v("BEEPER_SEND_ALLOWLIST").split(",")]
                           else f"{len([x for x in v('BEEPER_SEND_ALLOWLIST').split(',') if x.strip()])} chats" if v("BEEPER_SEND_ALLOWLIST").strip()
                           else "Nobody may be written to"))
@@ -97,7 +97,7 @@ def _agent_accounts(s: Any) -> tuple[str, list[AccountRef]]:
 
 
 def _health(s: Any) -> dict[str, Any]:
-    if not s.beeper_read_key:
+    if not G.read_key(s):
         return {"ok": True, "checked": False, "note": "No read key: the gateway was not asked."}
     got = G.accounts_reader(s).read()
     return {"ok": got["state"] == "ok", "networks": len(got["networks"]), **({} if got["state"] == "ok" else {"error": _STATES.get(got["state"], got["state"])})}
@@ -107,11 +107,11 @@ def _health(s: Any) -> dict[str, Any]:
 def _policy(s: Any) -> Callable[[Mapping[str, Any]], str | None]:
     """Beyond the list (the core checks that): the chat's network must be allowed, and a group needs group chats on and its own id
     on the list. Read when a request is queued and again when it is approved; the answer is written for the agent."""
-    nets = {x.casefold() for x in _split(s.plugin_value(NETWORKS, "*"))}
-    groups_on = s.plugin_value(GROUPS, "false").strip().lower() in ("1", "true", "yes", "on")
+    nets = {x.casefold() for x in _split(s.value(NETWORKS, "*"))}
+    groups_on = s.value(GROUPS, "false").strip().lower() in ("1", "true", "yes", "on")
 
     def check(p: Mapping[str, Any]) -> str | None:
-        listed = {x.casefold() for x in s.beeper_send_allowlist}       # read each time: an approved entry applies at once (package 10)
+        listed = {x.casefold() for x in G.send_allowlist(s)}       # read each time: an approved entry applies at once (package 10)
         network = str(p.get("network") or "")
         if "*" not in nets and network.casefold() not in nets:
             return (f"Not permitted: writing on {network or 'this network'} is off. Tell the owner; only the owner can choose the networks "
@@ -165,7 +165,7 @@ def plugin() -> Plugin:
             action_type=G.ACTION_TYPE,
             executor=lambda s: G.BeeperExecutor(G.connect(s)),
             sender=lambda s, external: G.BeeperSender(G.connect(s), external, s),
-            allowed=lambda s: s.beeper_send_allowlist,
+            allowed=G.send_allowlist,
             policy=_policy,
             search_chats=_search, resolve=_resolve, networks=_networks,
             recipients_key=ALLOW, networks_key=NETWORKS, groups_key=GROUPS,
@@ -175,11 +175,12 @@ def plugin() -> Plugin:
             archive=AR.archiver,
         )),
         settings_keys=frozenset({ALLOW, NETWORKS, GROUPS, R.READ, R.HIDDEN, R.VISIBLE, R.MAX_AGE, R.SHORT_CODES}),
-        env_keys=frozenset({"BEEPER_READ_SERVER", "BEEPER_ACCOUNTS_TOOL", AR.ARCHIVE_TOOL}),
+        env_keys=frozenset({G.GATEWAY_URL, G.CHAT_TOOL, G.SEND_TOOL, G.TIMEOUT, G.ACCOUNTS_TOOL, "BEEPER_READ_SERVER", AR.ARCHIVE_TOOL}),
+        secret_keys=frozenset({G.EXEC_KEY, G.READ_KEY}),
         settings_group=_settings_group,
-        enabled=lambda s: bool(s.beeper_gateway_url),
-        secrets=lambda s: (s.beeper_exec_key, s.beeper_read_key),
+        enabled=lambda s: bool(G.gateway_url(s)),
         health=_health,
         accounts=_accounts,
         agent_accounts=_agent_accounts,
+        api=1,
     )

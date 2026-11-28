@@ -5,6 +5,13 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **A versioned contract for service plugins (fork).** Plugins import from `icloud_mcp.plugin_api` and say which version they were
+  written for (`api=1`). A plugin written for another version is not loaded; Connect a service names it and says why. Every part
+  of a plugin now gets its own view (`PluginContext`): its own settings, its own secrets and the link to a request, nothing else of
+  the server. Beeper's settings left the core's configuration; the names in `.env` stay the same, so nothing changes for whoever
+  runs the server. The gateway keys are read apart from the other plugin values and never shown. An entry added to Beeper's list on
+  request works through the plugin's own values, and any other plugin's requestable list works the same way.
+
 - **The side list shows what needs you (fork).** "Waiting by kind" counted every request type on its own line and did nothing
   when tapped. In its place, "Needs you" has All waiting, Ends within 2 h and Take a close look (a warning, a missing file, a
   group chat, a request that cannot be approved yet), then "Asked by" with one line per agent. Each line filters the list on Home

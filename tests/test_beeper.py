@@ -260,11 +260,11 @@ class FakeGateway:
 @pytest.fixture
 def gateway(monkeypatch):
     g = FakeGateway()
-    monkeypatch.setattr(B, "connect", lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=g.make_http),
-                                                         s.beeper_chat_tool, s.beeper_send_tool))
+    monkeypatch.setattr(B, "connect", lambda s: B.Beeper(B.Gateway(B.gateway_url(s), B.exec_key(s), 5, make_http=g.make_http),
+                                                         B.chat_tool(s), B.send_tool(s)))
     monkeypatch.setattr(B, "accounts_reader", lambda s: B.AccountsReader(s, make_http=g.make_http))
     monkeypatch.setattr(B, "chats_reader", lambda s: B.ChatsReader(s, make_http=g.make_http))
-    monkeypatch.setattr(B, "read_gateway", lambda s, make_http=None: B.Gateway(s.beeper_gateway_url, s.beeper_read_key, 5, make_http=g.make_http))
+    monkeypatch.setattr(B, "read_gateway", lambda s, make_http=None: B.Gateway(B.gateway_url(s), B.read_key(s), 5, make_http=g.make_http))
     return g
 
 
@@ -445,7 +445,8 @@ async def test_the_list_is_checked_again_when_approving(web, hub, gateway):
     app, mcp, src = launch(web, hub)
     got = await ask(mcp)
     (q,) = src.pending()
-    object.__setattr__(mcp._icloud_dashboard.s, "beeper_send_allowlist", ())
+    st = mcp._icloud_dashboard.s
+    object.__setattr__(st, "plugin_values", tuple((k, "" if k == "BEEPER_SEND_ALLOWLIST" else v) for k, v in st.plugin_values))
     async with client(app) as c:
         token = await signed_in(c)
         r = await c.post(url(got["outbox_id"]) + "/approve", json={"sha": q.sha256}, headers=api(token))
