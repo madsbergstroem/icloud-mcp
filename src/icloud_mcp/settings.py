@@ -123,6 +123,10 @@ def _more_history(old: str, new: str) -> bool:
     return o != 0 and (n == 0 or n > o)
 
 
+# The rules for whether a change loosens protection, under the names plugins use (plugin_api v1, docs/SENDGATE.md package 7)
+to_true, to_false, changed, removes_entry, more_history = _to_true, _to_false, _changed, _removes_entry, _more_history
+
+
 def _address(_: Any, entry: str) -> dict[str, Any]:
     """An email address for a mail or invitation list: one person, never a domain (package 10)."""
     e = entry.strip().lower()
@@ -266,9 +270,16 @@ def specs() -> dict[str, Spec]:
     return {sp.key: sp for g in all_groups() for sp in g.specs}
 
 
-GROUPS = all_groups()          # as found at import; the dashboard asks all_groups(), so a plugin found later counts too
-SPECS = specs()
-assert set(SPECS) <= editable_keys(), set(SPECS) - editable_keys()
+def __getattr__(name: str) -> Any:
+    """GROUPS and SPECS, built when first asked: the plugins are found then, not while this module is imported, because a plugin
+    imports plugin_api, which imports this module (docs/SENDGATE.md, package 7)."""
+    if name == "GROUPS":
+        return all_groups()
+    if name == "SPECS":
+        got = specs()
+        assert set(got) <= editable_keys(), set(got) - editable_keys()
+        return got
+    raise AttributeError(name)
 
 # Shown read-only under "Server": (label, environment variable, how to show it)
 SERVER_VIEW = [
