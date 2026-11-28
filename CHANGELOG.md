@@ -5,6 +5,15 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **The activity log is signed, and you can download it (fork).** Each entry now carries its index, and at most once an hour the
+  server signs a checkpoint of the whole log: a short note with the log's size and its root hash (C2SP `tlog-checkpoint`, Ed25519).
+  Settings › Activity log › Proof shows the public key to copy and keep somewhere else, when the last checkpoint was made, and
+  Download log, which asks you to confirm and shows up in Activity. `dev/verify_log.py` checks a download on any computer: every
+  entry, every checkpoint, and a checkpoint you kept from before, also after old entries were pruned. If the log is changed after a
+  checkpoint, the server signs nothing more, Settings says so with the entry that differs, and only you can start a new log tree.
+  Under Notices, a receiver can also get the checkpoints ("Log checkpoints", off by default), the outside copy that makes a
+  rewrite visible. `icloud_check_health` names the key. The key itself never leaves the server's data folder.
+
 - **The side list shows what needs you (fork).** "Waiting by kind" counted every request type on its own line and did nothing
   when tapped. In its place, "Needs you" has All waiting, Ends within 2 h and Take a close look (a warning, a missing file, a
   group chat, a request that cannot be approved yet), then "Asked by" with one line per agent. Each line filters the list on Home
