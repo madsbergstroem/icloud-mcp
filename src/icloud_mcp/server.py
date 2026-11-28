@@ -558,7 +558,7 @@ def create_server(s: Settings) -> tuple[MCPServer, OwnerOAuthProvider | None]:
         _finish(mcp, s)
         return mcp, None
     provider = OwnerOAuthProvider(s)
-    _audit = AuditLog(s.data_dir, s.audit_keep_days, enabled=s.audit_log)
+    _audit = AuditLog(s.data_dir, s.audit_keep_days, enabled=s.audit_log, server_name=s.public_host.rsplit(":", 1)[0])
     _audit_provider = provider
     provider.audit = _audit                     # the connect page records which apps were approved
     auth = AuthSettings(
@@ -2963,9 +2963,17 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
                     getattr(mcp, "_icloud_outboxes", {}).get(k) for k in ("external", "imessage"))) if x)) else {}),
                 **({"notices": {"ok": False, "problem": " ".join(p)}} if (p := (n.problems() if (n := getattr(getattr(
                     mcp, "_icloud_dashboard", None), "notices", None)) is not None else [])) else {}),
+                **({"activity_log": _log_proof()} if _audit is not None and _audit.proof is not None else {}),
                 "safety_warnings_since_start": safety_stats()}   # counts per pattern id: how often third-party text looked hostile
 
     mcp._icloud_health = health_report          # the admin API runs the same check
+
+    def _log_proof() -> dict[str, Any]:
+        """The activity log's checkpoints (package 8): the verifier key to keep elsewhere, never the key itself."""
+        st = _audit.proof_status() if _audit is not None else {"on": False}
+        return {"ok": not st.get("broken"), "verifier_key": st.get("verifier_key", ""), "size": st.get("size", 0),
+                "last_checkpoint_at": st.get("last_checkpoint_at"), **({"problem": "The log was changed after a checkpoint; "
+                "nothing more is signed until the owner starts a new log tree."} if st.get("broken") else {})}
 
     @tool(annotations=_READ)
     @_guard
@@ -2975,7 +2983,7 @@ def _register_tools(mcp: MCPServer, s: Settings, provider: OwnerOAuthProvider | 
         Use when: a tool failed with a sign-in, connection or timeout error, before telling the owner a service is down. Not for the Mac helper alone (icloud_get_helper_status is instant and shows its queue) or for the time (use icloud_get_time).
         Parameters: none; it always checks every area enabled on this server.
         Behavior: read-only. It signs in to IMAP afresh and opens INBOX read-only, lists calendars over CalDAV, reads one address-book entry over CardDAV and reads the helper's status. Areas run in parallel, so it takes as long as the slowest. Failures are reported in the result, never raised. It still answers while the owner has paused the server.
-        Returns: {ok, since_start_seconds, areas, safety_warnings_since_start}, plus paused and a note when paused.
+        Returns: {ok, since_start_seconds, areas, safety_warnings_since_start}, plus paused and a note when paused; activity_log: the signed log's key and last checkpoint.
         - ok is true only when every area passed. Disabled areas are absent from areas.
         - Each area has ok, ms and, on failure, error (credentials masked).
         - Per area: mail adds inbox_messages, calendar the calendar count, contacts the contact count, mac_helper its online status.
