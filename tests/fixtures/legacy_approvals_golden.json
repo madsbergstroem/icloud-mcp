@@ -780,6 +780,7 @@
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
+   "i": 1,
    "ok": true,
    "summary": "Edited email “Email” before sending",
    "t": "<volatile>",
@@ -794,6 +795,7 @@
     "outbox_id": "<id:imessage-1>",
     "sha256": "<sha>"
    },
+   "i": 2,
    "ok": true,
    "summary": "Edited imessage “iMessage” before sending",
    "t": "<volatile>",
@@ -808,6 +810,7 @@
     "outbox_id": "<id:calendar-1>",
     "sha256": "<sha>"
    },
+   "i": 3,
    "ok": true,
    "summary": "Edited invitation “Invitation” before sending",
    "t": "<volatile>",
@@ -822,6 +825,7 @@
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
+   "i": 4,
    "ok": true,
    "summary": "Brought back the original text of email “Email”",
    "t": "<volatile>",
@@ -836,6 +840,7 @@
     "outbox_id": "<id:mail-1>",
     "sha256": "<sha>"
    },
+   "i": 5,
    "ok": false,
    "summary": "Could not send email “Email”",
    "t": "<volatile>",
@@ -854,6 +859,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 6,
    "ok": true,
    "summary": "Approved email “Email”",
    "t": "<volatile>",
@@ -872,6 +878,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 7,
    "ok": true,
    "summary": "Approved imessage “iMessage”",
    "t": "<volatile>",
@@ -890,6 +897,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 8,
    "ok": true,
    "summary": "Approved invitation “Invitation”",
    "t": "<volatile>",
@@ -908,6 +916,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 9,
    "ok": true,
    "summary": "Approved imessage “iMessage”",
    "t": "<volatile>",
@@ -922,6 +931,7 @@
     "outbox_id": "<id:mail-2>",
     "sha256": "<sha>"
    },
+   "i": 10,
    "ok": true,
    "summary": "Discarded email “Email”",
    "t": "<volatile>",
@@ -936,6 +946,7 @@
     "outbox_id": "<id:imessage-3>",
     "sha256": "<sha>"
    },
+   "i": 11,
    "ok": true,
    "summary": "Discarded imessage “iMessage”",
    "t": "<volatile>",
@@ -950,6 +961,7 @@
     "outbox_id": "<id:calendar-2>",
     "sha256": "<sha>"
    },
+   "i": 12,
    "ok": true,
    "summary": "Discarded invitation “Invitation”",
    "t": "<volatile>",
@@ -968,6 +980,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 13,
    "ok": true,
    "summary": "Withdrew email “Email”",
    "t": "<volatile>"
@@ -985,6 +998,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 14,
    "ok": true,
    "summary": "Withdrew imessage “iMessage”",
    "t": "<volatile>"
@@ -1002,6 +1016,7 @@
     ],
     "sha256": "<sha>"
    },
+   "i": 15,
    "ok": true,
    "summary": "Withdrew invitation “Invitation”",
    "t": "<volatile>"
@@ -1016,6 +1031,7 @@
     "outbox_id": "<id:mail-4>",
     "sha256": "<sha>"
    },
+   "i": 16,
    "ok": true,
    "summary": "A queued request expired without an answer",
    "t": "<volatile>"
@@ -1030,6 +1046,7 @@
     "outbox_id": "<id:imessage-5>",
     "sha256": "<sha>"
    },
+   "i": 17,
    "ok": true,
    "summary": "A queued request expired without an answer",
    "t": "<volatile>"
@@ -1044,6 +1061,7 @@
     "outbox_id": "<id:calendar-4>",
     "sha256": "<sha>"
    },
+   "i": 18,
    "ok": true,
    "summary": "A queued request expired without an answer",
    "t": "<volatile>"

@@ -582,6 +582,8 @@ def register_dashboard(mcp: Any, provider: Any, s: Settings, audit: AuditLog, so
         d.notices = NoticeService(s.data_dir, [store], hosts=s.notice_hosts, private_hosts=s.notice_private_hosts,
                                   keep_days=s.audit_keep_days, kinds=notice_kind)
         d.notices.start()
+        if getattr(audit, "proof", None) is not None:        # package 8 (D8-5): checkpoints to the receivers that opted in
+            audit.on_checkpoint = d.notices.offer_checkpoint
     from .dashboard_api import register_api
     register_api(mcp, d, provider, s, audit, signed_in=signed_in, recent=recent, set_cookie=set_cookie,
                  record_failure_line=record_failure_line, headers=_HEADERS, for_owner=for_owner,

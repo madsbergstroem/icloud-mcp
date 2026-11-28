@@ -1319,6 +1319,44 @@ Effort, estimated and not measured: about 640 min of work (leaf index and tree s
 consistency proofs and signed notes 120, key and checkpoints 60, prune proofs 60, export and `verify_log.py` 90, the notice type
 30, Settings after the mock 60, tests 130), plus 45 min of review by the owner, with one export verified on the owner's Mac.
 
+### As built (8)
+
+The owner chose variant A of the mock (2026-11-28): a block "Proof" under the fields of Settings › Activity log, and a switch "Log
+checkpoints" per receiver under Notices. Built on 2026-11-28 without the Codex review (no credits; the owner said to build without
+it, as for package 7); a separate self-review of the diff took its place, and its findings are below.
+
+- `gate/logproof.py` holds the tree, the key and the checkpoints; `AuditLog` owns one and calls it under its lock. A line gets `i`,
+  is written, then joins the tree; at most hourly the file is read again and must give the tree before a checkpoint is signed.
+  Catch-up lines, a broken tree and a new checkpoint are acted on after the lock is let go (a log line, the notice).
+- The first line's leaf hash tells the tree where the file starts (`base.first`), so a prune that stopped between rewriting the
+  file and moving the base is finished at the next start (`next_base`), and a file pruned by an older version breaks the tree.
+- An existing log becomes the start of a tree as it is: its lines are leaves 0 to n-1 without `i` (`legacy_until`). A new tree the
+  owner starts does the same with the file as it is then; the old checkpoints move to `checkpoints-<id>.jsonl`.
+- Endpoints: `GET /dashboard/api/log/proof`, `POST /dashboard/api/log/export` (recent sign-in, a line `log.exported`),
+  `POST /dashboard/api/log/new-tree` (recent sign-in, a line `log.new_tree`). `icloud_check_health` gains `activity_log`.
+- Notices: table `log_notice`; a checkpoint's delivery rows carry the negative of its id as seq, share retries, signing, dead and
+  Resend, and are left out of the cursor. Turning the switch on lets more out, so it asks for a recent sign-in; off does not.
+
+Deviations from the spec above, each for a reason:
+
+- Prune proofs are compact ranges, not RFC 9162 §2.1.4 proof lists: a checkpoint carries the compact range at its size, and its
+  prune proof is the range from its size to the first kept entry. Merged they give the tree's base; `verify_log.py` checks that. A
+  §2.1.4 proof from an old size needs hashes inside entries that are already gone.
+- Checkpoints are kept longer than entries: every checkpoint for `AUDIT_KEEP_DAYS` plus 30 days, then the latest of each day up to
+  a year. With "one per day for `AUDIT_KEEP_DAYS`" a checkpoint is dropped at about the time its entries are, so criterion 4 could
+  never hold for a checkpoint kept outside the server.
+- Pruning drops only the oldest lines, up to the first that is newer than the cut. Before, a line in the middle with an older time
+  (a clock that went back) was dropped too, which no tree can follow.
+- `verify_log.py` checks the hash chain from the first line with an index on. Lines from before the tree (`legacy_until`) are
+  covered by the tree's root only, so a line changed before a new tree no longer fails every later export.
+- "Start a new log tree" is refused (409) while the log matches its checkpoints: a fresh sign-in alone is not enough to start over.
+- Not done: verifying one checkpoint with Go's `note` package (the spec asks for one run, in CI or by hand). The signed-note vector
+  from the spec verifies, and the format is tested line by line; the Go run is left for the owner's review.
+
+Found by the self-review and fixed before the PR, each with a test: a verifier key whose base64 holds a `+` did not parse (the
+key name never has one, the key may); a changed line found at the start named no index; checkpoints went before their entries
+(above); the new-tree endpoint accepted an intact log.
+
 ### Sources
 
 | Claim | Source |
