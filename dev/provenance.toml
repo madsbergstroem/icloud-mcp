@@ -72,6 +72,7 @@ gate = [
   "src/icloud_mcp/dashboard_api.py",
   "src/icloud_mcp/hub_accounts.py",
   "src/icloud_mcp/plugins/__init__.py",
+  "src/icloud_mcp/plugin_api.py",          # the contract plugins import (package 7)
   "src/icloud_mcp/static/app/**",
   "src/icloud_mcp/static/vendor/**",
   "src/icloud_mcp/static/dashboard.css",

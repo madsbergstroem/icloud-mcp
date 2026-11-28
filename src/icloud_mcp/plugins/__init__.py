@@ -5,15 +5,18 @@ plugins"); each entry point names a callable that returns a `Plugin`. The plugin
 `pyproject.toml` under the same group, and also in `BUILTIN`, so a checkout that runs from source without being installed finds
 them too. A plugin with the id of one already found is skipped.
 
-A plugin declares data and implementations; the core does the rest:
+A plugin declares data and implementations; the core does the rest. Every callback gets a `PluginContext` (below), never the
+server's settings: the plugin reads its own settings with `ctx.value` and its secrets with `ctx.secret`.
 
 - who it is: `id`, `name`, `status` (one line under its name), `limits` (one sentence on what it cannot do), `description` (for
   the Connect card) and `connection` (how it is connected: by whoever runs the server, or later with fields and a sign-in check);
 - its settings as data: `settings_keys` (the environment names the owner may change on the dashboard) and `settings_group()` (a
   `settings.Group`, so the dashboard draws it; plugins ship no JavaScript);
-- `secrets(s)` (values masked in every error), `health(s)` (an area of icloud_check_health), `accounts(s)` (what the
-  service page lists: networks, mailboxes ...) and `agent_accounts(s)` (its accounts as agents see them in icloud_list_accounts,
-  next to the mail, calendar and contacts accounts the core lists itself);
+- `secret_keys` (environment names that hold secrets: read only through `ctx.secret`, masked in every error, never shown or
+  editable on the dashboard), `secrets(ctx)` (further values to mask), `health(ctx)` (an area of icloud_check_health),
+  `accounts(ctx)` (what the service page lists: networks, mailboxes ...) and `agent_accounts(ctx)` (its accounts as agents see
+  them in icloud_list_accounts, next to the mail, calendar and contacts accounts the core lists itself);
+- `api`: the plugin_api version it was written for (1). Import the public names from `icloud_mcp.plugin_api` only.
 - the capabilities it offers, each with an interface of its own in the core (below). `messages` is the one in use: reading
   through a `messages.Backend`, sending through a `messages.Sender` with an `actions.ActionType` and an `actions.Executor`,
   finding chats for the recipient picker, and archiving a chat through a `messages.Archiver` (optional). `mail`, `calendar` and `contacts` are interfaces only so far, shaped after what
@@ -77,16 +80,79 @@ class AccountRef:
     name: str = ""
 
 
-# -- actions ----------------------------------------------------------------------------------------------------------------------
-@dataclass(frozen=True)
+# -- what a plugin is handed ---------------------------------------------------------------------------------------------------
+API_VERSIONS = frozenset({1})       # the plugin_api versions this core loads (docs/SENDGATE.md, package 7, D7-2)
+
+
 class PluginContext:
-    """What a plugin's action functions get: the server's settings and the plugin's own id. Read a setting of the plugin with
-    `value(key, default)`. Public from package 1 of docs/SENDGATE.md, versioned in package 7."""
-    settings: Any
-    plugin_id: str
+    """What every callback of a plugin gets instead of the server's settings (plugin_api v1, docs/SENDGATE.md package 7):
+
+    - value(key, default): one of the plugin's own settings, the dashboard's value, else the environment's, else `default`;
+    - secret(key): one of the plugin's own secret environment names (Plugin.secret_keys), '' when unset; any other name raises
+      KeyError;
+    - approval_link(kind, id): the link to a request on the owner's dashboard;
+    - plugin_id.
+
+    Nothing else of the server: reading any other attribute raises AttributeError. It limits what a plugin is handed, not what
+    Python lets it import; a plugin runs in the server's process."""
+    __slots__ = ("plugin_id", "_settings", "_keys", "_secret_keys")
+
+    def __init__(self, settings: Any, plugin_id: str, keys: Iterable[str] | None = None, secret_keys: Iterable[str] = ()):
+        object.__setattr__(self, "plugin_id", plugin_id)
+        object.__setattr__(self, "_settings", settings)
+        object.__setattr__(self, "_keys", None if keys is None else frozenset(keys))
+        object.__setattr__(self, "_secret_keys", frozenset(secret_keys))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"PluginContext is read only ({name})")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"PluginContext is read only ({name})")
+
+    def __repr__(self) -> str:
+        return f"PluginContext({self.plugin_id!r})"
 
     def value(self, key: str, default: str = "") -> str:
-        return self.settings.plugin_value(key, default)
+        if self._keys is not None and key not in self._keys:
+            return default                      # another plugin's or the core's setting is not this plugin's to read
+        return self._settings.plugin_value(key, default)
+
+    def secret(self, key: str) -> str:
+        if key not in self._secret_keys:
+            raise KeyError(f"{key} is not one of this plugin's secret names")
+        return self._settings.plugin_secret(key)
+
+    def approval_link(self, kind: str, item_id: str) -> str:
+        return self._settings.approval_link(kind, item_id)
+
+
+_contexts: dict[int, tuple[Any, dict[str, PluginContext]]] = {}
+
+
+def context(plugin: "Plugin", settings: Any) -> PluginContext:
+    """The one context of `plugin` on the server with these settings (the same object every time, so a plugin may key what it
+    keeps per server on it)."""
+    got = _contexts.get(id(settings))
+    if got is None or got[0] is not settings:
+        got = _contexts[id(settings)] = (settings, {})
+    ctx = got[1].get(plugin.id)
+    if ctx is None:
+        ctx = got[1][plugin.id] = PluginContext(settings, plugin.id, plugin.settings_keys | plugin.env_keys, plugin.secret_keys)
+    return ctx
+
+
+def secrets_of(plugin: "Plugin", settings: Any) -> list[str]:
+    """Every value of the plugin that is masked in errors: its secret environment names' values and what `secrets(ctx)` adds."""
+    ctx = context(plugin, settings)
+    out = [ctx.secret(k) for k in sorted(plugin.secret_keys)]
+    try:
+        out += [x for x in plugin.secrets(ctx) if x]
+    except Exception as e:  # noqa: BLE001  -- masking must not take a tool call down
+        log.warning("plugin %s: secrets failed (%s)", plugin.id, type(e).__name__)
+    return [x for x in out if x]
+
+
+# -- actions ----------------------------------------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -135,7 +201,9 @@ class MessagesCapability:
     """Chats on a messaging service. `prefix` is what its chat ids start with in the chat tools (`beeper:`). Each part is optional:
     a plugin may only read, only send, or both.
 
-    - backend(s, hub_filters): a messages.Backend for messages_list_chats, messages_read_chat and messages_search, or None
+    Every callback takes the plugin's PluginContext (`ctx`, written `s` below as before).
+
+    - backend(s): a messages.Backend for messages_list_chats, messages_read_chat and messages_search, or None
     - sender(s, external): a messages.Sender that asks the service about the chat and queues the request with the core's
       external approvals (`external.submit(action_type_id, params, requested_by, key=...)`, which answers whether it waits), or None
     - action_type, executor(s): what is queued, and what carries it out after the owner approved; the core calls it once
@@ -205,7 +273,7 @@ class ContactsCapability(Protocol):
 @dataclass
 class Capabilities:
     messages: MessagesCapability | None = None
-    mail: Callable[[Any], MailCapability] | None = None          # factories taking the settings; the core uses none of these yet
+    mail: Callable[[Any], MailCapability] | None = None          # factories taking the PluginContext; the core uses none of these yet
     calendar: Callable[[Any], CalendarCapability] | None = None
     contacts: Callable[[Any], ContactsCapability] | None = None
 
@@ -225,15 +293,17 @@ class Plugin:
     capabilities: Capabilities = field(default_factory=Capabilities)
     settings_keys: frozenset[str] = frozenset()     # the environment names the owner may change on the dashboard
     env_keys: frozenset[str] = frozenset()          # names only whoever runs the server sets; read like settings_keys, never editable
+    secret_keys: frozenset[str] = frozenset()      # environment names that hold secrets: ctx.secret only, masked, never on the dashboard
     settings_group: Callable[[], Any] | None = None  # a settings.Group, built when Settings asks
-    enabled: Callable[[Any], bool] = lambda s: False   # whether it is set up on this server
-    secrets: Callable[[Any], Iterable[str]] = lambda s: ()
+    enabled: Callable[[Any], bool] = lambda s: False   # whether it is set up on this server (gets the PluginContext)
+    secrets: Callable[[Any], Iterable[str]] = lambda s: ()   # further values to mask, beyond secret_keys (gets the PluginContext)
     health: Callable[[Any], dict[str, Any]] | None = None   # an area of icloud_check_health: {"ok", ...}; may raise, the core reports it
     accounts: Callable[[Any], Callable[[], Listing]] | None = None   # built once per server; the page calls what it returns
     # its accounts for icloud_list_accounts, as (state, accounts): state "ok" or why nothing could be read ("no_read_key",
     # "unreachable" ...). Never raises; never a password, key, address or number. None: the plugin lists no accounts to agents.
     agent_accounts: Callable[[Any], tuple[str, list[AccountRef]]] | None = None
     actions: tuple[ActionSpec, ...] = ()           # actions of any kind agents may ask for with approval_request (docs/SENDGATE.md)
+    api: int | None = None                          # the plugin_api version it was written for; None: written before v1, loaded as v1 with a warning
 
 
 def _load(name: str, target: str) -> Plugin | None:
@@ -247,7 +317,28 @@ def _load(name: str, target: str) -> Plugin | None:
     if not isinstance(plugin, Plugin):
         log.warning("plugin %s is not a Plugin; skipped", name)
         return None
+    if plugin.api is None:
+        log.warning("plugin %s names no plugin_api version; loaded as version 1", name)
+    elif not isinstance(plugin.api, int) or isinstance(plugin.api, bool) or plugin.api not in API_VERSIONS:
+        newer = isinstance(plugin.api, int) and not isinstance(plugin.api, bool) and plugin.api > max(API_VERSIONS)
+        older = isinstance(plugin.api, int) and not isinstance(plugin.api, bool) and plugin.api < min(API_VERSIONS)
+        why = "Needs a newer server" if newer else "Written for an older server" if older else "Names no version this server knows"
+        log.warning("plugin %s is written for plugin_api %r; this server loads %s; skipped", name, plugin.api,
+                    ", ".join(map(str, sorted(API_VERSIONS))))
+        _skipping[plugin.id] = (plugin.name, why)
+        return None
     return plugin
+
+
+_skipping: dict[str, tuple[str, str]] = {}     # filled while one set of plugins loads: id -> (name, why)
+_skipped: dict[tuple, dict[str, tuple[str, str]]] = {}   # per loaded set (the cache key of _loaded), for Connect
+
+
+def skipped() -> list[dict[str, str]]:
+    """The plugins this server did not load because of their plugin_api version, as Connect a service lists them."""
+    load_plugins()
+    got = _skipped.get(_key(), {})
+    return [{"id": i, "name": n, "why": w} for i, (n, w) in sorted(got.items())]
 
 
 def entry_points() -> list[tuple[str, str]]:
@@ -257,13 +348,18 @@ def entry_points() -> list[tuple[str, str]]:
 
 def load_plugins() -> list[Plugin]:
     """Every plugin, the built-in ones first, each id once."""
+    return list(_loaded(*_key()))     # a changed connector setup builds the plugins again
+
+
+def _key() -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
     marker = tuple(os.environ.get(k, "") for k in ("GATE_ACTIONS_FILE", "GATE_GATEWAY_URL", "GATE_EXEC_KEY", "GATE_AGENT_KEY_PROBE",
                                                    "GATE_PROBE_REQUIRED"))
-    return list(_loaded((*BUILTIN.items(), *entry_points()), marker))     # a changed connector setup builds the plugins again
+    return (*BUILTIN.items(), *entry_points()), marker
 
 
 @functools.lru_cache(maxsize=8)
 def _loaded(targets: tuple[tuple[str, str], ...], marker: tuple[str, ...] = ()) -> tuple[Plugin, ...]:
+    _skipping.clear()
     out: dict[str, Plugin] = {}
     for name, target in targets:
         if name in out:
@@ -271,6 +367,7 @@ def _loaded(targets: tuple[tuple[str, str], ...], marker: tuple[str, ...] = ()) 
         p = _load(name, target)
         if p is not None and p.id not in out:
             out[p.id] = p
+    _skipped[(targets, marker)] = dict(_skipping)
     return tuple(out.values())
 
 
@@ -278,7 +375,7 @@ def enabled_plugins(s: Any) -> list[Plugin]:
     out = []
     for p in load_plugins():
         try:
-            if p.enabled(s):
+            if p.enabled(context(p, s)):
                 out.append(p)
         except Exception as e:  # noqa: BLE001
             log.warning("plugin %s: could not tell whether it is set up (%s)", p.id, type(e).__name__)
@@ -287,6 +384,11 @@ def enabled_plugins(s: Any) -> list[Plugin]:
 
 def env_keys() -> frozenset[str]:
     return frozenset(k for p in load_plugins() for k in p.env_keys)
+
+
+def secret_keys() -> frozenset[str]:
+    """Every plugin's secret environment names: read into Settings apart from the plugin values, never editable."""
+    return frozenset(k for p in load_plugins() for k in p.secret_keys)
 
 
 def settings_keys() -> frozenset[str]:
