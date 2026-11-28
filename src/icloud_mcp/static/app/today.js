@@ -1,7 +1,7 @@
 // Home: what waits for the owner's approval, and one request exactly as it will go out.
 import { get, post, postNow, upload, removeFile, ApiError } from "./api.js";
 import { esc, icon, ago, clock, left, size, tag, toast, fail, ask, sheet, section, titleBlock, wide } from "./ui.js";
-import { app } from "./state.js";
+import { app, groups, matches, currentFilter, setFilter } from "./state.js";
 import { editView, editFoot, wireEdit, bringBack } from "./edit.js";
 
 const DAY = 86400;      // Home mentions a request the assistant took back for a day; Activity keeps it
@@ -41,6 +41,9 @@ class Today extends HTMLElement {
     this.onChange = () => this.load();
     window.addEventListener("icm:changed", this.onChange);
     window.addEventListener("icm:open", (this.onOpen = (e) => this.open(e.detail)));
+    this.onFilter = () => { if (this.data) this.render(); };          // a filter chosen in the side list or a chip, or new counts
+    window.addEventListener("icm:filter", this.onFilter);
+    window.addEventListener("icm:needs", this.onFilter);
     this.mq = window.matchMedia("(min-width: 900px)");
     this.mq.addEventListener("change", (this.onWidth = () => { this.split = null; if (this.data) this.render(); }));   // a window or an iPad turned
     this.load();
@@ -49,6 +52,8 @@ class Today extends HTMLElement {
   disconnectedCallback() {
     window.removeEventListener("icm:changed", this.onChange);
     window.removeEventListener("icm:open", this.onOpen);
+    window.removeEventListener("icm:filter", this.onFilter);
+    window.removeEventListener("icm:needs", this.onFilter);
     this.mq.removeEventListener("change", this.onWidth);
     clearTimeout(this.letGoTimer);
   }
@@ -87,9 +92,29 @@ class Today extends HTMLElement {
     return out.join("");
   }
 
+  // The waiting requests the chosen filter lets through (the side list on a wide screen, the chips on a phone)
+  shown() {
+    const f = currentFilter();
+    return this.data.waiting.filter((w) => matches(w, f));
+  }
+
+  // On a phone the side list's groups become chips over the list; a wide screen has the side list instead
+  chips() {
+    const all = groups(app.needs);
+    if (wide() || all.length < 2 || !this.data.waiting.length) return "";
+    const f = currentFilter();
+    return `<div class="filters" role="group" aria-label="Show">${all.map((g) => `<ion-chip ${g.id === f ? 'class="on" color="primary"' : 'outline="true"'}
+      data-chip="${esc(g.id)}" aria-pressed="${g.id === f}">${g.tone ? `<span class="dot ${g.tone}"></span>` : ""}<ion-label>${esc(g.short || g.label)}
+      <span class="num">${g.n}</span></ion-label></ion-chip>`).join("")}</div>`;
+  }
+
   list() {
     const d = this.data;
-    const items = d.waiting.map((w) => `<ion-item button detail="true" data-key="${esc(w.key)}" class="${w.key === this.selected ? "sel" : ""}">
+    const shown = this.shown();
+    const f = currentFilter();
+    const g = f === "all" ? null : groups(app.needs).find((x) => x.id === f);
+    const label = !g ? "Waiting" : g.section === "by" ? `Asked by ${g.label}` : g.label;
+    const items = shown.map((w) => `<ion-item button detail="true" data-key="${esc(w.key)}" class="${w.key === this.selected ? "sel" : ""}">
       <ion-label class="ion-text-wrap"><h2>${esc(w.title)}</h2><p>${itemSub(w)}</p></ion-label>
       <ion-note slot="end" class="num">${esc(left(w.expires_at))}</ion-note></ion-item>`).join("");
     const sent = d.sent_today.map((e) => `<ion-item class="sent"><ion-label class="ion-text-wrap"><h2>${esc(e.title)}</h2>
@@ -102,7 +127,10 @@ class Today extends HTMLElement {
     return titleBlock(greeting(), esc(finding(d.waiting)))
       + `<div class="fresh ${app.online ? "" : "off"}"><i></i>${app.online ? `Live, checked ${esc(ago(app.updated))}` : "Offline, showing the last state"}</div>`
       + this.notices()
-      + (d.waiting.length ? section("Waiting", `<span class="num">${d.waiting.length}</span>`) + `<ion-list class="inset">${items}</ion-list>` : "")
+      + this.chips()
+      + (d.waiting.length ? section(label, `<span class="num">${f === "all" ? d.waiting.length : `${shown.length} of ${d.waiting.length}`}</span>`)
+        + (shown.length ? `<ion-list class="inset">${items}</ion-list>`
+          : `<div class="empty">Nothing waits here any more. <ion-button size="small" fill="clear" data-chip="all">Show all</ion-button></div>`) : "")
       + (taken ? section("Taken back by your assistant") + `<ion-list class="inset">${taken}</ion-list>` : "")
       + (sent ? section("Sent today") + `<ion-list class="inset">${sent}</ion-list>` : "");
   }
@@ -118,7 +146,8 @@ class Today extends HTMLElement {
       }
       // a request that is going out, or showing how its send went, stays open until the owner is done (it is not in the queue meanwhile)
       const holding = app.holding && this.detailKey === app.holding;
-      const first = holding ? app.holding : this.selected && this.data.waiting.some((w) => w.key === this.selected) ? this.selected : (this.data.waiting[0] || {}).key;
+      const shown = this.shown();
+      const first = holding ? app.holding : this.selected && shown.some((w) => w.key === this.selected) ? this.selected : (shown[0] || {}).key;
       this.selected = first || null;
       this.querySelector("[data-list]").innerHTML = this.list();
       const detail = this.querySelector("[data-detail]");
@@ -145,6 +174,11 @@ class Today extends HTMLElement {
       window.dispatchEvent(new Event("icm:activity-focus"));          // app.js switches to Activity, which finds the entry
     }));
     body.querySelectorAll("[data-key]").forEach((n) => n.addEventListener("click", () => this.open(n.dataset.key)));
+    body.querySelectorAll("[data-chip]").forEach((n) => n.addEventListener("click", () => setFilter(n.dataset.chip)));
+    const row = body.querySelector(".filters"), on = row && row.querySelector("ion-chip.on");
+    if (on) setTimeout(() => {                  // a redraw keeps the chosen chip in sight, once the chips have drawn their width
+      row.scrollLeft = Math.max(0, on.getBoundingClientRect().left - row.getBoundingClientRect().left + row.scrollLeft - 16);
+    }, 50);
     body.querySelector("[data-resume]")?.addEventListener("click", async () => {
       try { await post("/server/pause", { paused: false }); app.note = "Resumed."; app.noteUntil = Date.now() + 10000; window.dispatchEvent(new Event("icm:changed")); } catch (e) { fail(e); }
     });

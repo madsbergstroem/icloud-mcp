@@ -31,6 +31,25 @@ log = logging.getLogger(__name__)
 # What the preview shows inline. Everything else is offered by name and size only: the browser never runs or renders it.
 _PREVIEW_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "application/pdf", "text/plain")
 _WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assistant took back for this long, then it is only in Activity
+_SOON_SECONDS = 2 * 3600                   # the side list's "Ends within 2 h": a waiting request dropped this soon
+
+
+def close_look(w: dict[str, Any]) -> bool:
+    """Whether a waiting request belongs under "Take a close look": the signs Home marks on its row (a warning, a missing file,
+    a request that cannot be approved yet, a group, a tag of its type)."""
+    return bool(w.get("warning") or w.get("blocked") or w.get("held") or w.get("group") or w.get("tags"))
+
+
+def needs(rows: list[tuple[bool, str, float]], now: float) -> dict[str, Any]:
+    """What the side list counts, from (close look, asked by, expires at) per waiting request: all, ending soon, close look, and
+    each agent by name, most first. No recipient, text or title: only counts and the agents' own names."""
+    by: dict[str, int] = {}
+    for _, who, _ in rows:
+        if who:
+            by[who] = by.get(who, 0) + 1
+    return {"all": len(rows), "soon": sum(exp - now <= _SOON_SECONDS for _, _, exp in rows),
+            "look": sum(look for look, _, _ in rows), "soon_seconds": _SOON_SECONDS,
+            "by": [[k, n] for k, n in sorted(by.items(), key=lambda kv: (-kv[1], kv[0].lower()))]}
 
 
 def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_in: Callable, recent: Callable,
@@ -312,6 +331,11 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                 **({"held": True} if v.get("held") else {}),
                 **({"action_type": q.action_type} if getattr(q, "action_type", None) else {})}
 
+    def summary_of(src: Any, q: Any, v: dict[str, Any]) -> dict[str, Any]:
+        w = summary(src, q, v)
+        w["look"] = close_look(w)                        # the side list's filter reads this flag; its count comes from the same rule
+        return w
+
     def described(only: str = "") -> list[tuple[Any, Any, dict[str, Any]]]:
         out = []
         for src in d.sources.values():
@@ -335,23 +359,21 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
         taken_back = [withdrawn_item(e) for e in await asyncio.to_thread(audit.entries, 100, ("approval.withdrawn",))
                       if time.time() - e.get("t", 0) < _WITHDRAWN_NOTICE_SECONDS]
-        return ok({"waiting": [summary(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
+        return ok({"waiting": [summary_of(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
                    "withdrawn": taken_back,           # each request the assistant took back in the last 24 hours: Home lists them, and lets go of each on time
                    "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 
-    def waiting_by_kind() -> dict[str, int]:
-        """How many wait, per kind. Requests of the external source count under their type's badge, as `external:<badge>`."""
-        out: dict[str, int] = {}
-        for k, src in d.sources.items():
-            if not hasattr(src, "kind_label"):
-                out[k] = len(src.pending())
-                continue
-            out.update({f"{k}:{label}": 0 for label in src.kind_labels()})
-            for q in src.pending():
-                key = f"{k}:{src.kind_label(q)}"
-                out[key] = out.get(key, 0) + 1
-        return out
+    side_cache: dict[str, list[tuple[bool, str, float]]] = {}
+
+    def side_rows(fingerprint: str) -> list[tuple[bool, str, float]]:
+        """(close look, asked by, expires at) per waiting request. Describing a request can read its context, so the rows are kept
+        until the queue changes (its fingerprint); only "ends soon" moves with the clock, and that is counted fresh each time."""
+        if fingerprint not in side_cache:
+            rows = [(w["look"], w["by"], w["expires_at"]) for w in (summary_of(*x) for x in described())]
+            side_cache.clear()
+            side_cache[fingerprint] = rows
+        return side_cache[fingerprint]
 
     @route("/state", ["GET"])
     async def state(request: Request) -> Response:
@@ -359,9 +381,9 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if isinstance(got, Response):
             return got
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
-        kinds = await asyncio.to_thread(waiting_by_kind)
+        rows = await asyncio.to_thread(side_rows, fingerprint)
         mac = bridge_state()
-        return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "kinds": kinds,
+        return ok({"waiting": n, "v": fingerprint, "paused": d.paused(), "needs": needs(rows, time.time()),
                    "mac": "off" if not mac.get("set_up") else ("online" if mac.get("online") else "offline")})
 
     def versions_of(src: Any, q: Any) -> list[dict[str, Any]] | None:

@@ -392,6 +392,15 @@ if "external" in d.sources:                                  # and a request who
     from icloud_mcp import actions as AT
     d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")
 
+if "external" in d.sources:                                  # the side list's "Asked by" and "Ends within 2 h": made-up agents,
+    _box = d.sources["external"].box                          # two requests that end soon (preview only; the store is a throwaway)
+    _ids = [q.id for q in d.sources["external"].pending()]
+    with _box._db:
+        for _i, _id in enumerate(_ids):
+            _box._db.execute("UPDATE request SET requested_by = ? WHERE id = ?", (["NORA", "NORA", "Winnifred", "Claude Code"][_i % 4], _id))
+        for _id, _left in zip(_ids[1:3], (40 * 60, 95 * 60)):
+            _box._db.execute("UPDATE request SET expires_at = ? WHERE id = ?", (time.time() + _left, _id))
+
 d.audit.record("signin.password", actor="unknown", via="password", ok=False, summary="Wrong owner password")
 d.audit.record("signin.password", actor="owner", via="password", summary="Signed in with the owner password")
 d.audit.record("settings.changed", actor="owner", via="password", summary="Changed safety settings: Quiet hours 22:00 → 23:00",
