@@ -145,7 +145,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
 
     # -- the activity table: what each entry did, to what, and its details (the log holds names, addresses and hashes, no text)
     actions = {"all": ("All actions", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agent requests", ("tool.",)),
-               "settings": ("Settings", ("settings.", "accounts.", "push.", "notice.", "standing.", "server.", "owner_password.")),
+               "settings": ("Settings", ("settings.", "accounts.", "push.", "notice.", "standing.", "server.", "owner_password.", "log.")),
                "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
     labels = {"approval.sent": "Approved", "approval.discarded": "Discarded", "approval.edited": "Edited", "approval.edit_undone": "Edited",
               "approval.withdrawn": "Withdrawn", "approval.revised": "Changed", "approval.expired": "Expired", "approval.failed": "Failed",
@@ -157,7 +157,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
               "push.added": "Notifications", "push.removed": "Notifications", "server.paused": "Paused", "server.resumed": "Resumed",
               "notice.receiver_added": "Notices", "notice.receiver_changed": "Notices", "notice.receiver_rotated": "Notices",
               "notice.receiver_removed": "Notices", "notice.resent": "Notices", "standing.removed": "Rule removed",
-              "server.restart": "Restarted", "owner_password.changed": "Password"}
+              "server.restart": "Restarted", "owner_password.changed": "Password", "log.exported": "Log downloaded",
+              "log.new_tree": "New log tree", "log.broken": "Log changed", "log.caught_up": "Log tree"}
     warn_tags = ("Changed", "Unclear", "Withdrawn", "Expired", "Not sent")
     lead = re.compile(r"^(?:Approved|Discarded|Did not send|Could not send|Withdrew|Edited|Brought back the original text of|Added|Removed"
                       r"|Took the file for|Signed in (?:with|through)|Confirmed with|Connected|Refused to connect|Signed out(?: of)?"
@@ -677,6 +678,52 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                    "more": len(found) >= 1000, "log_on": bool(s.audit_log), "keep_days": s.audit_keep_days,
                    "chain": {"ok": chain["ok"], "entries": chain.get("entries", 0), "broken_at": chain.get("broken_at")}})
 
+    # -- the log's checkpoints (package 8): the verifier key, Download log, a new tree after a change ------------------------
+    @route("/log/proof", ["GET"])
+    async def log_proof(request: Request) -> Response:
+        got = reader(request)
+        if isinstance(got, Response):
+            return got
+        return ok(await asyncio.to_thread(audit.proof_status))
+
+    @route("/log/export", ["POST"])
+    async def log_export(request: Request) -> Response:
+        """The whole kept log with its checkpoints, for the owner after a recent sign-in: it holds names and addresses."""
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        rec = got[1]
+        if getattr(audit, "proof", None) is None:
+            return err("The activity log is off, so there is nothing signed to download.", 404)
+        if not recent(rec):
+            return need_confirm("The download holds every entry of the activity log, names and addresses included.")
+        data = await asyncio.to_thread(audit.export)
+        audit.record("log.exported", actor="owner", via=rec.get("via", ""), summary="Downloaded the activity log with its checkpoints",
+                     entries=len(data.get("entries", [])))
+        name = f"icloud-mcp-log-{datetime.now(d.tz).strftime('%Y-%m-%d')}.json"
+        changed = bool((await asyncio.to_thread(audit.proof_status)).get("broken"))
+        return ok({"file": data, "name": name, "note": "Downloaded. The log was changed after its last checkpoint; dev/verify_log.py "
+                   "shows where." if changed else "Downloaded. Check it with dev/verify_log.py and the key you keep elsewhere."})
+
+    @route("/log/new-tree", ["POST"])
+    async def log_new_tree(request: Request) -> Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        rec = got[1]
+        if getattr(audit, "proof", None) is None:
+            return err("The activity log is off.", 404)
+        if not (await asyncio.to_thread(audit.proof_status)).get("broken"):   # D8-7: only after a change
+            return err("The log still matches its checkpoints, so there is no new tree to start.", 409)
+        if not recent(rec):
+            return need_confirm("A new log tree starts signing again over the log as it is now.")
+        old = await asyncio.to_thread(audit.new_tree)
+        st = await asyncio.to_thread(audit.proof_status)
+        audit.record("log.new_tree", actor="owner", via=rec.get("via", ""), summary="Started a new log tree", old_origin=old,
+                     origin=st.get("origin", ""))
+        return ok({**(await asyncio.to_thread(audit.proof_status)),
+                   "note": "A new log tree was started. Copy its key and keep it somewhere else."})
+
     # -- security ------------------------------------------------------------------------------------------------------
     @route("/security", ["GET"])
     async def security(request: Request) -> Response:
@@ -914,17 +961,18 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         rid = request.path_params["rid"]
         url = str(body["url"]) if body.get("url") is not None else None
         filt = body.get("filter") if isinstance(body.get("filter"), dict) else None
+        cps = bool(body["checkpoints"]) if isinstance(body.get("checkpoints"), bool) else None
         try:
             if url is not None:
                 svc.check_url(url)
-            looser = await asyncio.to_thread(svc.loosens, rid, url, filt)   # the service's lock never blocks the event loop
+            looser = await asyncio.to_thread(svc.loosens, rid, url, filt, cps)   # the service's lock never blocks the event loop
         except ValueError as e:
             return err(str(e), 400)
         if looser and not recent(rec):
             return need_confirm("Notices go to a new address, or more of them go out.")
         from .gate.notices import NeedsConfirm
         try:
-            done = await asyncio.to_thread(lambda: svc.change(rid, url, filt, may_loosen=recent(rec)))
+            done = await asyncio.to_thread(lambda: svc.change(rid, url, filt, may_loosen=recent(rec), checkpoints=cps))
         except NeedsConfirm:                   # checked again against the receiver as it is now: another change came first
             return need_confirm("Notices go to a new address, or more of them go out.")
         except ValueError as e:
@@ -933,7 +981,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err("There is no such receiver.", 404)
         shown, secret = done
         audit.record("notice.receiver_changed", actor="owner", via=rec.get("via", ""), summary=f"Changed a receiver of notices on {shown['host']}",
-                     host=shown["host"])
+                     host=shown["host"], **({"checkpoints": cps} if cps is not None else {}))
         return ok({"receiver": shown, **({"secret": secret} if secret else {}),
                    "note": "Changed. It has a new secret, shown only this once." if secret else "Changed."})
 

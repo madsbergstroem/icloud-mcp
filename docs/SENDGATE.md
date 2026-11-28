@@ -118,8 +118,8 @@ Rules every package keeps:
 | 4 | iMessage on `ActionType` and `Executor` | connector | 1, 3 | yes |
 | 5 | Calendar invitations on the same | connector | 1, 3 | yes (5a, 5b) |
 | 6 | Mail on the same | connector | 1, 3 | yes (6a, 6b) |
-| 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | later |
-| 8 | Signed checkpoints of the log, export | gate | 3 | later |
+| 7 | `plugin_api` version 1; Beeper's settings leave the core configuration | gate | 1 | yes (spec) |
+| 8 | Signed checkpoints of the log, export | gate | 3 | yes (spec) |
 | 9 | Notices of decisions: a status ledger (9a), then webhook delivery (9b); MCP events once the SDK has them | gate | 3 | yes (9a, 9b) |
 | 10 | Standing approval: the owner names people a type may reach without waiting, through a request the owner approves | gate | 3, 5b, 6 | yes |
 
@@ -1091,6 +1091,302 @@ Effort, estimated and not measured: 6a about 330 min of work (store and migratio
 tombstones 30, tests with the made-up SMTP server 120) and 45 min of review; 6b about 540 min of work after the mock (types and
 parameters 90, blobs with references 120, the card's new fields 120, migration and export 90, tests 120), plus 60 min of review.
 
+## Package 7: plugin_api version 1, and Beeper's settings leave the core
+
+Package 1 made `ActionSpec` and `PluginContext` public and promised to version them in package 7 (`plugins/__init__.py:84`,
+`:96`). Today nothing says which contract a plugin was written against, so a plugin from another package breaks without warning
+when a field changes. Beeper, the plugin that ships with the server, still reaches past the contract in three places:
+
+- Eight of its settings are fields of the core's `Settings` (`config.py:269-276`, read at `config.py:424-431`), and the plugin reads
+  them as `s.beeper_*` (29 reads in `plugins/beeper/*.py`, e.g. `gateway.py:163`, `:412`, `:416`, `__init__.py:100`, `:181`).
+- The core names its list among the lists an approval may add to at runtime (`config.py:164`, `_LIVE_LISTS`).
+- It imports private names: `settings._changed`, `_more_history`, `_removes_entry`, `_to_false`, `_to_true`
+  (`plugins/beeper/__init__.py:56`; defined at `settings.py:62-117`) and `gate_connectors.gateway._answer`, `_classify`
+  (`plugins/beeper/gateway.py:40`).
+
+Every plugin callback gets the core's whole `Settings` as `s: Any` (`plugins/__init__.py:133-175`, `:229-235`), so a plugin can
+read the owner's mail password field as easily as its own value. Beeper reads nothing of the core but `plugin_value` and
+`approval_link` (`gateway.py:462`), which shows how small the view can be.
+
+### What it adds
+
+| Part | What it is |
+|------|------------|
+| `icloud_mcp.plugin_api` | One module that re-exports the public names, with `API_VERSION = 1`. A plugin imports only from here. The names: `Plugin`, `Connection`, `Field`, `Listing`, `AccountRef`, `Capabilities`, `MessagesCapability`, `ChatRef`, `ActionSpec`, `PluginContext` (today in `plugins/__init__.py`); `ActionType`, `Executor`, `Hold`, `Result`, `ExternalError` (`gate/actions.py:62-269`); `Backend`, `Sender`, `Archiver`, `SendRequest` and the message records (`messages.py:46-217`); `Group`, `Spec` and the five `loosens` rules under public names (`settings.py:35-147`); the gateway client `Gateway`, `GatewayError`, `Answer` (`gate_connectors/gateway.py`) |
+| `Plugin.api` | The version a plugin was written for, an int, required from v1. The core loads a plugin whose `api` it supports and skips any other with one log line and a row on Connect a service: "Needs a newer server" or "Written for an older server" (`plugins/__init__.py:239-250` gets the check) |
+| `PluginContext` v1 | What every callback gets instead of the core's `Settings`: `value(key, default)` for the plugin's own settings (dashboard, then environment), `secret(key)` for the plugin's own secret environment names, `approval_link(kind, id)`, and `plugin_id`. Nothing else of the core |
+| `Plugin.secret_keys` | Environment names that hold secrets (Beeper: `BEEPER_EXEC_KEY`, `BEEPER_READ_KEY`). Read only through `secret()`, masked in every error (`Plugin.secrets` becomes derived from them), never editable and never shown on the dashboard |
+| Beeper on its own settings | The eight `beeper_*` fields leave `Settings`; Beeper declares them as `env_keys` and `secret_keys` and reads them with `ctx.value` and `ctx.secret`. Defaults and bounds (`BEEPER_TIMEOUT_SECONDS` 5 to 120, `config.py:429`) move into the plugin |
+| Lists by request, for plugins | `_LIVE_LISTS` keeps only the core's three lists. A plugin `Spec` marked `requestable` is added at runtime through the plugin values, so `gate.allow` (package 10a) needs no Beeper name in the core and a second plugin's list works the same way |
+
+### Behaviour
+
+- One version at a time: the core supports `{1}`. A later v2 says in its own package how long v1 is still loaded.
+- Additive changes stay v1: a new optional field with a default, a new capability, a new name in `plugin_api`. Renaming, removing,
+  changing a type or what a callback receives is v2.
+- `icloud_mcp.beeper` and `icloud_mcp.audit` stay as aliases (`beeper.py:1-7`); old private imports keep working inside this
+  repository, but `plugin_api` is the only promise.
+- The environment names stay the same (`BEEPER_GATEWAY_URL`, ...), so `.env` files and the deploy on CT 219 need no change.
+- The settings group and Activity look as before; the dashboard draws plugins from data as today (`settings.py:156-158`).
+
+### Which parts need a mock
+
+Only the Connect row for a plugin with an unsupported `api`. It is one line in an existing card, so a screenshot of the planned row
+in the PR is enough; no separate mock.
+
+### Out of scope for package 7
+
+- Mail, calendar and contacts as plugins (`plugins/__init__.py:178-202` stay interfaces).
+- Plugins connected by the owner with a form (`Connection.kind == "form"`, not used yet).
+- Loading plugins from anywhere but installed entry points and `BUILTIN` (no plugin directory, no download).
+- A sandbox for plugin code. A plugin runs in the server's process; `PluginContext` limits what it is handed, not what Python lets
+  it import. The docs say so.
+- `GATE_*` names the core reads for the connector file (`plugins/__init__.py:260-261`); they move with the connector in its own step.
+
+### Decisions for package 7
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D7-1 | What a callback receives | `PluginContext` everywhere, also in `MessagesCapability` and `Plugin` callbacks (decided by the owner, 2026-11-28) | One view; the whole `Settings` is the gap the package closes. Costs a mechanical change in Beeper and the made-up test plugins |
+| D7-2 | Version check | Exact major, `api in {1}`; no minor numbers | Additive changes do not need a number; a plugin that needs a newer field checks with `hasattr` and says so |
+| D7-3 | Plugin without `api` | Load it as v1 with a warning during v1, refuse in v2 | Every plugin today predates the field; Beeper and the connector plugin get `api=1` in the same change |
+| D7-4 | Secrets | `secret_keys` read through `ctx.secret`, never in `plugin_values` | Today `plugin_values` hold every plugin key with its value (`config.py:432`); a secret there can reach a settings export or a log of the values |
+| D7-5 | The live list | Plugin values updated in place, under the same rule as `add_live` (only adds, never narrows an empty list that means anyone) | Keeps package 10a's behaviour; `object.__setattr__` on `plugin_values` is the same single way in as today (`config.py:179`) |
+| D7-6 | Where the public names live | A new module `plugin_api` that re-exports | Moving the classes would touch every import; a re-export is the promise without the churn |
+
+### Rollback
+
+Revert the commit. No data changes shape: the dashboard's values stay in `settings.json` under the same names, and the
+environment names are unchanged. A plugin written for v1 imports `icloud_mcp.plugin_api`, which the old version does not have, so
+the old version skips it with one log line and starts without it (`plugins/__init__.py:244-246`).
+
+Acceptance criteria:
+
+1. `Settings` has no attribute that starts with `beeper_`; `grep -rn "beeper" src/icloud_mcp/config.py` finds no field.
+2. Beeper imports only from `icloud_mcp.plugin_api` and its own package (a test parses its imports).
+3. A made-up plugin with `api=2` is not loaded; the log has one line, Connect shows the row, the server starts and every other
+   plugin works. A plugin without `api` loads with one warning.
+4. A callback of every kind receives a `PluginContext`; reading an attribute of the core's settings through it raises
+   `AttributeError` (one test per callback kind with the made-up plugins Chatty, Mailbox and Parlor).
+5. `BEEPER_EXEC_KEY` and `BEEPER_READ_KEY` appear in no `plugin_values`, no settings answer of the dashboard, no error text; a
+   test greps every output for made-up key values.
+6. `gate.allow` for `BEEPER_SEND_ALLOWLIST` adds the chat at once and the next `messages_send_request` to it passes the list,
+   with no Beeper name in `config.py`; a made-up plugin with a requestable list gets the same.
+7. Beeper's health, accounts, sending, reading and archiving answer as before against the fake gateway (the existing Beeper tests
+   pass unchanged except for imports and the context argument).
+8. The image starts on CT 219's `.env` without a change (a test loads a `.env` with every `BEEPER_*` name).
+
+Effort, estimated and not measured: about 480 min of work (`plugin_api` and the version check 60, `PluginContext` v1 and secrets
+75, Beeper off the core fields and onto the context 120, plugin lists by request 45, public names for the settings rules 20,
+tests 130, docs including "Writing a plugin action" 30), plus 30 min of review by the owner.
+
+Reviewed on 2026-11-28: see "Review of packages 7 and 8" below.
+
+### As built (7)
+
+Built on 2026-11-28 without the Codex review (the owner's choice; the Codex workspace had no credits). A separate pass with
+gstack `/review` over the whole diff took its place; its findings are below.
+
+- `icloud_mcp.plugin_api` re-exports the names of the table above, `API_VERSION = 1` and `released_answer` (what a sender answers
+  when a standing rule let a request through, package 10b; additive). The five `loosens` rules are public as `to_true`,
+  `to_false`, `changed`, `removes_entry` and `more_history` (`settings.py`), the old private names stay.
+- `PluginContext` is a class with slots, not a dataclass: `value`, `secret`, `approval_link`, `plugin_id`. `plugins.context(p, s)`
+  gives the one context of a plugin per server, so a plugin keeps what it caches per server keyed on it (Beeper's readers).
+  `value` answers only the plugin's own `settings_keys` and `env_keys`. Built directly (`PluginContext(settings, id)`, as tests
+  do) it reads any plugin value.
+- `Settings.plugin_secrets` holds every plugin's `secret_keys` apart from `plugin_values`, `repr=False`, read with
+  `plugin_secret`; `plugins.secrets_of(p, s)` is what the core masks (the secret names' values and `secrets(ctx)`).
+- Beeper: `BEEPER_GATEWAY_URL`, `_CHAT_TOOL`, `_SEND_TOOL`, `_TIMEOUT_SECONDS`, `_ACCOUNTS_TOOL` are `env_keys`, the two keys are
+  `secret_keys`; defaults and the 5 to 120 second bound are in `plugins/beeper/gateway.py`. Its unused `register_type` is gone,
+  and so are the re-exports of the private `_answer` and `_classify`.
+- `config.add_live` and `live_matches` take a plugin's requestable list and change `plugin_values` in place, under the same rule
+  (only adds; an empty list that means anyone stays empty).
+- `gate.allow` hands a plugin list's `entry_info` that plugin's context; the server passes the lookup in (`ListAllow(view=...)`),
+  so the gate imports no plugin code.
+- `settings.GROUPS` and `SPECS` are built when first read (module `__getattr__`), because a plugin imports `plugin_api`, which
+  imports `settings`; building them at import found the plugins half loaded.
+- Connect a service lists a plugin skipped for its version with its name and "Needs a newer server" or "Written for an older
+  server" (`/dashboard/api/accounts` → `skipped`).
+- Tests: `tests/test_plugin_api.py` for criteria 1 to 6 and 8; the Beeper tests (criterion 7) changed only where they built a
+  reader from `Settings` or set `beeper_send_allowlist`. The commits follow the bins (gate, connector, mixed); the change crosses
+  them in one step, so only the last commit runs green on its own.
+
+## Package 8: signed checkpoints of the log, export
+
+The activity log is a hash chain (`gate/audit.py:40-42`, `:80-81`), and the dashboard checks it (`dashboard_api.py:659`,
+`static/app/settings.js:58-60`). The module says what that is worth: "tamper evidence for the file, not a defence against someone
+who can rewrite the whole file: the hashes are not signed" (`gate/audit.py:8-10`). Pruning after `AUDIT_KEEP_DAYS` rewrites the
+file (`gate/audit.py:93-114`), and `verify()` starts again at the first kept line (`:149-150`), so a pruned and rewritten log
+looks the same as an intact one. The owner also has no way to take the log off the server: the Activity page reads at most 1,000
+entries (`dashboard_api.py:658`) and there is no export.
+
+Package 8 adds two things. The server signs, at intervals, a short statement of how long the log is and what it contains: a
+checkpoint in the C2SP format. And the owner can download the log with its checkpoints and verify it elsewhere with a small
+script. A checkpoint the owner keeps (or a receiver got) proves later that no line before it was changed or removed, even
+after the server rewrote its file.
+
+### What it adds
+
+| Part | What it is |
+|------|------------|
+| Leaf index | Each new entry gets `i`, its position counted from the first entry ever written, never reset by pruning. The chain (`prev`, `h`) stays as it is |
+| Merkle tree | An RFC 6962 / RFC 9162 Merkle tree over the entries in order: leaf hash `SHA-256(0x00 || line)`, node `SHA-256(0x01 || left || right)`, where `line` is the entry's JSON line as written, without its newline (RFC 9162 §2.1.1). The server keeps only the compact range (at most 64 hashes, one per set bit of the size) in `DATA_DIR/log-tree.json`, updated with each entry |
+| Checkpoint | A C2SP signed note (`c2sp.org/tlog-checkpoint` v1.1.0): origin line, tree size, base64 root hash, then an Ed25519 log signature (`c2sp.org/signed-note` v1.1.0, type `0x01`). Made at most once an hour while the log grew, and once on every export. Kept in `DATA_DIR/checkpoints.jsonl`, one per day for `AUDIT_KEEP_DAYS` plus the latest |
+| Log key | An Ed25519 key made at the first start, `DATA_DIR/log-key` (mode 600), never shown. Its verifier key (`<origin>+<key id>+<base64>`, `c2sp.org/signed-note` "Verifier keys") is shown on Settings › Activity with Copy, and in `icloud_check_health` |
+| Origin | `<server name>/icloud-mcp/log/<instance id>`, a schema-less name as `signed-note` recommends; the instance id is random and made with the key, so two instances never share an origin |
+| Prune proofs | Before pruning drops entries, the server writes the compact range at the new first index and a consistency proof (RFC 9162 §2.1.4) from each kept daily checkpoint older than that index, so old checkpoints stay checkable after their entries are gone |
+| Export | Settings › Activity › Download log (the owner only, recent sign-in): one file with the kept entries, the compact range before the first, the checkpoints, the prune proofs and the verifier key. The JSON lines are the log's own bytes |
+| `verify_log.py` | A script in `dev/` with no dependency beyond `cryptography`: given an export, the verifier key and optionally a checkpoint kept elsewhere, it says whether the export matches the checkpoints and extends the kept one |
+
+### Behaviour
+
+- A line written while the tree state cannot be updated (a full disk) is still written, as today (`gate/audit.py:90-91`); the next
+  start finds the tree behind the file, catches up from the lines, and Activity notes the catch-up.
+- The tree is append-only: the server never signs a checkpoint that is not consistent with one it signed before
+  (`tlog-checkpoint`, "Signatures"). If the file no longer matches the tree (a line changed, removed or inserted), the server signs
+  nothing more, Settings shows "The log was changed after a checkpoint" with the first index that differs, and a new tree needs the
+  owner's step-up action "Start a new log tree", which makes a new origin and logs that it did.
+- No new thread: `record` makes a checkpoint under its own lock when the last one is an hour old and the log grew; the export
+  makes one first. `AuditLog` has one writer per process and one process per `DATA_DIR` (`server.py:561`, `gate/audit.py:52`);
+  the package keeps that assumption and says so.
+- The export holds what the log holds, names and addresses included (`gate/audit.py:3-5`). It is offered to the owner only, after a
+  recent sign-in, never to an agent and never as a notice; the download is a line in Activity.
+- Checkpoints leave the server in two ways: in the export, and, opt-in per receiver, as notices of type `log.checkpoint` through
+  package 9 (the checkpoint text only). A receiver on another host is the outside copy that makes a rewrite visible.
+- Nothing about the log's content changes: the same entries, the same metadata rules, no new field but `i`.
+- `AUDIT_LOG=false` (`config.py:311`) makes no entries, so no checkpoints; the key and old checkpoints stay.
+
+### Make-vs-buy
+
+Checked on 2026-11-28. The Go implementations (`golang.org/x/mod/sumdb/note`, `transparency-dev`) define the format but cannot run
+in this Python process. On PyPI, `sigstore` 4.6.0 verifies Rekor checkpoints only behind private modules, and no maintained Python
+package for C2SP signed notes or RFC 9162 trees was found (searched: `tlog`, `transparency`, `signed-note`, `python-sumdb`; the
+first two are unrelated projects). Built here: the format is a few lines of text, Ed25519 comes from `cryptography`, which the
+server already has (`gate/push.py:30-33`), and the Merkle tree is the 20-line definition of RFC 9162 §2.1. Interop is tested, not
+assumed: the signed-note example in the spec (verifier key `example.com/foo+530d903a+AekyeRrm56hApGFkyQR4ZCbV54Id2LKaANYcrnKv3U2k`
+over "This is an example message.") verifies with `cryptography` (checked on 2026-11-28) and becomes a test vector; a checkpoint
+the server makes is verified with Go's `note` package once, in CI or by hand, and that run is noted in the PR.
+
+### Which parts need a mock
+
+Settings › Activity: the verifier key with Copy, the time of the last checkpoint, Download log, the "changed after a checkpoint"
+notice and "Start a new log tree". These need a mock before they are built. The export itself and the script have no UI.
+
+### Out of scope for package 8
+
+- A witness network or cosigners (`c2sp.org/tlog-witness`). A receiver of package 9 is the outside copy for now.
+- Inclusion proofs for single entries, a tile API (`c2sp.org/tlog-tiles`), or a public log.
+- Signing each entry, or post-quantum signatures (ML-DSA-44 cosignatures, which `tlog-checkpoint` recommends for cosigners; a log
+  signature with Ed25519 is allowed and is what one owner with one server needs).
+- Protecting the key from someone with root on the host. Whoever can read `log-key` can sign a new history; the checkpoints already
+  outside the server are what shows it. The docs say so plainly.
+- Moving the log into SQLite.
+
+### Decisions for package 8
+
+| # | Question | Recommended | Why |
+|---|----------|-------------|-----|
+| D8-1 | Format | C2SP `tlog-checkpoint` over an RFC 9162 tree, Ed25519 log signature | An open format other tools can check; Ed25519 log signatures are defined for exactly this ("only supports the log itself") |
+| D8-2 | What a leaf is | The entry's JSON line as written, without the newline | The export carries the same bytes; no second canonical form that could differ from the file |
+| D8-3 | How often | At most hourly while the log grew, and on every export | Bounds what a rewrite can hide to an hour; an idle server signs nothing |
+| D8-4 | Where the key lives | `DATA_DIR/log-key`, mode 600, made at the first start | Same place and rules as the push keys (`push.json`, 0600); a key the owner types in is a step nobody does |
+| D8-5 | Checkpoints off the server | Export, and opt-in notices of type `log.checkpoint` (decided by the owner, 2026-11-28) | Without an outside copy a signature proves only that the key signed; the notice path exists after 9b |
+| D8-6 | After pruning | Compact range plus consistency proofs from the kept daily checkpoints | Keeps checkpoints from before the window checkable without keeping entries longer than `AUDIT_KEEP_DAYS` |
+| D8-7 | A broken log | Stop signing, show it, new tree only by the owner's step-up action | A server that silently starts a new tree would make the rewrite it should reveal look normal |
+
+### Rollback
+
+Stop the server and start the previous version on the same `DATA_DIR`. It ignores `log-tree.json`, `checkpoints.jsonl` and
+`log-key`, and the field `i` in entries (`gate/audit.py:116-135` reads by key). Its pruning rewrites the file without proofs; on the
+next upgrade the server finds the tree ahead of or apart from the file and follows D8-7 (the owner starts a new tree).
+
+Acceptance criteria:
+
+1. The signed-note vector from `c2sp.org/signed-note` verifies; a checkpoint made by the server parses as `tlog-checkpoint` (three
+   lines, canonical base64, decimal size without leading zeros) and verifies against its verifier key.
+2. Root hashes for sizes 0 to 9 match RFC 9162 §2.1.1 computed directly from the leaves (a test with made-up entries).
+3. An export verifies with `dev/verify_log.py`; changing one byte of one line, removing a line, inserting a line or reordering two
+   fails it with the first bad index.
+4. A checkpoint kept from before a prune still verifies against an export made after the prune.
+5. After a line in the file is changed, the server signs no new checkpoint, Settings shows the notice, and "Start a new log tree"
+   without a recent sign-in is refused with `confirm`.
+6. The tree catches up after a start that found more lines than the tree (a write whose tree update failed).
+7. `log-key` never appears in an answer, a log line, an export or an error (a test greps every output).
+8. A `log.checkpoint` notice goes only to receivers that opted in, and carries only the checkpoint text.
+9. Rollback: the previous version starts on the `DATA_DIR` and keeps logging.
+
+Effort, estimated and not measured: about 640 min of work (leaf index and tree state with catch-up 90, Merkle tree, compact range,
+consistency proofs and signed notes 120, key and checkpoints 60, prune proofs 60, export and `verify_log.py` 90, the notice type
+30, Settings after the mock 60, tests 130), plus 45 min of review by the owner, with one export verified on the owner's Mac.
+
+### As built (8)
+
+The owner chose variant A of the mock (2026-11-28): a block "Proof" under the fields of Settings › Activity log, and a switch "Log
+checkpoints" per receiver under Notices. Built on 2026-11-28 without the Codex review (no credits; the owner said to build without
+it, as for package 7); a separate self-review of the diff took its place, and its findings are below.
+
+- `gate/logproof.py` holds the tree, the key and the checkpoints; `AuditLog` owns one and calls it under its lock. A line gets `i`,
+  is written, then joins the tree; at most hourly the file is read again and must give the tree before a checkpoint is signed.
+  Catch-up lines, a broken tree and a new checkpoint are acted on after the lock is let go (a log line, the notice).
+- The first line's leaf hash tells the tree where the file starts (`base.first`), so a prune that stopped between rewriting the
+  file and moving the base is finished at the next start (`next_base`), and a file pruned by an older version breaks the tree.
+- An existing log becomes the start of a tree as it is: its lines are leaves 0 to n-1 without `i` (`legacy_until`). A new tree the
+  owner starts does the same with the file as it is then; the old checkpoints move to `checkpoints-<id>.jsonl`.
+- Endpoints: `GET /dashboard/api/log/proof`, `POST /dashboard/api/log/export` (recent sign-in, a line `log.exported`),
+  `POST /dashboard/api/log/new-tree` (recent sign-in, a line `log.new_tree`). `icloud_check_health` gains `activity_log`.
+- Notices: table `log_notice`; a checkpoint's delivery rows carry the negative of its id as seq, share retries, signing, dead and
+  Resend, and are left out of the cursor. Turning the switch on lets more out, so it asks for a recent sign-in; off does not.
+
+Deviations from the spec above, each for a reason:
+
+- Prune proofs are compact ranges, not RFC 9162 §2.1.4 proof lists: a checkpoint carries the compact range at its size, and its
+  prune proof is the range from its size to the first kept entry. Merged they give the tree's base; `verify_log.py` checks that. A
+  §2.1.4 proof from an old size needs hashes inside entries that are already gone.
+- Checkpoints are kept longer than entries: every checkpoint for `AUDIT_KEEP_DAYS` plus 30 days, then the latest of each day up to
+  a year. With "one per day for `AUDIT_KEEP_DAYS`" a checkpoint is dropped at about the time its entries are, so criterion 4 could
+  never hold for a checkpoint kept outside the server.
+- Pruning drops only the oldest lines, up to the first that is newer than the cut. Before, a line in the middle with an older time
+  (a clock that went back) was dropped too, which no tree can follow.
+- `verify_log.py` checks the hash chain from the first line with an index on. Lines from before the tree (`legacy_until`) are
+  covered by the tree's root only, so a line changed before a new tree no longer fails every later export.
+- "Start a new log tree" is refused (409) while the log matches its checkpoints: a fresh sign-in alone is not enough to start over.
+- Not done: verifying one checkpoint with Go's `note` package (the spec asks for one run, in CI or by hand). The signed-note vector
+  from the spec verifies, and the format is tested line by line; the Go run is left for the owner's review.
+
+Found by the self-review and fixed before the PR, each with a test: a verifier key whose base64 holds a `+` did not parse (the
+key name never has one, the key may); a changed line found at the start named no index; checkpoints went before their entries
+(above); the new-tree endpoint accepted an intact log.
+
+### Sources
+
+| Claim | Source |
+|-------|--------|
+| Signed note format, Ed25519 type `0x01`, key id, verifier keys, example vector | https://c2sp.org/signed-note, v1.1.0 (2026-10-07), read 2026-11-28 |
+| Checkpoint lines, extension lines not recommended, Ed25519 log signatures without timestamp, "MUST NOT sign any checkpoint which is inconsistent" | https://c2sp.org/tlog-checkpoint, v1.1.0 (2026-10-07), read 2026-11-28 |
+| Merkle Tree Hash, leaf and node prefixes, consistency proofs | RFC 9162 §2.1.1 and §2.1.4, https://www.rfc-editor.org/rfc/rfc9162 (same tree as RFC 6962 §2.1) |
+| Witnesses as later work | https://c2sp.org/tlog-witness |
+
+## Review of packages 7 and 8
+
+Reviewed on 2026-11-28 with a self-check in the manner of gstack `/plan-eng-review`. The second opinion from Codex (gpt-6-astra)
+could not run: the workspace had no credits left. It is still owed before either package is built.
+
+Taken in from the self-check:
+
+- Package 7: secrets stay out of `plugin_values` (D7-4). Today every plugin key and its value sit in that tuple
+  (`config.py:432`), which is harmless only because the two Beeper keys are core fields; moving them as plain `env_keys` would put
+  them there.
+- Package 7: the live list goes through the plugin values with `add_live`'s rule, so package 10a keeps working without a Beeper
+  name in the core (D7-5, criterion 6).
+- Package 8: no signing thread; `record` signs under its lock, and the single-writer assumption is written down.
+- Package 8: an entry written by a version before package 8 has no `i`; after a rollback that pruned, the index of the first kept
+  line is unknown, so the server does not guess and asks the owner to start a new tree (D8-7, Rollback).
+- Package 8: the export carries personal data and is treated like it (owner only, recent sign-in, a line in Activity).
+
+Open for the owner: D7-1 (`PluginContext` everywhere, the larger change) and D8-5 (checkpoints as notices to a receiver, which is the
+only outside copy until there is a witness). Order: 7 and 8 are independent of each other; 8 uses package 9's notices for D8-5 and can
+ship without that part first.
+
 ## Package 9: notices of decisions (webhook, later MCP events)
 
 An agent that queued a request learns how it ended only by asking: `approval_status(id=...)` or `approval_status(since=...)`
@@ -1805,7 +2101,9 @@ To be asked once packages 0 to 3 run in the fork.
 ## Writing a plugin action
 
 Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`, a tuple of `ActionSpec`
-(`src/icloud_mcp/plugins/__init__.py`). `ActionSpec` and `PluginContext` are public from package 1 and versioned in package 7.
+(`src/icloud_mcp/plugins/__init__.py`). Since package 7 a plugin imports every public name from `icloud_mcp.plugin_api` and says
+`Plugin(api=1, ...)`; the core loads only the versions it supports and lists any other plugin on Connect a service. Every
+callback, of an action and of every other part of a plugin, gets a `PluginContext`, never the server's settings.
 
 | Field | What it is |
 |-------|------------|
@@ -1817,7 +2115,10 @@ Package 1 is built: a plugin offers actions of any kind through `Plugin.actions`
 | `recheck(ctx, params)` | Optional. Called after the owner approved and before the executor. Return `target_changed` when the target is not what the owner saw: nothing is carried out and the request ends as discarded with that reason. |
 | `hold(ctx)` | Optional. Whether approving is off right now: an `actions.Hold` with level `blocked` (the card says why and approving is refused, nothing is carried out, the request keeps waiting) or `note` (one line on the card), or None. Read on every look and every approval; one that raises blocks. |
 
-`ctx.value(key, default)` reads one of the plugin's own settings. Agents name an action `action` in `approval_request` and
+`ctx.value(key, default)` reads one of the plugin's own settings (its `settings_keys` and `env_keys`; any other key gives the
+default), `ctx.secret(key)` one of its `secret_keys` (any other name raises `KeyError`), `ctx.approval_link(kind, id)` the
+dashboard link of a request; nothing else of the server is on it. A list setting marked `requestable` in the plugin's group can be
+asked for with `gate.allow` like the core's lists. Agents name an action `action` in `approval_request` and
 `approval_list_actions`; `approval_status` keeps the field `action_type` it already had, so existing agents read it unchanged.
 `approval_request` checks the agent's own parameters (schema, size, the owner's list) before `prepare`, so the service is never
 asked about a target the owner did not allow; the policy runs after `prepare`, on what it filled in. `readOnly` is allowed only

@@ -268,9 +268,10 @@ class Group extends HTMLElement {
       h += section("Changed here") + `<ion-list class="inset">${here.map((f) => `<ion-item><ion-label class="ion-text-wrap"><h2>${esc(f.label)}</h2>
         <p>${esc(f.display)}</p></ion-label><ion-button slot="end" fill="clear" size="small" data-reset="${esc(f.key)}" data-slug="${esc(owner(st, f.key))}">Reset</ion-button></ion-item>`).join("")}</ion-list>`;
     }
-    body.innerHTML = h;
+    body.innerHTML = h + (this.page === "log" ? `<div data-proof></div>` : "");
     if (st.editable && (fields.length || lead)) this.querySelector("[data-end]").innerHTML = `<ion-button strong disabled data-save>Save</ion-button>`;
     this.wire();
+    if (this.page === "log") proofBlock(this.querySelector("[data-proof]"));
   }
 
   field(f, editable) {
@@ -567,6 +568,49 @@ class Notifications extends HTMLElement {
 }
 customElements.define("icm-notifications", Notifications);
 
+// -- the log's proof (package 8): signed checkpoints, the key to keep elsewhere, Download log, a new tree after a change --------
+// On the Activity log page, under its settings (the mock's variant A). The key shown is the public verifier key only.
+async function proofBlock(el) {
+  if (!el) return;
+  let p;
+  try { p = await get("/log/proof"); } catch (e) { el.innerHTML = ""; return; }
+  if (!p.on) { el.innerHTML = section("Proof") + `<p class="note">With the activity log off, nothing is signed. The key and the checkpoints so far stay.</p>`; return; }
+  const b = p.broken;
+  const last = p.last_checkpoint_at
+    ? (b ? `${new Date(p.last_checkpoint_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · stopped`
+      : `<span style="color:var(--positive)">●</span> ${esc(ago(p.last_checkpoint_at))} · ${Number(p.last_checkpoint_size).toLocaleString()} ${p.last_checkpoint_size === 1 ? "entry" : "entries"}`)
+    : "None yet: the first comes with the next entry";
+  el.innerHTML = section("Proof")
+    + (b ? `<div class="notice bad"><div><b>The log was changed after a checkpoint.</b><br>${b.at != null ? `Entry ${esc(Number(b.at).toLocaleString())} is not what was signed. ` : ""}No new checkpoint is signed until you start a new log tree.</div></div>` : "")
+    + `<ion-list class="inset">${row({ title: "Last checkpoint", note: last })}
+        <ion-item lines="none"><ion-label class="ion-text-wrap"><p class="mono" style="word-break:break-all" data-vkey>${esc(p.verifier_key)}</p></ion-label></ion-item></ion-list>
+      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap"><ion-button size="small" fill="outline" data-copykey>Copy key</ion-button>
+        <ion-button size="small" data-download>Download log</ion-button>
+        ${b ? `<ion-button size="small" color="danger" data-newtree>Start a new log tree</ion-button>` : ""}</div>
+      <p class="note">Keep the key somewhere else. With it, <span class="mono">verify_log.py</span> checks a download on any computer. Download asks you to sign in again and shows up in Activity.</p>`;
+  el.querySelector("[data-copykey]").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(p.verifier_key); toast("Key copied."); }
+    catch (e) {
+      const n = el.querySelector("[data-vkey]"); const r = document.createRange(); r.selectNodeContents(n);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); toast("Selected. Copy it by hand.");
+    }
+  });
+  el.querySelector("[data-download]").addEventListener("click", async () => {
+    try {
+      const r = await post("/log/export");
+      const url = URL.createObjectURL(new Blob([JSON.stringify(r.file, null, 1)], { type: "application/json" }));
+      const a = document.createElement("a"); a.href = url; a.download = r.name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast(r.note);
+      proofBlock(el);
+    } catch (e) { fail(e); }
+  });
+  el.querySelector("[data-newtree]")?.addEventListener("click", async () => {
+    if (!(await ask("Start a new log tree?", "Signing starts again over the log as it is now, under a new key name. Checkpoints you kept of the old tree no longer match it.", "Start", { danger: true }))) return;
+    try { const r = await post("/log/new-tree"); toast(r.note); proofBlock(el); } catch (e) { fail(e); }
+  });
+}
+
 // -- notices of decisions (package 9b) ------------------------------------------------------------------------------------
 // Receivers the owner names: a signed note to each, every time a request changes state. A secret is shown once, when it is made.
 class Notices extends HTMLElement {
@@ -593,7 +637,9 @@ class Notices extends HTMLElement {
           ${r.status.dead ? `<ion-button slot="end" fill="clear" size="small" data-resend="${esc(r.id)}">Send again</ion-button>` : ""}
           ${r.rotating ? `<ion-button slot="end" fill="clear" size="small" data-endold="${esc(r.id)}">End old secret</ion-button>`
             : `<ion-button slot="end" fill="clear" size="small" data-rotate="${esc(r.id)}" data-host="${esc(r.host)}">New secret</ion-button>`}
-          <ion-button slot="end" fill="clear" color="danger" size="small" data-remove="${esc(r.id)}" data-host="${esc(r.host)}">Remove</ion-button></ion-item>`).join("")}</ion-list>` : "")
+          <ion-button slot="end" fill="clear" color="danger" size="small" data-remove="${esc(r.id)}" data-host="${esc(r.host)}">Remove</ion-button></ion-item>
+          <ion-item><ion-toggle data-cps="${esc(r.id)}" ${r.checkpoints ? "checked" : ""}>Log checkpoints<br><small class="sub">Also the signed checkpoints of the activity log, never an entry</small></ion-toggle></ion-item>`).join("")}</ion-list>
+        <p class="note">A receiver on another host that keeps the log checkpoints is the outside copy that makes a rewrite of the log visible.</p>` : "")
       + section("Add a receiver") + `<ion-list class="inset"><ion-item><ion-input label="Address" label-placement="stacked" type="url" inputmode="url"
           placeholder="https://hooks.example.org/sendgate" data-url ${full || !st.hosts.length ? "disabled" : ""}></ion-input></ion-item></ion-list>
         <div class="acts"><ion-button data-add ${full || !st.hosts.length ? "disabled" : ""}>Add</ion-button></div>
@@ -623,6 +669,11 @@ class Notices extends HTMLElement {
     }));
     this.querySelectorAll("[data-resend]").forEach((b) => b.addEventListener("click", async () => {
       try { const r = await post(`/notices/${encodeURIComponent(b.dataset.resend)}/resend`); toast(r.note); this.load(); } catch (e) { fail(e); }
+    }));
+    this.querySelectorAll("[data-cps]").forEach((t) => t.addEventListener("ionChange", async (e) => {
+      try { const r = await post(`/notices/${encodeURIComponent(t.dataset.cps)}/change`, { checkpoints: e.detail.checked }); toast(r.note); }
+      catch (err) { fail(err); }
+      this.load();
     }));
     this.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await ask(`Remove ${b.dataset.host}?`, "No more notices go there, and the ones still waiting are dropped.", "Remove", { danger: true }))) return;

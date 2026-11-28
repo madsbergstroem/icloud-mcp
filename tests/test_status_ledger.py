@@ -65,6 +65,7 @@ def scenario(tmp_path, monkeypatch, log_on=True):
     d = str(tmp_path)
     st = S.Store(d, "external", 3600, 50)
     audit = AuditLog(d, enabled=log_on)
+    audit.proof = None              # package 8 adds `i` to each entry, which changes the log-hash cursors; this compares the ledger
     ledger = ApprovalLedger({"external": st}, audit, kinds=kinds)
     ids = {}
 

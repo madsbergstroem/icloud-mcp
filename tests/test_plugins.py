@@ -57,9 +57,9 @@ class ChattyBackend:
 
 
 def _chatty_group():
-    from icloud_mcp.settings import Group, Spec, _changed
+    from icloud_mcp.plugin_api import Group, Spec, changed
     return Group("chatty", "Chatty", "Rooms on Chatty your assistant may write to, after your approval.", [
-        Spec("CHATTY_SEND_ALLOWLIST", "Rooms that may be written to", "list", loosens=_changed, section="Sending")])
+        Spec("CHATTY_SEND_ALLOWLIST", "Rooms that may be written to", "list", loosens=changed, section="Sending")])
 
 
 def chatty_plugin():
@@ -69,7 +69,7 @@ def chatty_plugin():
         capabilities=P.Capabilities(messages=P.MessagesCapability(
             prefix="chatty", action_type=CHATTY_TYPE, executor=lambda s: ChattyExecutor(), sender=lambda s, ext: ChattySender(ext),
             backend=lambda s: ChattyBackend(),
-            allowed=lambda s: [x for x in s.plugin_value("CHATTY_SEND_ALLOWLIST").split(",") if x.strip()],
+            allowed=lambda s: [x for x in s.value("CHATTY_SEND_ALLOWLIST").split(",") if x.strip()],
             policy=lambda s: (lambda p: "Not permitted: quiet hours." if "[quiet]" in p["text"] else None),
             sending_on=lambda s: True)),
         settings_keys=frozenset({"CHATTY_SEND_ALLOWLIST"}), settings_group=_chatty_group,

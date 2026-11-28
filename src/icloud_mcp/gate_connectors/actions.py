@@ -423,4 +423,5 @@ def plugin() -> Any:
         settings_keys=frozenset(fa.allow_setting for fa in found),
         settings_group=(lambda: settings_group(found)) if found else None,
         enabled=lambda s: bool(live),
-        secrets=lambda s: secrets_of(env))
+        secrets=lambda s: secrets_of(env),
+        api=1)

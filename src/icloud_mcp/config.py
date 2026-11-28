@@ -5,6 +5,7 @@ import dataclasses
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 
@@ -45,6 +46,11 @@ _dashboard_values: dict[str, str] = {}   # the dashboard's values while Settings
 def _plugin_keys() -> frozenset[str]:
     from .plugins import env_keys, settings_keys
     return settings_keys() | env_keys()
+
+
+def _plugin_secret_keys() -> frozenset[str]:
+    from .plugins import secret_keys
+    return secret_keys()
 
 
 def editable_keys() -> frozenset[str]:
@@ -161,15 +167,43 @@ _LIVE_LISTS = {
     "SEND_ALLOWLIST": ("send_allowlist", lambda x: x.lower()),
     "INVITE_ALLOWLIST": ("invite_allowlist", lambda x: x.lower()),
     "IMESSAGE_SEND_ALLOWLIST": ("imessage_send_allowlist", lambda x: _norm_handle(x)),
-    "BEEPER_SEND_ALLOWLIST": ("beeper_send_allowlist", lambda x: x.strip()),
 }
 
 _EMPTY_MEANS_ANYONE = frozenset({"SEND_ALLOWLIST", "INVITE_ALLOWLIST"})
 
 
+def _plugin_list_spec(key: str) -> Any:
+    """A plugin's list setting an approved request may add to (a `requestable` Spec of its settings group), or None."""
+    from .plugins import load_plugins
+    for p in load_plugins():
+        if key in p.settings_keys and p.settings_group is not None:
+            sp = next((x for x in p.settings_group().specs if x.key == key), None)
+            if sp is not None and getattr(sp, "requestable", False) and sp.kind == "list":
+                return sp
+    return None
+
+
+def _entries(value: str) -> tuple[str, ...]:
+    return tuple(x.strip() for x in value.split(",") if x.strip())
+
+
 def add_live(s: "Settings", key: str, entry: str) -> None:
     """Add one entry to a list of this running server, as the owner approved it. The entry is written to the dashboard's settings
-    as well, so the next start reads it from there. Only adds: a list never gets narrower here, and only the lists above."""
+    as well, so the next start reads it from there. Only adds: a list never gets narrower here, and only the lists above or a
+    plugin's requestable list (in its plugin values, docs/SENDGATE.md package 7, D7-5)."""
+    if key not in _LIVE_LISTS:
+        sp = _plugin_list_spec(key)
+        if sp is None:
+            raise KeyError(key)
+        have = _entries(s.plugin_value(key, ""))
+        if not have and getattr(sp, "empty_means_anyone", False):
+            return
+        value = entry.strip()
+        if value and value not in have:
+            values = dict(s.plugin_values)
+            values[key] = ",".join((*have, value))
+            object.__setattr__(s, "plugin_values", tuple(sorted(values.items())))   # the same single way in as for the core's lists
+        return
     field, norm = _LIVE_LISTS[key]
     have = tuple(getattr(s, field))
     if not have and key in _EMPTY_MEANS_ANYONE:     # this server lets anyone through; one entry would shut out everyone else
@@ -182,7 +216,9 @@ def add_live(s: "Settings", key: str, entry: str) -> None:
 def live_matches(s: "Settings", key: str, value: str) -> bool:
     """Whether this running server already holds exactly `value` for one of the lists above (an entry approved meanwhile)."""
     if key not in _LIVE_LISTS:
-        return False
+        if _plugin_list_spec(key) is None:
+            return False
+        return set(_entries(value)) == set(_entries(s.plugin_value(key, "")))
     field, norm = _LIVE_LISTS[key]
     return {norm(x) for x in value.split(",") if x.strip()} == set(getattr(s, field))
 
@@ -266,20 +302,19 @@ class Settings:
     imessage_allow_send: bool = False              # IMESSAGE_ALLOW_SEND: iMessage chats can be written to through messages_send_request at all
     imessage_send_requires_approval: bool = True   # IMESSAGE_SEND_REQUIRES_APPROVAL: every iMessage waits for the owner (independent of mail)
     imessage_send_allowlist: tuple[str, ...] = ()  # IMESSAGE_SEND_ALLOWLIST: who may receive; empty = nobody, "*" = anyone
-    beeper_gateway_url: str = ""                   # BEEPER_GATEWAY_URL: the gateway's MCP endpoint (beeper.py); with the key it lets messages_send_request write to beeper: chats
-    beeper_exec_key: str = ""                      # BEEPER_EXEC_KEY: the gateway key that sends after approval and reads chat details; only in the environment
-    beeper_send_allowlist: tuple[str, ...] = ()    # BEEPER_SEND_ALLOWLIST: chat ids that may be written to; empty = nobody, "*" = any chat
-    beeper_chat_tool: str = "beeper-get_chat"      # BEEPER_CHAT_TOOL: the gateway's name for Beeper's get_chat
-    beeper_send_tool: str = "beeper_send-send_message"   # BEEPER_SEND_TOOL: the gateway's name for send_message on its own server entry
-    beeper_timeout_seconds: float = 30.0           # BEEPER_TIMEOUT_SECONDS: how long one gateway call may take
-    beeper_read_key: str = ""                      # BEEPER_READ_KEY: a gateway key that may read Beeper's accounts for the dashboard; only in the environment
-    beeper_accounts_tool: str = "beeper-get_accounts"   # BEEPER_ACCOUNTS_TOOL: the gateway's name for Beeper's get_accounts
     # the settings a service plugin declares (its settings_keys), as set on the dashboard or in the environment: plugin_value(key)
     plugin_values: tuple[tuple[str, str], ...] = ()
+
+    # a plugin's secret environment names (its secret_keys), apart from plugin_values: never shown, never editable
+    plugin_secrets: tuple[tuple[str, str], ...] = dataclasses.field(default=(), repr=False, compare=False)
 
     def plugin_value(self, key: str, default: str = "") -> str:
         """A service plugin's own setting: the dashboard's value, else the environment's, else `default`."""
         return next((v for k, v in self.plugin_values if k == key), default)
+
+    def plugin_secret(self, key: str) -> str:
+        """A service plugin's secret from the environment, '' when unset. Plugins read it through PluginContext.secret."""
+        return next((v for k, v in self.plugin_secrets if k == key), "")
     warmup_on_start: bool = True  # WARMUP_ON_START: log in to mail, calendar and contacts in the background right after start
     tool_workers: int = 8         # TOOL_WORKERS: threads that run tool calls, so parallel calls do not queue behind each other
                                   # (Mac helper tools use a pool of their own, min(TOOL_WORKERS, 6), so they never hold these)
@@ -421,15 +456,8 @@ class Settings:
             imessage_allow_send=_bool("IMESSAGE_ALLOW_SEND", False),
             imessage_send_requires_approval=_bool("IMESSAGE_SEND_REQUIRES_APPROVAL", True),
             imessage_send_allowlist=tuple(x.strip() if x.strip() == "*" else _norm_handle(x) for x in _list("IMESSAGE_SEND_ALLOWLIST") if x.strip()),
-            beeper_gateway_url=_str("BEEPER_GATEWAY_URL").strip(),
-            beeper_exec_key=_str("BEEPER_EXEC_KEY").strip(),
-            beeper_send_allowlist=tuple(_list("BEEPER_SEND_ALLOWLIST")),
-            beeper_chat_tool=_str("BEEPER_CHAT_TOOL", "beeper-get_chat").strip() or "beeper-get_chat",
-            beeper_send_tool=_str("BEEPER_SEND_TOOL", "beeper_send-send_message").strip() or "beeper_send-send_message",
-            beeper_timeout_seconds=float(max(5, min(_int("BEEPER_TIMEOUT_SECONDS", 30), 120))),
-            beeper_read_key=_str("BEEPER_READ_KEY").strip(),
-            beeper_accounts_tool=_str("BEEPER_ACCOUNTS_TOOL", "beeper-get_accounts").strip() or "beeper-get_accounts",
-            plugin_values=tuple((k, v) for k in sorted(_plugin_keys()) if (v := _env(k)) is not None),
+            plugin_values=tuple((k, v) for k in sorted(_plugin_keys() - _plugin_secret_keys()) if (v := _env(k)) is not None),
+            plugin_secrets=tuple((k, v.strip()) for k in sorted(_plugin_secret_keys()) if (v := _env(k)) is not None and v.strip()),
             warmup_on_start=_bool("WARMUP_ON_START", True),
             tool_workers=max(2, min(_int("TOOL_WORKERS", 8), 32)),
             agent_notes_file=_str("AGENT_NOTES_FILE"),

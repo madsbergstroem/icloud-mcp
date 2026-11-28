@@ -191,8 +191,9 @@ owner change (`settings_keys`, `settings_group()` as a `settings.Group`), secret
 
 The core keeps the guarantees: queue with the canonical hash, the owner's approval, the executor called once, the allowlist and
 the plugin's policy checked at queue and at approval, a log of metadata only. Settings › Connected services, the service page and
-the Connect card are drawn from the plugin's data; plugins bring no JavaScript. A plugin reads its own settings with
-`Settings.plugin_value(key)`. `tests/test_plugins.py` loads two made-up plugins (Chatty with messages, Mailbox with mail) through
+the Connect card are drawn from the plugin's data; plugins bring no JavaScript. Every part of a plugin gets a
+`PluginContext` (plugin_api v1): it reads its own settings with `ctx.value(key)` and its secrets with `ctx.secret(key)`, and
+imports only from `icloud_mcp.plugin_api`. `tests/test_plugins.py` loads two made-up plugins (Chatty with messages, Mailbox with mail) through
 the entry point and needs no core change; `dev/preview_dashboard.py --demo-plugins` shows them.
 
 A plugin that sends can offer the recipient picker (`MessagesCapability.search_chats`, `resolve`, `networks` and the settings keys

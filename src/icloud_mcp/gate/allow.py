@@ -87,12 +87,16 @@ def action_type(lists: Mapping[str, Any]) -> A.ActionType:
 class ListAllow:
     """The policy, the details for the card and the executor of gate.allow for one server.
 
-    settings: the server's Settings (read for entry_info, changed in place by config.add_live); store: the SettingsStore;
-    specs: () -> {key: Spec}, read each time so a plugin's group counts; current: (key, stored) -> (value, source)."""
+    settings: the server's Settings (changed in place by config.add_live); store: the SettingsStore;
+    specs: () -> {key: Spec}, read each time so a plugin's group counts; current: (key, stored) -> (value, source);
+    view: key -> what that list's entry_info is handed (a plugin's own context for a plugin's list, plugin_api v1; the settings
+    for the core's lists, the default)."""
 
     def __init__(self, s: Any, store: Any, specs: Callable[[], Mapping[str, Any]], current: Callable[[str, dict[str, str]], tuple[str, str]],
-                 add_live: Callable[[Any, str, str], None], groups: Callable[[], list[Any]] | None = None):
+                 add_live: Callable[[Any, str, str], None], groups: Callable[[], list[Any]] | None = None,
+                 view: Callable[[str], Any] | None = None):
         self.s, self.store, self.specs, self.current, self.add_live = s, store, specs, current, add_live
+        self.view = view or (lambda key: s)
         self.groups = groups or (lambda: [])
         self.path = os.path.join(s.data_dir, ORIGINS_FILE)
 
@@ -138,7 +142,7 @@ class ListAllow:
         label, problem, canonical = entry, None, entry
         if sp.entry_info is not None:
             try:
-                info = sp.entry_info(self.s, entry) or {}
+                info = sp.entry_info(self.view(key), entry) or {}
             except Exception as e:  # noqa: BLE001  -- the service's own error text stays here
                 log.warning("entry_info for %s raised %s", key, type(e).__name__)
                 raise A.ExternalError("The service could not be asked about this entry. Nothing was queued; try again in a minute.",
@@ -171,7 +175,7 @@ class ListAllow:
         if sp.entry_info is None:
             return None
         try:
-            info = sp.entry_info(self.s, entry) or {}
+            info = sp.entry_info(self.view(key), entry) or {}
         except Exception as e:  # noqa: BLE001  -- the service's own error text stays here
             log.warning("entry_info for %s raised %s at approval", key, type(e).__name__)
             raise A.ExternalError("Not added: the service could not be asked about this entry. Try again in a moment.") from None

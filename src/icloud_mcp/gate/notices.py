@@ -43,6 +43,11 @@ the receiver answers.
 
 The tables are new beside the store's; PRAGMA user_version stays 2, so the previous version starts on the same DATA_DIR and ignores
 them (D9-8).
+
+Checkpoints of the activity log (package 8, D8-5) go only to receivers that opted in (`checkpoints`), as notices of type
+`log.checkpoint` that carry the signed checkpoint text and nothing else. They sit in `log_notice`; their delivery rows use the
+negative of its id as seq, so they share retries, signing, the dead state and Resend with the decisions, but no cursor: a
+checkpoint is no status event, and the cursor counts status events only.
 """
 from __future__ import annotations
 
@@ -71,6 +76,7 @@ from urllib.parse import urlsplit
 log = logging.getLogger(__name__)
 
 EVENT_TYPE = "approval.status"
+CHECKPOINT_TYPE = "log.checkpoint"
 FILE = "notices.json"
 DB_FILE = "approvals.db"
 MAX_RECEIVERS = 5
@@ -117,6 +123,12 @@ CREATE TABLE IF NOT EXISTS notice_progress (
   name  TEXT PRIMARY KEY,
   seq   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS log_notice (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    TEXT NOT NULL UNIQUE,
+  body        BLOB NOT NULL,
+  created_at  REAL NOT NULL
+);
 """
 
 
@@ -152,6 +164,14 @@ def body(event: dict[str, Any], *, kind: str | None, sha256: str | None, cursor:
 
 
 # -- addresses ---------------------------------------------------------------------------------------------------------------------
+def checkpoint_body(note: str, at: float) -> bytes:
+    """A log.checkpoint notice: the signed checkpoint as text, and its time. Nothing from an entry."""
+    out = json.dumps({"type": CHECKPOINT_TYPE, "timestamp": _iso_ms(at), "data": {"checkpoint": note}}, separators=(",", ":")).encode()
+    if len(out) > MAX_BODY:
+        raise ValueError("notice body too large")
+    return out
+
+
 def address_ok(ip: str, private_ok: bool) -> bool:
     """Whether a notice may go to this address: a globally routable one, or (for a host on NOTICE_PRIVATE_HOSTS) any other
     except link-local (the cloud metadata address among them), multicast, unspecified and reserved."""
@@ -407,7 +427,7 @@ class NoticeService:
                 raise ValueError(f"At most {MAX_RECEIVERS} receivers. Remove one first.")
             secret = new_secret()
             rec = {"id": "rcv_" + secrets.token_hex(6), "url": url, "filter": filt, "generation": 1, "from_seq": self._head(),
-                   "created_at": time.time(), "secrets": [{"secret": secret, "until": None}]}
+                   "created_at": time.time(), "secrets": [{"secret": secret, "until": None}], "checkpoints": False}
             changed = self._receivers + [rec]
             self._save(changed)                # memory follows the file, never runs ahead of it
             self._receivers = changed
@@ -415,14 +435,14 @@ class NoticeService:
         self._ensure_thread()
         return self.public(rec), secret
 
-    def loosens(self, rid: str, url: str | None = None, filt: Any = None) -> bool:
-        """Whether a change lets more through: a new URL, or a wider filter."""
+    def loosens(self, rid: str, url: str | None = None, filt: Any = None, checkpoints: bool | None = None) -> bool:
+        """Whether a change lets more through: a new URL, a wider filter, or checkpoints turned on."""
         with self._lock:
             r = self._get(rid)
-            return r is not None and _looser(r, url, filt)
+            return r is not None and (_looser(r, url, filt) or (bool(checkpoints) and not r.get("checkpoints")))
 
     def change(self, rid: str, url: str | None = None, filt: Any = None, *,
-               may_loosen: bool = True) -> tuple[dict[str, Any], str | None] | None:
+               may_loosen: bool = True, checkpoints: bool | None = None) -> tuple[dict[str, Any], str | None] | None:
         """A new URL is a new generation with a new secret (returned), starting at the head; the old generation's pending
         deliveries are dropped. A filter alone keeps the generation. None when there is no such receiver. Without may_loosen (no
         recent sign-in), NeedsConfirm when the change lets more through than the receiver as it is now."""
@@ -432,9 +452,11 @@ class NoticeService:
             old = self._get(rid)
             if old is None:
                 return None
-            if not may_loosen and _looser(old, url, filt):
+            if not may_loosen and (_looser(old, url, filt) or (bool(checkpoints) and not old.get("checkpoints"))):
                 raise NeedsConfirm("the change lets more through")
             r, secret = dict(old), None
+            if checkpoints is not None:
+                r["checkpoints"] = bool(checkpoints)
             if new_url is not None and new_url != r["url"]:
                 secret = new_secret()
                 r.update(url=new_url, generation=int(r["generation"]) + 1, from_seq=self._head(), secrets=[{"secret": secret, "until": None}])
@@ -529,6 +551,7 @@ class NoticeService:
     def public(self, r: dict[str, Any]) -> dict[str, Any]:
         """What the owner sees of a receiver: never a secret."""
         return {"id": r["id"], "url": r["url"], "host": _host_of(r["url"]), "filter": r["filter"], "generation": r["generation"],
+                "checkpoints": bool(r.get("checkpoints")),
                 "created_at": r.get("created_at"), "rotating": any(s.get("until") and s["until"] > time.time() for s in r["secrets"])}
 
     def receivers(self) -> list[dict[str, Any]]:
@@ -593,6 +616,22 @@ class NoticeService:
                                      (now, r["id"], over))
         return made
 
+    def offer_checkpoint(self, note: str, at: float) -> int:
+        """A new checkpoint of the activity log: one delivery per receiver that opted in. Returns how many."""
+        with self._lock:
+            to = [r for r in self._receivers if r.get("checkpoints")]
+            if not to:
+                return 0
+            data = checkpoint_body(note, at)
+            with _Tx(self._db):
+                cur = self._db.execute("INSERT INTO log_notice (event_id, body, created_at) VALUES (?,?,?)", (new_event_id(), data, time.time()))
+                seq = -int(cur.lastrowid)
+                for r in to:
+                    self._db.execute("INSERT OR IGNORE INTO notice_delivery (seq, receiver, generation, request_id, state, next_at) "
+                                     "VALUES (?,?,?,?, 'pending', ?)", (seq, r["id"], r["generation"], f"log:{-seq}", time.time()))
+        self._wake.set()
+        return len(to)
+
     def _progress(self) -> int:
         got = self._db.execute("SELECT seq FROM notice_progress WHERE name = 'fanout'").fetchone()
         return int(got[0]) if got is not None else 0
@@ -603,7 +642,7 @@ class NoticeService:
         fan-out's progress."""
         done = self._progress()
         held = self._db.execute("SELECT MIN(seq) FROM notice_delivery WHERE receiver = ? AND generation = ? AND state IN ('pending','dead') "
-                                "AND seq != ?", (r["id"], r["generation"], seq)).fetchone()[0]
+                                "AND seq != ? AND seq > 0", (r["id"], r["generation"], seq)).fetchone()[0]
         return min(done, held - 1) if held is not None else done
 
     def _due(self, now: float) -> list[sqlite3.Row]:
@@ -651,9 +690,13 @@ class NoticeService:
                                    (row["seq"], row["receiver"], row["generation"])).fetchone()
             if row is None:                         # resent, removed or ended meanwhile
                 return "gone"
-            ev = self._db.execute("SELECT * FROM status_event WHERE seq = ?", (row["seq"],)).fetchone()
-            note = self._db.execute("SELECT * FROM notice WHERE seq = ?", (row["seq"],)).fetchone()
-            if ev is None or note is None:          # the event went with its request (retention): nothing left to say
+            if row["seq"] < 0:                      # a checkpoint of the activity log (package 8)
+                ev = None
+                note = self._db.execute("SELECT event_id, body FROM log_notice WHERE id = ?", (-row["seq"],)).fetchone()
+            else:
+                ev = self._db.execute("SELECT * FROM status_event WHERE seq = ?", (row["seq"],)).fetchone()
+                note = self._db.execute("SELECT * FROM notice WHERE seq = ?", (row["seq"],)).fetchone()
+            if note is None or (row["seq"] > 0 and ev is None):   # the event went with its request (retention): nothing left to say
                 self._end(row, "dead", now, None, "gone")
                 return "dead"
             attempts = row["attempts"] + 1
@@ -662,7 +705,8 @@ class NoticeService:
                                  "next_at = ? WHERE seq = ? AND receiver = ? AND generation = ? AND state = 'pending'",
                                  (attempts, now, now, now + (BACKOFF[attempts] if attempts < len(BACKOFF) else 0), row["seq"],
                                   row["receiver"], row["generation"]))
-            data = body(dict(ev), kind=self._kind(ev), sha256=note["sha256"], cursor=self.cursor_for(r, row["seq"]))
+            data = bytes(note["body"]) if ev is None else body(dict(ev), kind=self._kind(ev), sha256=note["sha256"],
+                                                               cursor=self.cursor_for(r, row["seq"]))
             url, keys = r["url"], [s["secret"] for s in r["secrets"] if s.get("until") is None or s["until"] > now]
         ts = int(now)
         headers = {"content-type": "application/json", "user-agent": "icloud-mcp-notices", "webhook-id": note["event_id"],
@@ -764,6 +808,7 @@ class NoticeService:
         with self._lock, _Tx(self._db):
             self._db.execute("DELETE FROM notice_delivery WHERE state != 'pending' AND ended_at < ?", (now - self.keep_days * 86400,))
             self._db.execute("DELETE FROM notice WHERE seq NOT IN (SELECT seq FROM notice_delivery)")
+            self._db.execute("DELETE FROM log_notice WHERE -id NOT IN (SELECT seq FROM notice_delivery WHERE seq < 0)")
 
     def run_once(self) -> dict[str, int]:
         """One round of the worker: the clock, the fan-out, every delivery that is due, the retention. Returns counts by result."""

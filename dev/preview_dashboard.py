@@ -57,7 +57,7 @@ os.environ.update(
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
     DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*", INVITE_ALLOWLIST="@example.org,@example.net",
     BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400", OUTBOX_MAX="40",   # one store for every kind since 6b
-    OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1")   # no request comes from that proxy: see --owner
+    OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1", NOTICE_HOSTS="hooks.example.org")   # no request comes from that proxy: see --owner
 # Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
 # gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
 if args.beeper != "none":
@@ -171,10 +171,10 @@ from test_beeper import FakeGateway  # noqa: E402
 
 gw = FakeGateway()
 gw.mode = "down" if args.beeper == "down" else None
-B.connect = lambda s: B.Beeper(B.Gateway(s.beeper_gateway_url, s.beeper_exec_key, 5, make_http=gw.make_http), s.beeper_chat_tool, s.beeper_send_tool)
+B.connect = lambda s: B.Beeper(B.Gateway(B.gateway_url(s), B.exec_key(s), 5, make_http=gw.make_http), B.chat_tool(s), B.send_tool(s))
 B.accounts_reader = lambda s: B.AccountsReader(s, make_http=gw.make_http)
 B.chats_reader = lambda s: B.ChatsReader(s, make_http=gw.make_http)
-B.read_gateway = lambda s, make_http=None: B.Gateway(s.beeper_gateway_url, s.beeper_read_key, 5, make_http=gw.make_http)
+B.read_gateway = lambda s, make_http=None: B.Gateway(B.gateway_url(s), B.read_key(s), 5, make_http=gw.make_http)
 # more made-up chats to find and add: a person on Telegram and a group of three on Signal; "!gone" on the list is a chat Beeper lost
 gw.chats.update({"!morgan:beeper.test": {"id": "!morgan:beeper.test", "title": "Morgan Lee", "type": "single", "network": "Telegram", "accountID": "telegram-example-1",
                                           "participants": {"items": [], "total": 2}}})
@@ -222,6 +222,10 @@ D.discover = _discover
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
+if getattr(d, "notices", None) is not None:      # one made-up receiver for Settings › Notices, answered here (packages 9b and 8)
+    d.notices.transport = lambda *a, **k: (200, {})
+    d.notices.resolve = lambda h, p: ["93.184.216.34"]
+    d.notices.add("https://hooks.example.org/sendgate")
 ext = d.sources["external"]
 mail = ext.registry.get("mail.send").executor.svc               # the server's own MailService (package 6b: three action types)
 cal = ext.registry.get("calendar.invite").executor.svc         # the server's own CalendarService (package 5b: five action types)

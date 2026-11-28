@@ -61,6 +61,7 @@ mergeable = [
 gate = [
   "dev/preview_dashboard.py",
   "dev/provenance.toml",
+  "dev/verify_log.py",
   "src/icloud_mcp/gate/**",
   "src/icloud_mcp/actions.py",             # the old module paths: one-line aliases of gate/
   "src/icloud_mcp/approval_status.py",
@@ -72,6 +73,7 @@ gate = [
   "src/icloud_mcp/dashboard_api.py",
   "src/icloud_mcp/hub_accounts.py",
   "src/icloud_mcp/plugins/__init__.py",
+  "src/icloud_mcp/plugin_api.py",          # the contract plugins import (package 7)
   "src/icloud_mcp/static/app/**",
   "src/icloud_mcp/static/vendor/**",
   "src/icloud_mcp/static/dashboard.css",

@@ -31,7 +31,7 @@ from starlette.responses import Response
 from . import access_sso
 from . import accounts as A
 from . import discover as D
-from .plugins import Plugin, enabled_plugins, load_plugins
+from .plugins import Plugin, context as plugin_context, enabled_plugins, load_plugins, skipped as skipped_plugins
 from . import setup_page as SP
 
 log = logging.getLogger(__name__)
@@ -95,8 +95,9 @@ def plugin_listing(s: Any, p: Plugin, listing: Any, on: bool) -> dict[str, Any]:
             out["listing"] = {"label": "", "items": [], "problem": "Could not be read just now.", "note": "", "state": "unreadable"}
     if m is not None:
         group = p.settings_group() if p.settings_group is not None else None
-        out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(s) and m.action_type is not None),
-                           "reading": m.backend is not None and (m.reading_on is None or bool(m.reading_on(s))),
+        ctx = plugin_context(p, s)
+        out["messages"] = {"prefix": m.prefix, "sending": bool(m.sending_on(ctx) and m.action_type is not None),
+                           "reading": m.backend is not None and (m.reading_on is None or bool(m.reading_on(ctx))),
                            "settings": group.slug if group is not None else "",
                            "picker": bool(m.recipients_key), "networks_key": m.networks_key, "groups_key": m.groups_key,
                            "reading_keys": dict(m.reading_keys)}
@@ -115,7 +116,7 @@ def mail_account(s: Any) -> str:
 
 def register_accounts_api(mcp: Any, d: Any) -> None:
     here = {p.id for p in enabled_plugins(d.s)}
-    listings = {p.id: p.accounts(d.s) for p in load_plugins() if p.id in here and p.accounts is not None}   # built once per server
+    listings = {p.id: p.accounts(plugin_context(p, d.s)) for p in load_plugins() if p.id in here and p.accounts is not None}   # built once per server
 
     def plugins() -> list[dict[str, Any]]:
         return [plugin_listing(d.s, p, listings.get(p.id), p.id in here) for p in load_plugins()]
@@ -143,8 +144,8 @@ def register_accounts_api(mcp: Any, d: Any) -> None:
         why = await why_not(request)
         via = "" if why else (await owner(request) or ("", ""))[1]
         presets = [{"id": k, **v} for k, v in A.SERVER_PRESETS.items()]   # they only fill in the servers on the connect form
-        return d.api_ok({"accounts": services(d.s), "plugins": listed, "connect": {"allowed": not why, "why": why, "via": via,
-                                                                                   "presets": presets}})
+        return d.api_ok({"accounts": services(d.s), "plugins": listed, "skipped": skipped_plugins(),
+                         "connect": {"allowed": not why, "why": why, "via": via, "presets": presets}})
 
     async def guarded(request: Request) -> tuple[dict[str, Any], dict[str, Any]] | Response:
         got = await d.api_writer(request)
@@ -318,7 +319,8 @@ def register_picker_api(mcp: Any, d: Any) -> None:
         if (w := which(request, m)) is None:
             return d.api_err("No such list here.", 404)
         rules = _rules(d.s, m, w)
-        (state, chats), nets = await asyncio.gather(asyncio.to_thread(m.resolve, d.s, rules["ids"]), asyncio.to_thread(m.networks, d.s))
+        ctx = plugin_context(p, d.s)
+        (state, chats), nets = await asyncio.gather(asyncio.to_thread(m.resolve, ctx, rules["ids"]), asyncio.to_thread(m.networks, ctx))
         return d.api_ok({**rules, "state": state, "chats": [_wire(c) for c in chats], "all_networks": nets, "name": p.name})
 
     @mcp.custom_route("/dashboard/api/plugins/{pid}/find", methods=["GET"])
@@ -330,7 +332,7 @@ def register_picker_api(mcp: Any, d: Any) -> None:
         if p is None:
             return d.api_err("No such service here.", 404)
         q = str(request.query_params.get("q", "")).strip()[:100]
-        state, chats = await asyncio.to_thread(m.search_chats, d.s, q)
+        state, chats = await asyncio.to_thread(m.search_chats, plugin_context(p, d.s), q)
         if (w := which(request, m)) is None:
             return d.api_err("No such list here.", 404)
         on = {x.casefold() for x in _rules(d.s, m, w)["ids"]}
@@ -345,7 +347,7 @@ def register_picker_api(mcp: Any, d: Any) -> None:
         if p is None:
             return d.api_err("No such service here.", 404)
         cid = str(request.query_params.get("id", "")).strip()[:300]
-        state, chats = await asyncio.to_thread(m.resolve, d.s, [cid] if cid else [])
+        state, chats = await asyncio.to_thread(m.resolve, plugin_context(p, d.s), [cid] if cid else [])
         if state != "ok" or not chats or not chats[0].found:
             return d.api_err("That chat cannot be found any more. Nothing was added.", 404, state=state)
         return d.api_ok({"chat": _wire(chats[0])})
