@@ -5,6 +5,16 @@ Update the Mac helper before the server whenever its version changes.
 
 ## Unreleased
 
+- **Requests to people you name can go out without waiting (fork).** With `approval_request` and the action `gate.trust`, an
+  agent asks for a rule: one kind of request (an invitation, an event update or cancellation, a reply to an invitation, an email)
+  to one person by address, for 90 days unless you say otherwise, at most a year. The card shows the kind of request, the person
+  and the end date; approving it asks you to confirm with your passkey or password if you signed in more than five minutes ago.
+  After that, a request of that kind to that person goes out at once, and the agent hears that it was sent. It sends you no
+  notification, and Activity marks it "Without approval" with the rule it used. A request that reaches anyone else still waits.
+  So does a mail with an attachment, a request your rules or lists no longer allow, and the 21st request to one person in 24 hours.
+  A rule never adds anyone to a list: the person still has to be on Only send to or Only invite. Settings, Safety, Without approval
+  lists your rules, how often each was used, and removes one at once. iMessage and Beeper messages always wait.
+
 - **An .eml file can be attached (fork).** `mail_send_message` with an attachment of type `message/rfc822` failed with
   `'str' object has no attribute 'as_bytes'`. Such a file now goes out as the mail it is, unencoded as RFC 2046 asks, so
   the recipient's mail program can open it, for example as a draft when it carries `X-Unsent: 1`. Any other `message/*`
