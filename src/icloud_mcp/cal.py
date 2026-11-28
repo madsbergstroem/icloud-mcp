@@ -1734,10 +1734,14 @@ class CalendarService:
     def _queue_action(self, op: str, raw: bytes, reached_: list[str], meta: dict[str, Any]) -> dict[str, Any]:
         from .gate import actions as A
         try:
-            q = self.external.queue_external(CALENDAR_TYPES[op], self.params_of(op, raw, reached_, meta), None)
+            got = self.external.submit(CALENDAR_TYPES[op], self.params_of(op, raw, reached_, meta), None)
         except A.ExternalError as e:
             raise CalendarError(str(e)) from None
         who = (reached_[0] if reached_ else None) if op == "reply" else ", ".join(reached_) or "the attendees"     # as before 5b
+        if not got.waits:                            # one of the owner's standing rules released it (package 10)
+            from .gate.external import released_answer
+            return {**released_answer(got), "written": got.status == "sent", "would_email": who}
+        q = got.q
         return {"status": "queued_for_owner_approval", "written": False, "outbox_id": q.id,
                 "approve_at": self.s.approval_link("external", q.id), "would_email": who,
                 "notice": f"NOT WRITTEN YET. This change makes iCloud email {who}, so it waits for the owner's approval on "
@@ -2382,6 +2386,13 @@ def reached(p: Mapping[str, Any]) -> list[str]:
     return list(p.get("guests") or ([p["organizer"]] if p.get("organizer") else []))
 
 
+def standing_identity(p: Mapping[str, Any]) -> list[str] | None:
+    """Who a held change reaches, for the owner's standing rules (package 10): each guest's (or the organizer's) address in lower
+    case, or None when there is nobody or someone is not an address."""
+    people = [str(a).strip().lower() for a in reached(p)]
+    return people if people and all("@" in a and " " not in a for a in people) else None
+
+
 def action_type(op: str) -> Any:
     from .gate import actions as A
     badge, button, _, note = _TYPE_LOOKS[op]
@@ -2389,7 +2400,7 @@ def action_type(op: str) -> Any:
         id=CALENDAR_TYPES[op], title=badge, badge=badge, approve_label=button, params_schema=SCHEMA,
         rows=(("When", "when"), ("Calendar", "calendar"), ("Where", "location")), text_field="ics", recipients=reached,
         subject=lambda p: p.get("summary") or "(no title)", note=note, text_caption="The description exactly as it will be saved.",
-        text_of=description_of, with_text=with_description, text_locked=_locked(op))
+        text_of=description_of, with_text=with_description, text_locked=_locked(op), standing_identity=standing_identity)
 
 
 class CalendarExecutor:
@@ -2407,7 +2418,9 @@ def register_types(registry: Any, service: "CalendarService") -> None:
     """The five calendar types on the external source. The owner's lists are the calendar's own (an empty INVITE_ALLOWLIST allows
     everyone, a domain entry the domain), checked by the service when it queues and again in the recheck, so the registry's own
     list lets everyone through."""
+    from .mail import recipient_allowed
     executor = CalendarExecutor(service)
-    for op in CALENDAR_TYPES:
+    for op in CALENDAR_TYPES:            # allows: the calendar's own list, for a standing rule's check (package 10) and the edit form
         registry.register(action_type(op), executor, ["*"], recheck=functools.partial(service.recheck, op),
-                          channel_tool=_TYPE_LOOKS[op][2], builtin=True)
+                          channel_tool=_TYPE_LOOKS[op][2], builtin=True,
+                          allows=lambda a: recipient_allowed(a, service.s.invite_allowlist))

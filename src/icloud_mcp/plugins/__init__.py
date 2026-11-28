@@ -137,7 +137,7 @@ class MessagesCapability:
 
     - backend(s, hub_filters): a messages.Backend for messages_list_chats, messages_read_chat and messages_search, or None
     - sender(s, external): a messages.Sender that asks the service about the chat and queues the request with the core's
-      external approvals (`external.queue_external(action_type_id, params, requested_by, key=...)`), or None
+      external approvals (`external.submit(action_type_id, params, requested_by, key=...)`, which answers whether it waits), or None
     - action_type, executor(s): what is queued, and what carries it out after the owner approved; the core calls it once
     - allowed(s): the owner's list of who may be reached (`*` for anyone), checked at queue and at approval
     - policy(s): further rules on the parameters (a reason a request is not permitted, or None), checked the same way

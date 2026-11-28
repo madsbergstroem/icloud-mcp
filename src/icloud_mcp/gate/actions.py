@@ -162,6 +162,12 @@ class ActionType:
     # its rows may use the labels reserved for who a request reaches (a mail's To, Cc and Bcc); the log then names whom it reached
     # from `recipients` only (D4-2), never from a row
     people_rows: bool = False
+    # package 10, both optional: who a request reaches, as stable identities of single people (lower-case email addresses), for
+    # the owner's standing rules; None or [] when the type cannot say (a group, a name only), and the request then always waits.
+    # Only a type the server registers itself may have it (ActionRegistry.register): a connector cannot say who a chat id is.
+    # step_up: approving a request of this type needs a recent sign-in, as loosening a setting does (gate.trust)
+    standing_identity: Callable[[Mapping[str, Any]], "Sequence[str] | None"] | None = None
+    step_up: bool = False
 
     def __post_init__(self) -> None:
         if not ID_PATTERN.match(self.id or ""):
@@ -371,7 +377,7 @@ class ActionRegistry:
             raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have a subject.")
         own = {"subject_field": action_type.subject_field, "blocked": action_type.blocked, "row_tags": action_type.row_tags,
                "blobs": action_type.blobs, "people_rows": action_type.people_rows or None, "text_limit": action_type.text_limit or None, "recheck_owner_allowed": recheck_owner_allowed or None, "allows": allows, "files": files,
-               "context": context, "status_kind": status_kind}
+               "context": context, "status_kind": status_kind, "standing_identity": action_type.standing_identity}
         if not builtin and (used := [k for k, v in own.items() if v is not None]):     # package 6b: the server's own types only
             raise ValueError(f"Action type {action_type.id}: only a type the server registers itself may have {used[0]}.")
         allowed =allowed_recipients if callable(allowed_recipients) else (lambda fixed=tuple(allowed_recipients): fixed)

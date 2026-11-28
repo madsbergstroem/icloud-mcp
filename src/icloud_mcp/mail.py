@@ -1991,8 +1991,8 @@ class MailService:
         try:
             params = self.params_of(msg, followup)
             # a key names one saved draft, whatever Date or Message-ID it is given each time: asking again finds that mail (6a)
-            q = self.external.queue_external(type_of_message(msg, followup), params, None, key=key,
-                                             key_fingerprint=fingerprint({"key": key}) if key is not None else None)
+            got = self.external.submit(type_of_message(msg, followup), params, None, key=key,
+                                       key_fingerprint=fingerprint({"key": key}) if key is not None else None)
         except A.AlreadyDecided as e:            # this draft became a mail that was decided: its outcome, and nothing queued
             status = "waiting" if e.state == "executing" else e.state
             return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
@@ -2000,6 +2000,10 @@ class MailService:
                               "approval_status with the outbox_id says more, and the owner can send the draft from Mail."}
         except A.ExternalError as e:
             raise MailError(str(e)) from None
+        if not got.waits:                            # one of the owner's standing rules released it (package 10)
+            from .gate.external import released_answer
+            return {**released_answer(got), "recipients": got.q.recipients, **self._summary_of(msg)}
+        q = got.q
         again = q.created_at < asked
         return self._queued(q, again, self.message_of(q) if again else msg)
 
@@ -2916,6 +2920,16 @@ class MailFiles:
         return self.svc.params_of(whole, p.get("followup"), old=p)
 
 
+def standing_identity(p: Mapping[str, Any]) -> list[str] | None:
+    """Who a mail action reaches, for the owner's standing rules (package 10): every address in To, Cc and Bcc in lower case.
+    None for a mail with an attachment, or a place that waits for one: such a mail never goes without a look (the owner,
+    2026-11-18)."""
+    if p.get("files"):
+        return None
+    people = [a.strip().lower() for a in mail_addresses(p)]
+    return people or None
+
+
 def action_type(type_id: str, svc: "MailService") -> Any:
     from .gate import actions as A
     badge, _ = MAIL_TYPES[type_id]
@@ -2926,7 +2940,7 @@ def action_type(type_id: str, svc: "MailService") -> Any:
         text_field="message", editable_fields=("subject", "to", "cc", "bcc"), recipient_fields=("to", "cc", "bcc"),
         recipients=mail_addresses, subject_field="subject", subject=lambda p: p.get("subject") or "(no subject)",
         text_style="mail", note=_MAIL_NOTE, text_of=_text_of(svc), with_text=_with_text(svc), text_locked=_locked(svc),
-        blocked=_waits_for(svc), blobs=_blobs, text_limit=svc.s.max_body_chars,
+        blocked=_waits_for(svc), blobs=_blobs, text_limit=svc.s.max_body_chars, standing_identity=standing_identity,
         edit_note=f"At most {svc.s.max_recipients} recipients." + (" A changed subject keeps the reply in its thread." if reply else ""))
 
 

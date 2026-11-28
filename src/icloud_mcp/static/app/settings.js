@@ -178,7 +178,8 @@ class Settings extends HTMLElement {
       safety: head("Safety") + `<ion-list class="inset">
         ${sw("READ_ONLY", "Read-only server", "Nothing can be sent, moved or deleted")}
         ${sw("ALLOW_PERMANENT_DELETE", "Allow emptying Trash")}
-        ${row({ title: "Only these tools", note: v.TOOLS ? "Some" : "All", button: true, attrs: 'data-page="tools"' })}</ion-list>
+        ${row({ title: "Only these tools", note: v.TOOLS ? "Some" : "All", button: true, attrs: 'data-page="tools"' })}
+        ${row({ title: "Without approval", sub: "People whose requests go out without waiting", button: true, attrs: 'data-nav="icm-standing"' })}</ion-list>
         <p class="note">These apply to every connected service.</p>`,
       server: head("Activity and server") + `<ion-list class="inset">
         ${row({ title: "Activity log", button: true, attrs: 'data-page="log"' })}
@@ -630,5 +631,30 @@ class Notices extends HTMLElement {
   }
 }
 customElements.define("icm-notices", Notices);
+
+// -- without approval (package 10) ------------------------------------------------------------------------------------------
+// The owner's standing rules: one kind of request to one person goes out without waiting, until a date. A rule exists only once
+// the owner approved a request for it; removing one needs no approval, because it only makes requests wait again.
+class Standing extends HTMLElement {
+  connectedCallback() { this.body = page(this, "", "Settings"); this.load(); }
+
+  async load() {
+    let st;
+    try { st = await get("/standing"); } catch (e) { fail(e); return; }
+    const day = (t) => new Date(t * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const used = (r) => (r.uses ? `used ${r.uses} time${r.uses === 1 ? "" : "s"}` : "not used yet") + (r.today >= r.limit ? " · today's limit reached" : "");
+    this.body.innerHTML = titleBlock("Without approval", "Requests to these people go out without waiting for you, until the date shown. Each still has to be on its list.")
+      + (st.rules.length ? `<ion-list class="inset">${st.rules.map((r) => `<ion-item><ion-label class="ion-text-wrap">
+          <h2>${esc(r.recipient)}</h2><p>${tag(r.title)} until ${esc(day(r.expires_at))} · ${esc(used(r))}</p></ion-label>
+          <ion-button slot="end" fill="clear" color="danger" size="small" data-remove="${esc(r.id)}" data-who="${esc(r.recipient)}">Remove</ion-button></ion-item>`).join("")}</ion-list>`
+        : `<div class="empty"><b>No one yet.</b>${st.available ? "Your assistant can ask for a rule; you approve it like any other request." : "Rules need the approval store, which this server does not run."}</div>`)
+      + `<p class="note">At most ${esc(String(st.rules[0]?.limit ?? 20))} requests a day per rule; past that they wait for you. A mail with an attachment always waits.</p>`;
+    this.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await ask(`Remove the rule for ${b.dataset.who}?`, "Their requests wait for you again.", "Remove", { danger: true }))) return;
+      try { const r = await post(`/standing/${encodeURIComponent(b.dataset.remove)}/remove`); toast(r.note); this.load(); } catch (e) { fail(e); }
+    }));
+  }
+}
+customElements.define("icm-standing", Standing);
 
 export { loadSession };

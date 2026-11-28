@@ -450,9 +450,13 @@ class BeeperSender:
                                   **({"participants": chat.people} if chat.people is not None else {}), **({"reply_to": reply_to} if reply_to else {})}
         waiting = {q.id for q in self.external.box.pending()}
         try:
-            q = self.external.queue_external(ACTION_ID, params, None, key=request_id)
+            got = self.external.submit(ACTION_ID, params, None, key=request_id)
         except A.ExternalError as e:
             raise ToolError(str(e)) from None
+        if not got.waits:                          # a standing rule (package 10); a connector cannot opt in, so this stays unused
+            from ...gate.external import released_answer
+            return released_answer(got)
+        q = got.q
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id,
                 "chat": {"title": chat.title, "network": chat.network, "group": chat.is_group, **({"people": chat.people} if chat.people is not None else {})},
                 "approve_at": self.s.approval_link("external", q.id), "expires_in_seconds": max(0, int(q.expires_at - time.time())),

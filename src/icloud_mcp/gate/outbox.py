@@ -130,11 +130,12 @@ class Outbox:
     # -- operations ------------------------------------------------------------
     def add(self, raw: bytes, recipients: list[str], followup: dict[str, Any] | None = None, key: str | None = None,
             approval_page: str = "the dashboard's Approvals page (/outbox when the dashboard is off)",
-            requested_by: str | None = None, action_type: str | None = None) -> QueuedMessage:
+            requested_by: str | None = None, action_type: str | None = None, notify: Any = True) -> QueuedMessage:
         """Queue a message, or return the entry already waiting for the same bytes or the same key. A key names what the message
         was built from (one saved draft), for when rebuilding it gives different bytes (a fresh Date or Message-ID).
         requested_by: the queueing client's name; left out, it is the one of the tool call running on this thread.
-        action_type: the registered kind of action, for entries of the external source (actions.py); the others leave it out."""
+        action_type: the registered kind of action, for entries of the external source (actions.py); the others leave it out.
+        notify: True calls on_new for a new entry, a function is called in its place, False calls nothing (as Store.add)."""
         with self._lock:
             self._prune()
             sha = hashlib.sha256(raw).hexdigest()
@@ -151,9 +152,10 @@ class Outbox:
                               action_type=action_type)
             self._items[q.id] = q
             self._save()
-        if self.on_new is not None:
+        note = self.on_new if notify is True else notify if callable(notify) else None
+        if note is not None:
             try:
-                self.on_new(q)
+                note(q)
             except Exception:  # noqa: BLE001  -- a failed note must never fail the queueing
                 pass
         return q

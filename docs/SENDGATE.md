@@ -1631,6 +1631,44 @@ Code: `gate/allow.py` (type, prepare, policy, executor, origins), `Spec.requesta
 `settings.py` (addresses for mail and invitations, handles for iMessage), Beeper's `_entry_info` (the chat as Beeper names it; an
 unknown chat, a group while group chats are off and a closed network are refused; its policy now reads the list each time), one
 lock per settings file. Tests: `tests/test_gate_allow.py`.
+### As built (10b)
+
+The standing rules shipped as 10b. They differ from the text above in these places:
+
+- **Where it is offered.** `gate.trust` is registered next to `gate.allow` (dashboard edits settings, the server has a type an
+  agent asks for itself), when at least one type has opted in. A server of mail, calendar and iMessage alone gets no new tool.
+- **Who opts in.** The five calendar types and the three mail types (send, reply, forward). `standing_identity` is a field of
+  `ActionType`, refused at registration for a type the server does not register itself. A mail with any file, or a place that
+  waits for one, answers `None` and always waits. The calendar registration gained `allows` (the invitation list), which
+  `gate.trust`'s policy and the edit form read.
+- **Refused by `policy`, not by the schema.** `action_type` is a free string listed in its description, so an unknown type,
+  `gate.trust` and a type that has not opted in all get `policy`, as acceptance criterion 2 asks.
+- **The end date is fixed when the card is made.** `prepare` writes `until` and `expires_at`; the rule ends there, whenever it is
+  approved. A card whose date has passed ends at the recheck.
+- **What counts as "every check the owner's click runs".** Before the rule's claim, the release reads the card the way the
+  approve endpoint does, with the type's context (mail's warnings and second questions about the mail it answers): a second
+  question, a hold, a file it waits for or a card that cannot be approved makes it wait. A context that cannot be read makes it
+  wait too. Then `release()` runs as for the owner, with the rule's claim in place of the owner's.
+- **The claim.** In one transaction of the store: the request still waits, was never claimed before (`attempts = 0`) and has not
+  run out; every person has a live rule; no rule is at its limit; then one use per rule and the claim. A use is counted for an
+  attempt that fails too. A request the owner decided in the moment between queueing and the claim answers its state
+  (discarded, sent ...) without `without_approval` and without a push.
+- **Push.** `Store.add` and `Outbox.add` take `notify`; `submit` passes its own and calls `on_new` only when the request waits for
+  the owner, so a released request sends nothing and a waiting one sends one note, as before.
+- **Activity.** The line of a released request is `approval.sent` (or `approval.discarded` when a recheck ended it) with the
+  actor `standing:<rule id>`, the people the rules name and the end date; the table shows "Your rule" and the tag "Without
+  approval". Removing a rule is `standing.removed`. The dashboard sets the source's `on_standing` hook that writes these lines.
+
+After a second opinion from Codex (gpt-6-astra, 2026-11-28): the card is checked with the type's context, so a reply to a
+suspicious mail never goes out on a rule; a request the owner approved once and that failed back into the queue is never claimed
+by a rule; a request decided meanwhile answers its state and sends no push; the claim checks the request's own expiry and reads
+the clock under the lock; and the rule ends on the date the card showed.
+
+Code: `gate/standing.py` (tables, `Standing.add`, `remove`, `live`, `claim`), `gate/trust.py` (type, policy, recheck, executor),
+`ExternalApprovals.submit` and `released_answer` in `gate/external.py`, `/dashboard/api/standing` and the activity marker in
+`dashboard_api.py`, the page `icm-standing` in `static/app/settings.js`, `standing_identity` in `cal.py` and `mail.py`. Every tool
+that queues calls `external.submit`. Tests: `tests/test_standing.py`, plus one per tool in the calendar, iMessage and Beeper tests.
+
 ### Out of scope for package 10
 
 - An agent asking to remove a list entry, to add a domain or `*`, or to change any other setting.

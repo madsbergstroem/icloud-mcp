@@ -490,10 +490,11 @@ class Store:
     # -- the queue's operations ---------------------------------------------------------------------------------------------
     def add(self, raw: bytes, recipients: list[str], followup: dict[str, Any] | None = None, key: str | None = None,
             approval_page: str = "the dashboard's Approvals page", requested_by: str | None = None,
-            action_type: str | None = None, key_fingerprint: str | None = None) -> QueuedMessage:
+            action_type: str | None = None, key_fingerprint: str | None = None, notify: Any = True) -> QueuedMessage:
         """Queue a request, or return the one already waiting for the same bytes or the same key. Raises AlreadyDecided for a key
         whose request is being carried out or ended and is still bound, KeyConflict for a bound key with other parameters,
-        OutboxFull, StoreUnavailable."""
+        OutboxFull, StoreUnavailable. notify: True calls on_new for a new request (the owner's push), a function is called in its
+        place (gate.submit, package 10: the push waits until it is known that the request waits), False calls nothing."""
         sha = hashlib.sha256(raw).hexdigest()
         try:
             self._expire()
@@ -537,9 +538,10 @@ class Store:
         except sqlite3.OperationalError as e:
             log.warning("the approval store could not take a request (%s)", type(e).__name__)
             raise StoreUnavailable("The approval store cannot take a request right now. Nothing was queued.") from None
-        if self.on_new is not None:
+        note = self.on_new if notify is True else notify if callable(notify) else None
+        if note is not None:
             try:
-                self.on_new(q)
+                note(q)
             except Exception:  # noqa: BLE001  -- a failed note must never fail the queueing
                 pass
         return q
