@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from . import actions as A
@@ -48,6 +49,9 @@ class ExternalApprovals(ApprovalSource):
 
     def __init__(self, box: Outbox, registry: A.ActionRegistry):
         self.box, self.registry = box, registry
+        self.standing: Any = None                    # the owner's standing rules (standing.py, package 10), when the store keeps them
+        # called after a standing release ended a request (sent, unclear or discarded): (q, outcome, rules), for the activity log
+        self.on_standing: Any = None
         if hasattr(box, "refs_of"):                  # the store keeps the blobs a version names (package 6b)
             box.refs_of = self._blobs_of
 
@@ -516,7 +520,7 @@ class ExternalApprovals(ApprovalSource):
         self._check_people(reg, list(dict.fromkeys(p for p in people if p)))
 
     def queue_external(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None,
-                       key_fingerprint: str | None = None) -> QueuedMessage:
+                       key_fingerprint: str | None = None, notify: Any = True) -> QueuedMessage:
         """Queue a request for the owner's approval, or return the entry already waiting for the same bytes or the same key.
         Raises ExternalError for an unknown type, parameters that do not fit, a recipient the owner did not allow or a full
         queue, and ExternalConflict for a key that was used for a different request. Nothing is carried out here.
@@ -537,7 +541,7 @@ class ExternalApprovals(ApprovalSource):
         extra = {"key_fingerprint": key_fingerprint or self.key_fingerprint(reg.action_type, plain)} if getattr(self.box, "keeps_keys", False) else {}
         try:
             return self.box.add(raw, people, None, key=key, approval_page="the dashboard's Approvals page",
-                                requested_by=requested_by, action_type=reg.action_type.id, **extra)
+                                requested_by=requested_by, action_type=reg.action_type.id, notify=notify, **extra)
         except OutboxFull as e:
             raise A.ExternalError(str(e), "queue_full") from e
         except S.AlreadyDecided as e:
@@ -564,11 +568,95 @@ class ExternalApprovals(ApprovalSource):
         drop = lambda p: {k: v for k, v in p.items() if k not in skip}            # noqa: E731
         return type_id == at.id and drop(theirs) == drop(params)
 
+    # -- gate.submit: every tool that queues (package 10) -----------------------------------------------------------------
+    def submit(self, action_type_id: str, params: Any, requested_by: str | None, key: str | None = None,
+               key_fingerprint: str | None = None) -> "Submitted":
+        """Queue a request and, when it is new, try the owner's standing rules once. Raises as queue_external does.
+
+        The answer says whether it waits (status "waiting") or what the standing release did ("sent", "unclear", "discarded").
+        The owner's push goes out only for a request that waits: a new one no rule covers, one a rule did not release (no rule
+        for someone it reaches, a rule past its daily limit, a hold, a second question, a file it waits for, a failed attempt,
+        a new version after a recheck). A request asked for again (same bytes or key) is never tried again."""
+        fresh: list[QueuedMessage] = []
+        q = self.queue_external(action_type_id, params, requested_by, key=key, key_fingerprint=key_fingerprint, notify=fresh.append)
+        if not fresh:
+            return Submitted(q, new=False)
+        got = self._standing_release(q)
+        if got.status == "waiting":
+            self._push(got.q)
+        else:
+            if self.on_standing is not None:
+                try:
+                    self.on_standing(q, got)
+                except Exception as e:  # noqa: BLE001  -- the log line must never change what happened
+                    log.warning("could not log a standing release (%s)", type(e).__name__)
+        return got
+
+    def _push(self, q: QueuedMessage) -> None:
+        note = getattr(self.box, "on_new", None)
+        if note is not None:
+            try:
+                note(q)
+            except Exception:  # noqa: BLE001  -- a failed note must never fail the queueing
+                pass
+
+    def standing_people(self, reg: A.Registration, params: Mapping[str, Any]) -> list[str] | None:
+        """Who the request reaches for the owner's rules, as the type says (standing_identity), or None when it cannot say."""
+        fn = reg.action_type.standing_identity
+        if fn is None or not reg.builtin:
+            return None
+        try:
+            got = fn(params)
+        except Exception:  # noqa: BLE001  -- a type that cannot say always waits
+            return None
+        if not got:
+            return None
+        people = [str(x).strip().casefold() for x in got]
+        return people if all(people) else None
+
+    def _standing_release(self, q: QueuedMessage) -> "Submitted":
+        """The standing release of a request just queued: through release(), with the rules' claim in place of the owner's."""
+        waiting = lambda why, line="", at=q: Submitted(at, new=True, reason=why, line=line)       # noqa: E731
+        if self.standing is None:
+            return waiting("")
+        reg, type_id, params = self._entry(q)
+        people = self.standing_people(reg, params) if reg is not None else None
+        if people is None:
+            return waiting("")
+        if self._confirm(reg.action_type, params):               # a rule never answers a second question (a group chat)
+            return waiting("confirm")
+        claimed_rules: list[Any] = []
+
+        def claim() -> QueuedMessage | None:
+            got = self.standing.claim(q.id, type_id, people)
+            if got.q is None:
+                raise _Waits(got.waits)
+            claimed_rules.extend(got.rules)
+            return got.q
+        try:
+            note = self.release(q, claim=claim)
+        except _Waits as e:
+            return waiting(e.reason)
+        except A.Revised as e:                                    # a new version waits for the owner
+            fresh = next((x for x in self.box.pending() if x.id == q.id), q)
+            return waiting("target_changed", str(e), fresh)
+        except A.Rechecked as e:                                  # it ended: the target was not what the rule covers any more
+            return Submitted(q, new=True, status="discarded", reason=e.reason, line=str(e), rules=tuple(claimed_rules))
+        except A.ExternalError as e:                              # failed, a hold, a file it waits for: it waits, with the reason
+            return waiting("failed" if claimed_rules else "held", _line(e))
+        except Exception as e:  # noqa: BLE001  -- nothing proves it went out; release() wrote how it ended
+            log.warning("A standing release of %s raised %s", type_id, type(e).__name__)
+            return waiting("failed", "Not carried out, it waits for the owner.")
+        status = "unclear" if getattr(note, "delivery", None) in ("unconfirmed", "failed") else "sent"
+        return Submitted(q, new=True, status=status, line=str(note), rules=tuple(claimed_rules), note=note)
+
     # -- the owner's decision ----------------------------------------------------------------------------------------------
     def discard(self, q):
         self.box.claim(q.id, "discarded")
 
-    def release(self, q):
+    def release(self, q, claim: Any = None):
+        """Carry out an approved request. claim: what takes it for execution in place of the owner's click (a standing rule's
+        claim, package 10): it answers the claimed request, or None when it no longer waits, or raises to leave it waiting."""
         reg, type_id, params = self._entry(q)
         if reg is None:
             raise A.ExternalError(f"This kind of action ({type_id}) is not available on this server any more. Discard it.")
@@ -579,7 +667,7 @@ class ExternalApprovals(ApprovalSource):
             raise A.ExternalError(f"Not carried out: {hold.text}")
         if why := self._blocked(reg, params):                     # package 6b: a file it waits for; nothing claimed
             raise A.ExternalError(why)
-        claimed = self.box.claim(q.id, "executing")
+        claimed = self.box.claim(q.id, "executing") if claim is None else claim()
         if claimed is None:
             raise A.ExternalError("It is no longer waiting.")
         if claimed.sha256 != q.sha256:                           # edited between the owner's look and the click: that is not what was approved
@@ -642,3 +730,45 @@ class ExternalApprovals(ApprovalSource):
             return step(*args)
         except Exception as e:  # noqa: BLE001
             log.warning("could not record how a request ended (%s); it stays executing until the next start", type(e).__name__)
+
+
+_RELEASED_NOTICE = {
+    "sent": "Done without waiting: one of the owner's standing rules covers this. It went out once; do not send it again.",
+    "unclear": "One of the owner's standing rules let this through, but it is not certain it went out. Nothing is sent again; "
+               "tell the owner to look on the other side.",
+    "discarded": "Not carried out: one of the owner's rules let it through, but the target had changed. Nothing was sent.",
+}
+
+
+def released_answer(got: "Submitted") -> dict[str, Any]:
+    """What a tool answers for a request a standing rule released (package 10), in place of queued_for_owner_approval."""
+    return {"status": got.status, "sent": got.status == "sent", "outbox_id": got.q.id, "without_approval": True,
+            **({"result": got.line} if got.line else {}), "notice": _RELEASED_NOTICE.get(got.status, "")}
+
+
+class _Waits(A.ExternalError):
+    """A standing release found no rule for someone, a rule past its daily limit, or the request no longer waiting: nothing was
+    claimed, and the request waits for the owner."""
+
+    def __init__(self, reason: str):
+        super().__init__("It waits for the owner.", "policy")
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class Submitted:
+    """What gate.submit answers. status: waiting, or what a standing release did (sent, unclear, discarded). new: queued by this
+    call. reason: why it waits after a release was tried (no_rule, limit, confirm, held, failed, target_changed, gone), or why it
+    was discarded. rules: the rules a release used. note: the release's Released, for the log."""
+    q: QueuedMessage
+    new: bool = True
+    status: str = "waiting"
+    reason: str = ""
+    line: str = ""
+    rules: tuple = ()
+    note: Any = None
+
+    @property
+    def waits(self) -> bool:
+        return self.status == "waiting"
+

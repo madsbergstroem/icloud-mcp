@@ -7,8 +7,8 @@ thing; these tools leave it out of the list and refuse it by name.
 What approval_request does, in order: the type must exist and must not belong to a channel; params must be an object; a field the
 server fills in itself (readOnly in the schema) must not be set by the agent; the agent's parameters must fit the schema and the
 size, and reach only whom the owner allowed (`precheck`), so a target the owner did not allow never reaches the service; the
-type's `prepare` asks the service about the target and returns the parameters that are stored; then `queue_external` checks
-everything again with what prepare filled in, plus the type's policy and the queue, and queues it. Nothing is carried out here: the owner approves on the dashboard.
+type's `prepare` asks the service about the target and returns the parameters that are stored; then `submit` checks
+everything again with what prepare filled in, plus the type's policy and the queue, and queues it. Nothing is carried out here: the owner approves on the dashboard, unless one of the owner's standing rules covers it (package 10).
 
 A refusal is raised as a ToolError (the client sees isError) whose text is one JSON object, the same shape for every code:
 {status: "refused", sent: false, reason, message, fix, docs, path?}; `describe_failed` adds retryable and side_effects. The codes and
@@ -139,7 +139,7 @@ class Requests:
             return self._replace(reg, action, stored, self._target(action, request_id, replaces))
         waiting = {q.id for q in self.external.box.pending()}
         try:
-            q = self.external.queue_external(action, stored, None, key=request_id)
+            got = self.external.submit(action, stored, None, key=request_id)
         except A.AlreadyDecided as e:                    # the key's request has ended: its outcome, and nothing queued
             status = "waiting" if e.state == "executing" else e.state
             return {"status": status, "sent": status == "sent", "outbox_id": e.item_id, "already_decided": True,
@@ -147,6 +147,10 @@ class Requests:
                               "approval_status with the outbox_id says more."}
         except A.ExternalError as e:
             raise refusal(e.code, str(e), e.path) from None
+        if not got.waits:                                # one of the owner's standing rules released it (package 10)
+            from .external import released_answer
+            return released_answer(got)
+        q = got.q
         hold = reg.hold_now()
         return {"status": "queued_for_owner_approval", "sent": False, "outbox_id": q.id, "approve_at": self.link("external", q.id),
                 "expires_in_seconds": max(0, int(q.expires_at - time.time())), **({"already_queued": True} if q.id in waiting else {}),
