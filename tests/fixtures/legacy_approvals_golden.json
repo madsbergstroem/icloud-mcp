@@ -1827,17 +1827,14 @@
  },
  "state": {
   "body": {
-   "kinds": {
-    "external:Cancellation": 0,
-    "external:Email": 1,
-    "external:Email reply": 0,
-    "external:Event update": 0,
-    "external:Forward": 0,
-    "external:Invitation": 1,
-    "external:Reply": 0,
-    "external:iMessage": 1
-   },
    "mac": "offline",
+   "needs": {
+    "all": 3,
+    "by": [],
+    "look": 1,
+    "soon": 0,
+    "soon_seconds": 7200
+   },
    "ok": true,
    "paused": false,
    "v": "<volatile>",
@@ -1847,17 +1844,14 @@
  },
  "state_end": {
   "body": {
-   "kinds": {
-    "external:Cancellation": 0,
-    "external:Email": 0,
-    "external:Email reply": 0,
-    "external:Event update": 0,
-    "external:Forward": 0,
-    "external:Invitation": 0,
-    "external:Reply": 0,
-    "external:iMessage": 0
-   },
    "mac": "offline",
+   "needs": {
+    "all": 0,
+    "by": [],
+    "look": 0,
+    "soon": 0,
+    "soon_seconds": 7200
+   },
    "ok": true,
    "paused": false,
    "v": "<volatile>",
@@ -2003,6 +1997,7 @@
      "key": "external:<id:mail-1>",
      "kind": "external",
      "kind_label": "Email",
+     "look": false,
      "subject": "Lunch",
      "title": "Email",
      "to": "bob@example.org",
@@ -2020,6 +2015,7 @@
      "key": "external:<id:imessage-1>",
      "kind": "external",
      "kind_label": "iMessage",
+     "look": true,
      "tags": [
       "Group"
      ],
@@ -2039,6 +2035,7 @@
      "key": "external:<id:calendar-1>",
      "kind": "external",
      "kind_label": "Invitation",
+     "look": false,
      "subject": "Autumn fair",
      "title": "Invitation",
      "to": "jana@example.org",

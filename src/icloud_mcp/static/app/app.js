@@ -2,13 +2,10 @@
 // Settings), the live state every 15 seconds while the page is visible, and links that open one request (#/item/<kind>:<id>).
 import { loadSession, get, post, session } from "./api.js";
 import { esc, icon, fail, root, titleBlock, wide } from "./ui.js";
-import { app } from "./state.js";
+import { app, groups, currentFilter, setFilter } from "./state.js";
 import "./today.js";
 import { SECTIONS } from "./settings.js";
 import { serviceEntries } from "./services.js";
-
-// a request of the external source counts under its action type's badge ("external:Beeper"); an unknown type under "Other"
-const kindName = (k) => (k.startsWith("external:") ? k.slice(9) || "Other" : k);
 
 const POLL = 15000;
 let lastV = null, timer = null;
@@ -50,7 +47,7 @@ function shell() {
       <ion-button class="neutral pause" expand="block" data-pause>Pause tools</ion-button>
       ${tabs.map(([t, l, i]) => `<ion-item button detail="false" data-side="${t}" lines="none">${icon(i)}
         <ion-label style="margin-left:10px">${l}</ion-label>${t === "today" ? `<ion-note slot="end" class="num" data-count></ion-note>` : ""}</ion-item>`).join("")}
-      <div class="lbl">Waiting by kind</div><div data-kinds></div></nav>
+      <div data-needs></div></nav>
     <nav class="side setnav" aria-label="Settings sections">
       <ion-item button detail="false" lines="none" data-back>${icon("chevron-back-outline")}<ion-label style="margin-left:10px">Back to app</ion-label></ion-item>
       <div class="lbl">General</div>
@@ -133,23 +130,37 @@ function setCount(n) {
   renderSide();
 }
 
-// The side list's own bits: the count, the pause button and the waiting count by kind
+// The side list's own bits: the count, the pause button, and what needs the owner (soon, a close look, who asked), each a filter
+// of Home's list. With nothing waiting the section is left out.
 function renderSide() {
   const q = (s) => root().querySelector(s);
   const count = q("[data-count]");
   if (count) count.textContent = app.waiting ? String(app.waiting) : "";
   const pause = q("[data-pause]");
   if (pause) pause.textContent = app.paused ? "Resume tools" : "Pause tools";
-  const kinds = q("[data-kinds]");
-  if (kinds) kinds.innerHTML = Object.entries(app.kinds).map(([k, n]) => `<ion-item class="sub" lines="none"><ion-label>${esc(kindName(k))}</ion-label>
-    <ion-note slot="end" class="num">${n}</ion-note></ion-item>`).join("");
+  const box = q("[data-needs]");
+  if (!box) return;
+  const all = app.needs && app.needs.all ? groups(app.needs) : [];
+  const f = currentFilter();
+  const entry = (g) => `<ion-item button detail="false" lines="none" class="sub filter${g.id === f ? " on" : ""}" data-filter="${esc(g.id)}">
+    ${g.tone ? `<span class="dot ${g.tone}" slot="start"></span>` : ""}<ion-label>${esc(g.label)}</ion-label>
+    <ion-note slot="end" class="num">${g.n}</ion-note></ion-item>`;
+  const by = all.filter((g) => g.section === "by");
+  box.innerHTML = all.length ? `<div class="lbl">Needs you</div>${all.filter((g) => g.section === "needs").map(entry).join("")}`
+    + (by.length ? `<div class="lbl">Asked by</div>${by.map(entry).join("")}` : "") : "";
+  box.querySelectorAll("[data-filter]").forEach((n) => n.addEventListener("click", () => {
+    setFilter(n.dataset.filter);
+    root().querySelector("ion-tabs").select("today");
+  }));
 }
 
 async function poll() {
   try {
     const s = await get("/state", true);
     app.online = true; app.updated = Date.now() / 1000;
-    app.paused = s.paused; app.kinds = s.kinds || {}; app.mac = s.mac || "off";
+    const before = JSON.stringify(app.needs);
+    app.paused = s.paused; app.needs = s.needs || null; app.mac = s.mac || "off";
+    if (JSON.stringify(app.needs) !== before) window.dispatchEvent(new Event("icm:needs"));      // Home's chips follow the counts
     setCount(s.waiting);
     if (lastV !== null && s.v !== lastV) window.dispatchEvent(new Event("icm:changed"));
     lastV = s.v;
@@ -185,6 +196,7 @@ async function main() {
   window.addEventListener("icm:signed-out", () => location.reload());
   window.addEventListener("icm:activity-focus", () => root().querySelector("ion-tabs").select("activity"));
   window.addEventListener("icm:changed", () => setTimeout(poll, 300));
+  window.addEventListener("icm:filter", renderSide);
   navigator.serviceWorker?.addEventListener("message", (e) => { if (e.data && e.data.open) openItem(e.data.open); });
 }
 
