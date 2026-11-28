@@ -57,7 +57,7 @@ os.environ.update(
     MCP_OWNER_PASSWORD=PASSWORD, DATA_DIR=DATA, ALLOW_SEND="true", WARMUP_ON_START="false",
     DEFAULT_TIMEZONE="Europe/Berlin", ENABLE_IMESSAGE="true", IMESSAGE_ALLOW_SEND="true", IMESSAGE_SEND_ALLOWLIST="*", INVITE_ALLOWLIST="@example.org,@example.net",
     BRIDGE_TOKEN="t" * 40, ALLOW_CALENDAR_INVITES="approve", ICLOUD_KEYCHAIN="false", OUTBOX_TTL_SECONDS="86400", OUTBOX_MAX="40",   # one store for every kind since 6b
-    OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1")   # no request comes from that proxy: see --owner
+    OWNER_TAILSCALE_LOGINS="alex.morgan@example.org", TRUSTED_PROXY_IPS="192.0.2.1", NOTICE_HOSTS="hooks.example.org")   # no request comes from that proxy: see --owner
 # Beeper behind a made-up gateway (tests/test_beeper.py): networks in Accounts, a waiting Beeper message. --beeper picks how the
 # gateway answers Accounts: ok, no-key (no read key), down (not reachable), refused (wrong key), none (no Beeper at all).
 if args.beeper != "none":
@@ -222,6 +222,10 @@ D.discover = _discover
 mcp, provider = create_server(s)
 d = mcp._icloud_dashboard
 d.exit_fn = lambda: print("(preview) the server would restart now", flush=True)
+if getattr(d, "notices", None) is not None:      # one made-up receiver for Settings › Notices, answered here (packages 9b and 8)
+    d.notices.transport = lambda *a, **k: (200, {})
+    d.notices.resolve = lambda h, p: ["93.184.216.34"]
+    d.notices.add("https://hooks.example.org/sendgate")
 ext = d.sources["external"]
 mail = ext.registry.get("mail.send").executor.svc               # the server's own MailService (package 6b: three action types)
 cal = ext.registry.get("calendar.invite").executor.svc         # the server's own CalendarService (package 5b: five action types)

@@ -61,6 +61,7 @@ mergeable = [
 gate = [
   "dev/preview_dashboard.py",
   "dev/provenance.toml",
+  "dev/verify_log.py",
   "src/icloud_mcp/gate/**",
   "src/icloud_mcp/actions.py",             # the old module paths: one-line aliases of gate/
   "src/icloud_mcp/approval_status.py",
