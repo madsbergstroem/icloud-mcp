@@ -14,7 +14,7 @@ import secrets
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +120,20 @@ class Outbox:
             q = self._items.pop(item_id, None)
             if q:
                 self._save()
+            return q
+
+    def replace(self, item_id: str, sha256: str, raw: bytes) -> QueuedMessage | None:
+        """Swap a waiting item's message for a new version of it (a file the owner or an upload added). Only when the item is
+        still the version the caller read, so two uploads at once cannot both win; the new bytes get their own hash, which
+        the approval page then shows and checks."""
+        with self._lock:
+            self._prune()
+            q = self._items.get(item_id)
+            if q is None or q.sha256 != sha256:
+                return None
+            q = replace(q, raw=raw, sha256=hashlib.sha256(raw).hexdigest())
+            self._items[item_id] = q
+            self._save()
             return q
 
     def restore(self, q: QueuedMessage) -> None:

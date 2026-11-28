@@ -64,6 +64,7 @@
 !src/icloud_mcp/static/sw.js
 !src/icloud_mcp/static/icon-192.png
 !src/icloud_mcp/static/icon-512.png
+!src/icloud_mcp/static/attach.js
 !assets/
 !assets/logo.svg
 !assets/logo-512.png

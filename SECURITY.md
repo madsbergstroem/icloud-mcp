@@ -62,7 +62,7 @@ An agent that obeys every instruction it reads can only get data out through the
 
 | Channel | Gate |
 |---|---|
-| Mail (`mail_send_message`, `mail_reply_to_message`, `mail_forward_message`, `mail_unsubscribe_from_list` by mail) | Queued for the owner on `/dashboard/approvals`, or `/outbox` with `DASHBOARD=false` (`SEND_REQUIRES_APPROVAL`), `SEND_ALLOWLIST`, `MAX_RECIPIENTS`; re-checked at release |
+| Mail (`mail_send_message`, `mail_reply_to_message`, `mail_forward_message`, `mail_unsubscribe_from_list` by mail) | Queued for the owner on `/dashboard/approvals`, or `/outbox` with `DASHBOARD=false` (`SEND_REQUIRES_APPROVAL`), `SEND_ALLOWLIST`, `MAX_RECIPIENTS`; re-checked at release. A mail that waits for a file stays queued even with `SEND_REQUIRES_APPROVAL=false` and cannot be released until the file is in it |
 | iMessage (`imessage_send_message`) | Off by default; queued for the owner; `IMESSAGE_SEND_ALLOWLIST` (empty = nobody), `IMESSAGE_NEVER_SEND` |
 | Calendar invitations, updates, cancellations and RSVPs | Off by default (`ALLOW_CALENDAR_INVITES`); when on, `INVITE_ALLOWLIST` and `MAX_ATTENDEES`. No approval page yet: an allowed guest receives the event's text |
 | One-click unsubscribe (`mail_unsubscribe_from_list`) | A POST with a fixed body to the URL in the sender's own header, public HTTPS only; it tells the sender the mail was processed and reveals the server's address, nothing else |
@@ -75,6 +75,7 @@ An agent that obeys every instruction it reads can only get data out through the
 
 By default the server:
 
+- Takes a file for a waiting mail at `PUT /files/<token>` without a session: the token (256 bits, stored only as a hash) is the key, it works once, and it ends with the queued mail. A sign-in proxy has to let `/files/` through.
 - Queues outgoing mail for approval in a browser (`/dashboard/approvals`, or `/outbox` without the dashboard), blocks calendar invitations, moves deleted mail to Trash, and caps recipients per message.
 - Stores OAuth tokens only as SHA-256 hashes (file mode 600), rotates refresh tokens, caps open client registrations, and locks the approval and outbox pages after 10 wrong passwords in 15 minutes. The bridge port locks out an address after 20 wrong tokens, never the correct token.
 - Masks passwords and tokens in every tool error and cuts URLs to their host; refuses IMAP search strings that contain control characters; refuses repeat rules finer than hourly and never expands one it finds in a stranger's invitation; binds to loopback unless told otherwise (the Docker image binds all interfaces inside the container).

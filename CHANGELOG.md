@@ -3,6 +3,20 @@
 What changed in each release, newest first. The GitHub release notes carry the full detail and the upgrade steps.
 Update the Mac helper before the server whenever its version changes.
 
+## Unreleased
+
+- **A mail can wait for a file.** An attachment with only a `filename` and no `content_base64` makes the mail wait for that
+  file, also with `SEND_REQUIRES_APPROVAL=false`. The tool result gives the owner a link to `/dashboard/attach/<id>`, where
+  they drop or choose the file and send the mail, and gives the agent an `upload_url` per file, so an agent with a shell can
+  send the raw bytes with `curl -T`. The file goes into the stored message, which gets a new hash: the owner approves what
+  actually goes out. `PUT /files/<token>` sits outside `/dashboard`, so a sign-in proxy in front of the server has to let
+  that path through; the token is its only key. Needs the dashboard. A client that opens links itself (URL elicitation,
+  MCP 2026-07-28) shows the owner the attach page directly; its retry gets the first answer and queues nothing twice. Until
+  the mail goes out, the owner can replace an added file there or remove it, which puts the empty slot back and locks Send
+  again. The agent's upload link stays used up, so only the owner adds the next file.
+  `FILE_TOKEN_PREFIX` starts every upload link with a name of your choice (`/files/<prefix>.<token>`), so one proxy in
+  front of several of these servers can send each upload to the right one by its path.
+
 ## 0.13.0
 
 - **Connecting an app works again with the dashboard on.** The styled connect page's `form-action` now lists the

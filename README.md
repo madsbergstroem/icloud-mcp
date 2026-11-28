@@ -560,6 +560,7 @@ Everything is an environment variable. [`.env.example`](https://github.com/epine
 | `ALLOW_PERMANENT_DELETE` | false | Allow deleting mail from Trash |
 | `SAVE_SENT_COPY` | true | Copy sent mail to Sent (iCloud doesn't do it itself) |
 | `MAX_BODY_CHARS`, `MAX_ATTACHMENT_BYTES` | 30000, 5 MiB | Result size caps |
+| `FILE_TOKEN_PREFIX` | empty | Starts every upload link of a mail that waits for a file (`/files/<prefix>.<token>`). Set it when one proxy serves several of these servers on one address: it can then send each upload to the right one by its path alone |
 | `MCP_PUBLIC_URL`, `MCP_OWNER_PASSWORD` | required when hosted | Public https address; owner password (12+ characters) |
 | `MCP_HOST`, `MCP_PORT`, `MCP_EXTRA_ALLOWED_HOSTS` | 127.0.0.1 (0.0.0.0 in the Docker image), 8000, empty | Bind address and extra allowed `Host` headers |
 | `MCP_STATELESS` | true | No server-side MCP sessions, so a restart never breaks a connected client ("Missing session ID") |
