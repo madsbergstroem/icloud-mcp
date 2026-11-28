@@ -6,7 +6,8 @@ import logging
 import pytest
 
 from icloud_mcp import beeper as B
-from icloud_mcp.config import Settings
+from icloud_mcp import plugins as P
+from icloud_mcp.config import Settings as _Settings
 from test_beeper import GROUP, KEY, READ_KEY, SINGLE, URL, ask, gateway, hub, launch  # noqa: F401  (fixtures)
 from test_dashboard import client, signed_in, web  # noqa: F401  (web is a fixture)
 
@@ -34,6 +35,13 @@ def test_search_chats_text_is_read_as_beeper_writes_it():
     assert got == [("!AbC123:beeper.local", B.Chat("Riverside climbing", "Signal", True, 3, "2026-11-12T08:41:38.000Z", "signal-example-2"))]
     assert B._chats_of(B.Answer(False, None, "# Chats\n\nFound 0 chats\n\n# Using this information\n")) == []
     assert B._chats_of(B.Answer(True, None, SEARCH_TEXT)) is None
+
+
+class Settings:
+    """The Beeper plugin's own view of settings read from the environment (plugin_api v1: a PluginContext, never Settings)."""
+    @staticmethod
+    def from_env():
+        return P.context(next(p for p in P.load_plugins() if p.id == "beeper"), _Settings.from_env())
 
 
 def test_the_read_tools_are_named_after_the_read_server(monkeypatch):
