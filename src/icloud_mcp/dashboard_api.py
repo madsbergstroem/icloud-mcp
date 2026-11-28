@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+from time import monotonic          # the side list's cache; a test may stand in for `time` with a clock of its own
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 _PREVIEW_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/heic", "application/pdf", "text/plain")
 _WITHDRAWN_NOTICE_SECONDS = 24 * 3600      # Home mentions a request the assistant took back for this long, then it is only in Activity
 _SOON_SECONDS = 2 * 3600                   # the side list's "Ends within 2 h": a waiting request dropped this soon
+_SIDE_CACHE_SECONDS = 60                   # the side list's counts are made afresh at least this often (a warning can change by itself)
 
 
 def close_look(w: dict[str, Any]) -> bool:
@@ -359,21 +361,27 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         n, fingerprint = await asyncio.to_thread(d.fingerprint)
         taken_back = [withdrawn_item(e) for e in await asyncio.to_thread(audit.entries, 100, ("approval.withdrawn",))
                       if time.time() - e.get("t", 0) < _WITHDRAWN_NOTICE_SECONDS]
-        return ok({"waiting": [summary_of(*w) for w in waiting], "v": fingerprint, "paused": d.paused(),
+        rows = [summary_of(*w) for w in waiting]
+        keep_side(fingerprint, rows)                     # the side list counts what Home has just shown
+        return ok({"waiting": rows, "v": fingerprint, "paused": d.paused(),
                    "withdrawn": taken_back,           # each request the assistant took back in the last 24 hours: Home lists them, and lets go of each on time
                    "sent_today": [sent_item(e) for e in sent[:10]],
                    "recent_burst": sum(time.time() - q.created_at < 3600 for _, q, _ in waiting)})
 
-    side_cache: dict[str, list[tuple[bool, str, float]]] = {}
+    side_cache: dict[str, Any] = {}
+
+    def keep_side(fingerprint: str, waiting: list[dict[str, Any]]) -> list[tuple[bool, str, float]]:
+        rows = [(w["look"], w["by"], w["expires_at"]) for w in waiting]
+        side_cache.update(fp=fingerprint, at=monotonic(), rows=rows)
+        return rows
 
     def side_rows(fingerprint: str) -> list[tuple[bool, str, float]]:
         """(close look, asked by, expires at) per waiting request. Describing a request can read its context, so the rows are kept
-        until the queue changes (its fingerprint); only "ends soon" moves with the clock, and that is counted fresh each time."""
-        if fingerprint not in side_cache:
-            rows = [(w["look"], w["by"], w["expires_at"]) for w in (summary_of(*x) for x in described())]
-            side_cache.clear()
-            side_cache[fingerprint] = rows
-        return side_cache[fingerprint]
+        while the queue stays the same (its fingerprint), and for a minute at most: a warning or a hold can change without the
+        request changing (a connector that goes down). "Ends soon" moves with the clock and is counted fresh each time."""
+        if side_cache.get("fp") != fingerprint or monotonic() - side_cache.get("at", 0) > _SIDE_CACHE_SECONDS:
+            return keep_side(fingerprint, [summary_of(*x) for x in described()])
+        return side_cache["rows"]
 
     @route("/state", ["GET"])
     async def state(request: Request) -> Response:

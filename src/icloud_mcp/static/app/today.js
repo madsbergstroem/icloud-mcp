@@ -187,6 +187,8 @@ class Today extends HTMLElement {
   }
 
   open(key) {
+    // a request opened by a link or a notification is shown even when the chosen filter leaves it out: the filter goes back to all
+    if (this.data && app.filter !== "all" && !this.shown().some((w) => w.key === key)) setFilter("all");
     if (wide()) { app.holding = null; this.selected = key; this.render(); return; }
     this.closest("ion-nav").push("icm-item", { key });
   }

@@ -42,3 +42,23 @@ async def test_state_names_no_recipient_text_or_title_and_follows_the_queue(web)
     raw = str(second["needs"])
     for private in ("Autumn", "fair", "Running late", "anna@example.org", "Hiking crew", "Anna"):
         assert private not in raw
+
+
+async def test_a_warning_that_comes_by_itself_reaches_the_count_without_a_change_to_the_queue(web, monkeypatch):
+    """A warning or hold can change while the request stays the same (a connector goes down): /today shows it at once and the
+    side list counts what Home showed; without Home, the counts are made afresh within a minute."""
+    import icloud_mcp.dashboard_api as DA
+    app, mcp, *_ = web(**IMESSAGE_ENV, ALLOW_CALENDAR_INVITES="approve")
+    queue(mcp, subject="Autumn fair plans")
+    src = mcp._icloud_dashboard.sources["external"]
+    plain = src.describe
+    async with client(app) as c:
+        await signed_in(c)
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["look"] == 0
+        monkeypatch.setattr(src, "describe", lambda q, context=None: {**plain(q, context), "warnings": ["The service is down."]})
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["look"] == 0      # kept: same queue, under a minute
+        assert (await c.get("/dashboard/api/today")).json()["waiting"][0]["look"] is True
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["look"] == 1      # Home's rows refreshed the counts
+        monkeypatch.setattr(src, "describe", plain)
+        monkeypatch.setattr(DA, "_SIDE_CACHE_SECONDS", -1)
+        assert (await c.get("/dashboard/api/state")).json()["needs"]["look"] == 0      # and a minute later by themselves
