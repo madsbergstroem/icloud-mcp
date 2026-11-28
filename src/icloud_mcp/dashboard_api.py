@@ -96,6 +96,15 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return "Not sent", "The target changed after you looked. Nothing was sent."
         if action == "approval.discarded" and (e.get("details") or {}).get("reason") == "not_allowed":
             return "Not sent", "Your lists no longer allow someone it would reach. Nothing was sent."
+        if action in ("approval.sent", "approval.discarded") and str(e.get("actor") or "").startswith("standing:"):
+            det = e.get("details") or {}
+            people = ", ".join(str(x) for x in det.get("standing_people") or [])
+            until = f", until {det['standing_until']}" if det.get("standing_until") else ""
+            if action == "approval.discarded":
+                return "Not sent", f"Your rule for {people} let it through, but the target changed. Nothing was sent."
+            if delivery in ("unconfirmed", "failed"):
+                return "Unclear", f"Without approval, rule for {people}{until}. It may or may not have gone through."
+            return "Without approval", f"rule for {people}{until}"
         if action == "approval.sent" and delivery in ("unconfirmed", "failed"):
             if (e.get("details") or {}).get("kind") == "external" and (e.get("details") or {}).get("action_type") != "imessage.send":
                 return "Unclear", "It may or may not have gone through. Nothing is sent again."
@@ -107,14 +116,15 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         actor = e.get("actor") or "?"
         text = re.sub(r"\bimessage\b", "iMessage", str(e.get("summary") or e.get("action", "")))      # older lines were written in lower case
         tag, note = entry_tag(e)
-        who = "Your assistant" if e.get("action") == "approval.withdrawn" else "You" if actor == "owner" else ("Someone" if actor == "unknown" else actor)
+        who = "Your assistant" if e.get("action") == "approval.withdrawn" else "You" if actor == "owner" else \
+            "Your rule" if actor.startswith("standing:") else ("Someone" if actor == "unknown" else actor)
         return {"t": e.get("t"), "time": d.fmt_time(e.get("t")), "who": who,
                 "what": text[:1].lower() + text[1:], "ok": e.get("ok", True), "error": (e.get("details") or {}).get("error", ""),
                 "tag": tag, "note": note}
 
     # -- the activity table: what each entry did, to what, and its details (the log holds names, addresses and hashes, no text)
     actions = {"all": ("All actions", ()), "approvals": ("Approvals", ("approval.",)), "agents": ("Agent requests", ("tool.",)),
-               "settings": ("Settings", ("settings.", "accounts.", "push.", "notice.", "server.", "owner_password.")),
+               "settings": ("Settings", ("settings.", "accounts.", "push.", "notice.", "standing.", "server.", "owner_password.")),
                "signins": ("Sign-ins", ("signin.", "passkey.", "app."))}
     labels = {"approval.sent": "Approved", "approval.discarded": "Discarded", "approval.edited": "Edited", "approval.edit_undone": "Edited",
               "approval.withdrawn": "Withdrawn", "approval.revised": "Changed", "approval.expired": "Expired", "approval.failed": "Failed",
@@ -125,7 +135,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
               "app.signed_out_all": "App signed out", "settings.changed": "Setting", "accounts.changed": "Accounts",
               "push.added": "Notifications", "push.removed": "Notifications", "server.paused": "Paused", "server.resumed": "Resumed",
               "notice.receiver_added": "Notices", "notice.receiver_changed": "Notices", "notice.receiver_rotated": "Notices",
-              "notice.receiver_removed": "Notices", "notice.resent": "Notices",
+              "notice.receiver_removed": "Notices", "notice.resent": "Notices", "standing.removed": "Rule removed",
               "server.restart": "Restarted", "owner_password.changed": "Password"}
     warn_tags = ("Changed", "Unclear", "Withdrawn", "Expired", "Not sent")
     lead = re.compile(r"^(?:Approved|Discarded|Did not send|Could not send|Withdrew|Edited|Brought back the original text of|Added|Removed"
@@ -137,6 +147,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
                **REASON_WORDS}
 
     def actor_label(actor: str) -> str:
+        if actor.startswith("standing:"):          # package 10: a request one of the owner's rules let through
+            return "Your rule"
         return {"owner": "You", "server": "Server", "unknown": "Someone", "agent": "Upload"}.get(actor, actor or "?")
 
     def short(h: Any) -> str:
@@ -157,6 +169,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         if action.startswith("tool.") and action != "tool.queued":
             return text                            # an agent's own action: the verb is the news
         text = lead.sub("", text, count=1).replace(" (waiting for your approval)", "").removesuffix(" before sending")
+        if str(e.get("actor") or "").startswith("standing:"):
+            text = text.removeprefix("Sent ").removesuffix(" without approval")
         if diff or action in ("approval.revised", "approval.discarded", "approval.withdrawn"):
             text = text.split(": ", 1)[0]
         return text if text[1:2].isupper() else text[:1].upper() + text[1:]      # “iMessage …” keeps its small i
@@ -174,6 +188,8 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         add("To", x.get("destination"))
         add("Result", results.get(str(x.get("delivery")), x.get("delivery")))
         add("Why", reasons.get(str(x.get("reason")), x.get("reason")))
+        if x.get("standing_people"):
+            add("Rule", f"for {', '.join(map(str, x['standing_people']))}" + (f", until {x['standing_until']}" if x.get("standing_until") else ""))
         add("Loosened", ", ".join(map(str, x.get("weakened") or [])))
         if x.get("new_sha256"):
             add("Hash before", short(x.get("sha256")))
@@ -190,7 +206,7 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         action, base = str(e.get("action", "")), entry(e)
         x = e.get("details") or {}
         diff = [{"label": str(c[0]), "old": str(c[1]), "new": str(c[2])} for c in (x.get("changes") or []) if isinstance(c, list) and len(c) == 3]
-        name = base["tag"] if base["tag"] in ("Unclear", "Not sent") else labels.get(action, "Agent" if action.startswith("tool.") else action)
+        name = base["tag"] if base["tag"] in ("Unclear", "Not sent", "Without approval") else labels.get(action, "Agent" if action.startswith("tool.") else action)
         if not e.get("ok", True):
             name = "Sign-in failed" if action.startswith("signin.") else "Failed" if name not in ("Unclear",) else name
         tone = "bad" if not e.get("ok", True) else "warn" if name in warn_tags else ""
@@ -469,6 +485,10 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
             return err("Not sent: confirm that you still want it sent despite the warning.", 422)
         if v.get("blocked"):
             return err("Not sent: a file is still missing. Add it first.", 409)
+        registry = getattr(src, "registry", None)
+        reg = registry.get(getattr(q, "action_type", None) or "") if registry is not None else None
+        if reg is not None and reg.action_type.step_up and not recent(rec):     # package 10: a standing rule loosens protection
+            return need_confirm("Requests to this person will go out without waiting for you.")
         try:
             note = await asyncio.to_thread(src.release, q)
         except Revised as e:                       # checked again just before sending: the service has new values; a new version waits
@@ -945,6 +965,67 @@ def register_api(mcp: Any, d: Any, provider: Any, s: Any, audit: Any, *, signed_
         audit.record("notice.resent", actor="owner", via=rec.get("via", ""), summary=f"Sent {n} notice{'s' if n != 1 else ''} to {host} again",
                      host=host, count=n)
         return ok({"note": f"Sending {n} notice{'s' if n != 1 else ''} again." + full, "count": n, "left": left})
+
+    # -- standing rules (package 10): requests to named people that go out without waiting ------------------------------------
+    external = d.sources.get("external")
+
+    def standing() -> Any:
+        return getattr(external, "standing", None)
+
+    def rule_title(type_id: str) -> str:
+        reg = external.registry.get(type_id) if external is not None else None
+        return reg.action_type.title if reg is not None else type_id
+
+    def logged_standing(q: Any, got: Any) -> None:
+        """The activity line of a request a rule let through: the rule as the actor (standing:<id>), the people it names and its
+        end date. Rules exist only for the server's own types, whose recipients the log may name (D4-2)."""
+        from datetime import datetime, timezone
+        v = external.describe(q)
+        ids = [r.id for r in got.rules]
+        people = list(dict.fromkeys(r.recipient for r in got.rules))
+        until = datetime.fromtimestamp(min(r.expires_at for r in got.rules), timezone.utc).strftime("%-d %b") if got.rules else ""
+        base = {"kind": external.kind, "outbox_id": q.id, "action_type": getattr(q, "action_type", None), "sha256": q.sha256,
+                "rules": ids, "standing_people": people, "standing_until": until}
+        actor = f"standing:{ids[0]}" if ids else "standing:"
+        if got.status == "discarded":
+            audit.record("approval.discarded", actor=actor, summary=f"Did not send {v['badge'].lower()} “{v['title']}”: the target changed",
+                         reason=got.reason, **base)
+            return
+        note = got.note
+        audit.record("approval.sent", actor=actor, summary=f"Sent {v['badge'].lower()} “{v['title']}” without approval",
+                     delivery=getattr(note, "delivery", None), **({"refused": note.refused} if getattr(note, "refused", 0) else {}),
+                     recipients=([v["label"]] if v.get("label") else []) if v.get("log_to")
+                     else [val for k, val in v["rows"] if k in ("To", "Guests", "Will be delivered to")], **base)
+
+    if external is not None and hasattr(external, "on_standing"):
+        external.on_standing = logged_standing
+
+    @route("/standing", ["GET"])
+    async def standing_list(request: Request) -> Response:
+        got = reader(request)
+        if isinstance(got, Response):
+            return got
+        st = standing()
+        if st is None:
+            return ok({"rules": [], "available": False})
+        rules = await asyncio.to_thread(st.live)
+        return ok({"available": True, "rules": [{**r, "title": rule_title(r["action_type"])} for r in rules]})
+
+    @route("/standing/{rid}/remove", ["POST"])
+    async def standing_remove(request: Request) -> Response:
+        got = await writer(request)
+        if isinstance(got, Response):
+            return got
+        _, rec, _ = got
+        st = standing()
+        if st is None:
+            return err("Rules need the approval store, which this server does not run.", 404)
+        gone = await asyncio.to_thread(st.remove, request.path_params["rid"])
+        if gone is None:
+            return err("This rule is no longer there.", 404)
+        audit.record("standing.removed", actor="owner", via=rec.get("via", ""),
+                     summary=f"Removed the rule for {gone.recipient} ({rule_title(gone.action_type).lower()})", rule=gone.id, action_type=gone.action_type)
+        return ok({"note": f"Removed. Requests to {gone.recipient} wait for you again."})
 
     d.api_writer, d.api_reader, d.api_ok, d.api_err, d.api_need_confirm = writer, reader, ok, err, need_confirm
     d.bridge_state = bridge_state

@@ -235,3 +235,17 @@ def test_the_target_gets_the_same_participants_as_the_chat_list(s, tmp_path):
         t = m._target(c["chat_id"], None)
         assert (t["chat_id"], t["name"], t["group"], t["participants"]) == (c["chat_id"], c["name"], c.get("group", False),
                                                                            sorted(c["participants"]))
+
+
+def test_an_imessage_waits_whatever_rules_exist_and_pushes_once(s, tmp_path):
+    """protects=criterion 9 for messages_send_request on iMessage: it answers through gate.submit and, without standing_identity,
+    always waits with one push; fails_when=a rule releases it or the push is lost; no_claim=none beyond protects."""
+    from icloud_mcp.gate.standing import Standing
+    m, b, box = svc(s, tmp_path)
+    m.src.standing = Standing(box)
+    m.src.standing.add("imessage.send", "anna@example.org", 30)
+    pushes = []
+    box.on_new = pushes.append
+    got = send(m, "See you at noon.", handle="anna@example.org")
+    assert got["status"] == "queued_for_owner_approval" and [q.id for q in pushes] == [got["outbox_id"]]
+    assert [op for op, _ in b.calls if op == "imessage_send"] == []

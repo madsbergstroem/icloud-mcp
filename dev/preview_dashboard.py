@@ -377,6 +377,17 @@ if "external" in d.sources and d.sources["external"].registry.get("gate.allow") 
     _done = next(q for q in d.sources["external"].pending() if b'"gate.allow"' in q.raw)
     d.sources["external"].release(_done)
     _allow("tom@example.com", "Tom asked me to invite him to Saturday's hike.")    # waits on Home
+if "external" in d.sources and d.sources["external"].registry.get("gate.trust") is not None:   # package 10: standing rules
+    def _trust(type_id, person, reason, days=90):
+        return asyncio.run(mcp.call_tool("approval_request", {"action": "gate.trust", "params": {
+            "action_type": type_id, "recipient": person, "days": days, "reason": reason}}))
+    _trust("calendar.invite", "jana@example.org", "Jana and I plan the book club together; she gets every date anyway.")
+    _rule = next(q for q in d.sources["external"].pending() if b'"gate.trust"' in q.raw)
+    d.sources["external"].release(_rule)                     # approved already: listed under Settings › Without approval
+    d.sources["external"].standing.add("mail.send", "tom@example.net", 45)
+    cal.create_event(summary="Lunch with Jana", start="2026-12-04T12:00", end="2026-12-04T13:00", calendar="Calendar",
+                     attendees=["jana@example.org"])       # goes out at once: "Without approval" in Activity
+    _trust("mail.send", "sam@example.org", "Sam and I write about the club's newsletter every week.")   # waits on Home
 if "external" in d.sources:                                  # and a request whose type this server no longer has: "Other"
     from icloud_mcp import actions as AT
     d.sources["external"].box.add(AT.canonical("example.retired", {"note": "made up"}), ["nobody"], action_type="example.retired")

@@ -102,9 +102,11 @@ async def test_a_registered_type_adds_the_source_and_no_tool(web, hub):
 async def test_only_the_beeper_tool_calls_queue_external():
     root = Path(A.__file__).parent.parent             # the icloud_mcp package; actions.py lives in its gate/ package
     users = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "queue_external" in p.read_text()]
-    # the contract names it; the Beeper and iMessage senders, the calendar and mail call it (iMessage since package 4b, the
-    # calendar since 5b, mail since 6b); approval_request (gate/requests.py) calls it for every other action
-    assert sorted(users) == ["cal.py", "gate/requests.py", "imessage.py", "mail.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]
+    # since package 10 every tool that queues goes through gate.submit (external.submit), which queues and tries the owner's
+    # standing rules: the Beeper and iMessage senders, the calendar, mail and approval_request; nothing calls queue_external itself
+    assert users == []
+    submitters = [str(p.relative_to(root)) for p in root.rglob("*.py") if p.name != "external.py" and "external.submit(" in p.read_text()]
+    assert sorted(submitters) == ["cal.py", "gate/requests.py", "imessage.py", "mail.py", "plugins/__init__.py", "plugins/beeper/gateway.py"]   # the contract names it
 
 
 # -- the type itself -------------------------------------------------------------------------------------------------------

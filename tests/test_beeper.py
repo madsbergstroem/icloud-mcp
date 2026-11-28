@@ -578,3 +578,16 @@ def test_the_executor_answers_failed_for_a_chat_it_cannot_read_and_never_raises(
             raise AssertionError("nothing may be sent")
     r = B.BeeperExecutor(Silent()).execute(A.ActionRequest("x", B.ACTION_ID, {"chat_id": SINGLE, "text": "t", "chat_title": "T", "network": "N", "is_group": False}))
     assert r.status == "failed" and "could not be reached" in r.line
+
+
+async def test_a_beeper_message_waits_whatever_rules_exist_and_pushes_once(web, hub, gateway, monkeypatch):
+    """protects=criterion 9 for messages_send_request on Beeper: it answers through gate.submit and, as a connector cannot opt in,
+    always waits with one push; fails_when=a rule releases it or the push is lost; no_claim=none beyond protects."""
+    from icloud_mcp.gate.standing import Standing
+    app, mcp, src = launch(web, hub)
+    if src.standing is None:
+        src.standing = Standing(src.box)
+    pushes = []
+    monkeypatch.setattr(mcp._icloud_dashboard.push, "notify", lambda kind, key="": pushes.append(key))
+    got = await ask(mcp)
+    assert got["status"] == "queued_for_owner_approval" and pushes == [f"external:{got['outbox_id']}"] and gateway.sent == []
