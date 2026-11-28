@@ -1147,7 +1147,7 @@ in the PR is enough; no separate mock.
 
 | # | Question | Recommended | Why |
 |---|----------|-------------|-----|
-| D7-1 | What a callback receives | `PluginContext` everywhere, also in `MessagesCapability` and `Plugin` callbacks | One view; the whole `Settings` is the gap the package closes. Costs a mechanical change in Beeper and the made-up test plugins |
+| D7-1 | What a callback receives | `PluginContext` everywhere, also in `MessagesCapability` and `Plugin` callbacks (decided by the owner, 2026-11-28) | One view; the whole `Settings` is the gap the package closes. Costs a mechanical change in Beeper and the made-up test plugins |
 | D7-2 | Version check | Exact major, `api in {1}`; no minor numbers | Additive changes do not need a number; a plugin that needs a newer field checks with `hasattr` and says so |
 | D7-3 | Plugin without `api` | Load it as v1 with a warning during v1, refuse in v2 | Every plugin today predates the field; Beeper and the connector plugin get `api=1` in the same change |
 | D7-4 | Secrets | `secret_keys` read through `ctx.secret`, never in `plugin_values` | Today `plugin_values` hold every plugin key with its value (`config.py:432`); a secret there can reach a settings export or a log of the values |
@@ -1261,7 +1261,7 @@ notice and "Start a new log tree". These need a mock before they are built. The 
 | D8-2 | What a leaf is | The entry's JSON line as written, without the newline | The export carries the same bytes; no second canonical form that could differ from the file |
 | D8-3 | How often | At most hourly while the log grew, and on every export | Bounds what a rewrite can hide to an hour; an idle server signs nothing |
 | D8-4 | Where the key lives | `DATA_DIR/log-key`, mode 600, made at the first start | Same place and rules as the push keys (`push.json`, 0600); a key the owner types in is a step nobody does |
-| D8-5 | Checkpoints off the server | Export, and opt-in notices of type `log.checkpoint` | Without an outside copy a signature proves only that the key signed; the notice path exists after 9b |
+| D8-5 | Checkpoints off the server | Export, and opt-in notices of type `log.checkpoint` (decided by the owner, 2026-11-28) | Without an outside copy a signature proves only that the key signed; the notice path exists after 9b |
 | D8-6 | After pruning | Compact range plus consistency proofs from the kept daily checkpoints | Keeps checkpoints from before the window checkable without keeping entries longer than `AUDIT_KEEP_DAYS` |
 | D8-7 | A broken log | Stop signing, show it, new tree only by the owner's step-up action | A server that silently starts a new tree would make the rewrite it should reveal look normal |
 
